@@ -15,10 +15,13 @@ it('resolves a Windows shebang to its installed interpreter and arguments', asyn
   const path = join(directory, 'run')
   try {
     await writeFile(path, '#!/usr/bin/env -S node --no-warnings\n')
-    expect(shell.script(path)).toEqual({
-      program: 'node',
-      args: ['--no-warnings', path],
-    })
+    const script = shellFor('win32').script(path)
+    expect(script.args).toEqual(['--no-warnings', path])
+    expect(
+      process.platform === 'win32'
+        ? script.program.toLowerCase().endsWith('node.exe')
+        : script.program,
+    ).toBe(process.platform === 'win32' ? true : 'node')
   } finally {
     await rm(directory, { recursive: true, force: true })
   }

@@ -59,7 +59,7 @@ it.skipIf(process.platform !== 'win32')(
       "const {spawn}=require('node:child_process')",
       `const child=spawn(process.execPath,['-e',${JSON.stringify(sleeper)}],{stdio:'ignore'})`,
       `fs.writeFileSync(${JSON.stringify(childFile)},String(child.pid))`,
-      `fs.writeFileSync(${JSON.stringify(recordedFile)},JSON.stringify({pid:fs.readFileSync(${JSON.stringify(pidFile)},'utf8').trim(),start:fs.readFileSync(${JSON.stringify(`${pidFile}.start`)},'utf8').trim()}))`,
+      `fs.writeFileSync(${JSON.stringify(recordedFile)},JSON.stringify({pid:fs.readFileSync(${JSON.stringify(pidFile)},'utf8').trim(),start:fs.readFileSync(${JSON.stringify(`${pidFile}.start`)},'utf8').trim(),job:fs.readFileSync(${JSON.stringify(`${pidFile}.job`)},'utf8').trim()}))`,
       "process.stdout.write('complete\\n')",
       'process.exit(7)',
     ].join(';')
@@ -72,6 +72,7 @@ it.skipIf(process.platform !== 'win32')(
     const recorded = JSON.parse(await readFile(recordedFile, 'utf8')) as {
       pid: string
       start: string
+      job: string
     }
     const childPid = Number(await readFile(childFile, 'utf8'))
     expect(exitCode).toBe(7)
@@ -79,6 +80,7 @@ it.skipIf(process.platform !== 'win32')(
     expect(recorded).toMatchObject({
       pid: expect.stringMatching(/^\d+$/),
       start: expect.stringMatching(/^\d+$/),
+      job: expect.stringMatching(/^Local\\UltimateProcessGroup-[0-9a-f-]+$/i),
     })
     expect(alive(childPid)).toBe(false)
     expect(await readdir(root)).not.toContain('runner.pid')
@@ -115,6 +117,24 @@ it.skipIf(process.platform !== 'win32')(
       }),
     ).toBe(9)
     expect(shellOutput).toContain('lander shell')
+
+    const automationNode = join(root, 'run-node')
+    await writeFile(
+      automationNode,
+      "#!/usr/bin/env -S node --no-warnings\nprocess.stdout.write('node automation\\n');process.exit(5)\n",
+    )
+    const nodeScript = shell.script(automationNode)
+    let nodeOutput = ''
+    const nodeCode = await runGroup(nodeScript.program, nodeScript.args, {
+      cwd: root,
+      pidFile: join(root, 'node.pid'),
+      onOutput: (chunk) => (nodeOutput += chunk),
+    })
+    expect({ nodeScript, nodeCode, nodeOutput }).toEqual({
+      nodeScript,
+      nodeCode: 5,
+      nodeOutput: 'node automation\n',
+    })
 
     let spawnFailure = ''
     expect(
@@ -194,7 +214,7 @@ it.skipIf(process.platform !== 'win32')(
     const descendant = Number(await readFile(childFile, 'utf8'))
     group.child.stdin.cork()
     await stopGroup(group.child.pid!, { pidFile, leader: group, grace: 50 })
-    await until(() => !alive(descendant))
+    expect(alive(descendant)).toBe(false)
     expect(await readdir(root)).not.toContain('run.pid')
   },
 )

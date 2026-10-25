@@ -2,8 +2,10 @@
  * The shell this host runs commands in: Bash everywhere, PowerShell on Windows (`pwsh`, else Windows PowerShell).
  * This is the one place that asks the platform, so no other module does. A caller that must know which shell it is
  * asking uses `name`, registers the tool with `create`, and spawns a command string with `argv` or a shebang script with
- * `script`. The browser dispatches on a tool call's own name and never imports this file: `process` does not exist there.
+ * `script`. `lib/windows-process-group.ts` separately requires Windows PowerShell 5.1 for its native Job Object owner.
+ * The browser dispatches on a tool call's own name and never imports this file: `process` does not exist there.
  */
+import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import type { BashPrepare } from '@earendil-works/pi-durable/tools'
 import { createBashTool, createPowerShellTool } from '@earendil-works/pi-durable/tools'
@@ -91,7 +93,27 @@ const powershell: Shell = {
         ],
       }
     }
-    const program = interpreter.startsWith('/') ? name : interpreter
+    let program = interpreter.startsWith('/') ? name : interpreter
+    if (
+      process.platform === 'win32' &&
+      !interpreter.startsWith('/') &&
+      !interpreter.includes('/') &&
+      !interpreter.includes('\\')
+    ) {
+      try {
+        program = execFileSync('where.exe', [interpreter], {
+          encoding: 'utf8',
+          windowsHide: true,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        })
+          .trim()
+          .split(/\r?\n/, 1)[0]
+      } catch (cause) {
+        throw new Error(`Windows interpreter ${interpreter} for ${path} was not found on PATH`, {
+          cause,
+        })
+      }
+    }
     return { program, args: [...words, path] }
   },
   argv: (command, variables = []) => {

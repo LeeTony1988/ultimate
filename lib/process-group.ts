@@ -6,7 +6,7 @@ import { constants as osConstants } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { Readable, Writable } from 'node:stream'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { identifyWindows, spawnWindowsGroup } from './windows-process-group.ts'
+import { identifyWindows, spawnWindowsGroup, stopWindowsJob } from './windows-process-group.ts'
 
 /** The program cannot start until its pid is recorded; a parent that dies before go gives EOF instead. */
 export const handshake = 'read -r _ || exit 1; exec "$0" "$@"'
@@ -24,6 +24,8 @@ export type Group = {
   stop?: () => boolean
   /** Force-close a Windows job owner after an orderly stop request timed out. */
   force?: () => void
+  /** Named Windows Job Object, persisted beside a pid file for recovery cleanup. */
+  job?: string
   /** Windows runner process creation time, used to avoid removing a newer owner's pid file. */
   start?: string
 }
@@ -229,7 +231,11 @@ export async function stopGroup(
           ? identify(pid) !== undefined && groupAlive(pid)
           : identify(pid) === start)
     if (ours) {
-      if (process.platform === 'win32') send(pid, 'SIGKILL')
+      if (process.platform === 'win32') {
+        const jobName = pidFile && (await text(`${pidFile}.job`))
+        if (!jobName) throw new Error(`Process group ${pid} is missing its Windows job record`)
+        if (!stopWindowsJob(jobName, grace) && identify(pid) === start) send(pid, 'SIGKILL')
+      }
       const stopped =
         process.platform === 'win32' ? await gone(pid, grace + 3000) : await drain(pid, grace)
       if (!stopped) throw new Error(`Process group ${pid} did not exit`)
@@ -240,6 +246,7 @@ export async function stopGroup(
       (process.platform !== 'win32' || (await text(`${pidFile}.start`)) === start)
     ) {
       await rm(`${pidFile}.start`, { force: true })
+      await rm(`${pidFile}.job`, { force: true })
       await rm(pidFile, { force: true })
     }
     return
@@ -250,6 +257,7 @@ export async function stopGroup(
       (leader.start !== undefined && (await text(`${pidFile}.start`)) === leader.start)
     if (ownsFile) {
       await rm(`${pidFile}.start`, { force: true })
+      await rm(`${pidFile}.job`, { force: true })
       await rm(pidFile, { force: true })
     }
   }

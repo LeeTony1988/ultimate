@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { execFileSync, spawn } from 'node:child_process'
 import type { SpawnOptions } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
@@ -16,6 +17,7 @@ public static class UltimateProcessGroup {
   private const uint StartfUseStdHandles = 0x00000100;
   private const uint KillOnJobClose = 0x00002000;
   private const uint Infinite = 0xFFFFFFFF;
+  private static IntPtr ownerJob = IntPtr.Zero;
 
   [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
   private struct StartupInfo {
@@ -79,6 +81,18 @@ public static class UltimateProcessGroup {
   }
 
   [StructLayout(LayoutKind.Sequential)]
+  private struct BasicAccountingInformation {
+    public long totalUserTime;
+    public long totalKernelTime;
+    public long thisPeriodTotalUserTime;
+    public long thisPeriodTotalKernelTime;
+    public uint totalPageFaults;
+    public uint totalProcesses;
+    public uint activeProcesses;
+    public uint totalTerminatedProcesses;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
   private struct ExtendedLimitInformation {
     public BasicLimitInformation basicLimitInformation;
     public IoCounters ioInfo;
@@ -90,6 +104,8 @@ public static class UltimateProcessGroup {
 
   [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   private static extern IntPtr CreateJobObject(IntPtr attributes, string name);
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  private static extern IntPtr OpenJobObject(uint access, bool inherit, string name);
   [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "CreateFileW")]
   private static extern IntPtr CreateFile(string name, uint access, uint share, ref SecurityAttributes attributes, uint creation, uint flags, IntPtr template);
   [DllImport("kernel32.dll", SetLastError = true)]
@@ -104,6 +120,8 @@ public static class UltimateProcessGroup {
   private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
   [DllImport("kernel32.dll", SetLastError = true)]
   private static extern bool GetExitCodeProcess(IntPtr process, out uint exitCode);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool QueryInformationJobObject(IntPtr job, int infoClass, out BasicAccountingInformation info, uint length, IntPtr returnedLength);
   [DllImport("kernel32.dll", SetLastError = true)]
   private static extern bool TerminateJobObject(IntPtr job, uint exitCode);
   [DllImport("kernel32.dll", SetLastError = true)]
@@ -134,15 +152,47 @@ public static class UltimateProcessGroup {
     return result.ToString();
   }
 
-  public static uint Run(string program, string[] arguments, string directory) {
-    var job = CreateJobObject(IntPtr.Zero, null);
-    if (job == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+  private static void WaitEmpty(IntPtr job, uint timeout) {
+    BasicAccountingInformation info;
+    var elapsed = 0;
+    do {
+      Check(QueryInformationJobObject(job, 1, out info, (uint)Marshal.SizeOf(typeof(BasicAccountingInformation)), IntPtr.Zero));
+      if (info.activeProcesses == 0) return;
+      if (elapsed >= timeout) throw new TimeoutException("Windows job descendants did not exit");
+      Thread.Sleep(10);
+      elapsed += 10;
+    } while (true);
+  }
+
+  public static bool Stop(string name, uint timeout) {
+    var job = OpenJobObject(0x000C, false, name);
+    if (job == IntPtr.Zero) {
+      if (Marshal.GetLastWin32Error() == 2) return false;
+      throw new Win32Exception(Marshal.GetLastWin32Error());
+    }
+    try {
+      Check(TerminateJobObject(job, 143));
+      WaitEmpty(job, timeout);
+      return true;
+    } finally {
+      CloseHandle(job);
+    }
+  }
+
+  public static void Prepare(string name) {
+    ownerJob = CreateJobObject(IntPtr.Zero, name);
+    if (ownerJob == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
     var limits = new ExtendedLimitInformation();
     limits.basicLimitInformation.limitFlags = KillOnJobClose;
+    Check(SetInformationJobObject(ownerJob, 9, ref limits, (uint)Marshal.SizeOf(typeof(ExtendedLimitInformation))));
+  }
+
+  public static uint Run(string program, string[] arguments, string directory, uint timeout) {
+    var job = ownerJob;
+    if (job == IntPtr.Zero) throw new InvalidOperationException("The Windows job owner was not prepared");
     ProcessInformation process = new ProcessInformation();
     var startup = new StartupInfo();
     try {
-      Check(SetInformationJobObject(job, 9, ref limits, (uint)Marshal.SizeOf(typeof(ExtendedLimitInformation))));
       startup.cb = Marshal.SizeOf(typeof(StartupInfo));
       startup.dwFlags = StartfUseStdHandles;
       startup.hStdOutput = GetStdHandle(-11);
@@ -157,7 +207,7 @@ public static class UltimateProcessGroup {
       }
       var commandLine = new StringBuilder(Quote(program));
       foreach (var argument in arguments) commandLine.Append(' ').Append(Quote(argument));
-      Check(CreateProcess(program, commandLine, IntPtr.Zero, IntPtr.Zero, true, CreateSuspended, IntPtr.Zero, directory, ref startup, out process));
+      Check(CreateProcess(null, commandLine, IntPtr.Zero, IntPtr.Zero, true, CreateSuspended, IntPtr.Zero, directory, ref startup, out process));
       CloseHandle(startup.hStdInput);
       startup.hStdInput = IntPtr.Zero;
       Check(AssignProcessToJobObject(job, process.hProcess));
@@ -173,7 +223,7 @@ public static class UltimateProcessGroup {
       uint exitCode;
       Check(GetExitCodeProcess(process.hProcess, out exitCode));
       TerminateJobObject(job, exitCode);
-      if (WaitForSingleObject(job, Infinite) != 0) throw new Win32Exception(Marshal.GetLastWin32Error());
+      WaitEmpty(job, timeout);
       return exitCode;
     } finally {
       if (startup.hStdInput != IntPtr.Zero) CloseHandle(startup.hStdInput);
@@ -183,6 +233,7 @@ public static class UltimateProcessGroup {
         CloseHandle(process.hProcess);
       }
       CloseHandle(job);
+      ownerJob = IntPtr.Zero;
     }
   }
 }`
@@ -197,8 +248,16 @@ function windowsPowerShell() {
   )
 }
 
-function windowsLauncher(program: string, args: string[], cwd: string) {
-  const payload = Buffer.from(JSON.stringify({ program, args, cwd })).toString('base64')
+function windowsLauncher(
+  program: string,
+  args: string[],
+  cwd: string,
+  jobName: string,
+  grace: number,
+) {
+  const payload = Buffer.from(JSON.stringify({ program, args, cwd, jobName, grace })).toString(
+    'base64',
+  )
   return [
     '$go = [Console]::In.ReadLine()',
     'if ($null -eq $go) { exit 1 }',
@@ -209,13 +268,39 @@ function windowsLauncher(program: string, args: string[], cwd: string) {
     "'@",
     `$spec = ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${payload}')))`,
     'try {',
-    '  $code = [UltimateProcessGroup]::Run([string]$spec.program, [string[]]$spec.args, [string]$spec.cwd)',
+    '  [UltimateProcessGroup]::Prepare([string]$spec.jobName)',
+    '  $code = [UltimateProcessGroup]::Run([string]$spec.program, [string[]]$spec.args, [string]$spec.cwd, [uint32]$spec.grace)',
     '  exit [int]$code',
     '} catch {',
     '  [Console]::Error.WriteLine($_.ToString())',
     '  exit 1',
     '}',
   ].join('\n')
+}
+
+function windowsStopScript(jobName: string, timeout: number) {
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    "$null = Add-Type -TypeDefinition @'",
+    windowsJobSource,
+    "'@",
+    `[Console]::Out.Write([UltimateProcessGroup]::Stop('${jobName}', ${timeout}))`,
+  ].join('\n')
+}
+
+export function stopWindowsJob(jobName: string, timeout = 3000): boolean {
+  const output = execFileSync(
+    windowsPowerShell(),
+    [
+      '-NoLogo',
+      '-NoProfile',
+      '-NonInteractive',
+      '-EncodedCommand',
+      Buffer.from(windowsStopScript(jobName, timeout), 'utf16le').toString('base64'),
+    ],
+    { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] },
+  ).trim()
+  return output === 'True'
 }
 
 export function identifyWindows(pid: number): string | undefined {
@@ -237,9 +322,11 @@ export function identifyWindows(pid: number): string | undefined {
 export function spawnWindowsGroup(
   program: string,
   args: string[],
-  options: Omit<SpawnOptions, 'detached' | 'stdio'>,
+  options: Omit<SpawnOptions, 'detached' | 'stdio'> & { grace?: number },
   pidFile?: string,
 ): Group {
+  const { grace = 3000, ...rest } = options
+  const jobName = `Local\\UltimateProcessGroup-${randomUUID()}`
   const child = spawn(
     windowsPowerShell(),
     [
@@ -248,11 +335,11 @@ export function spawnWindowsGroup(
       '-NonInteractive',
       '-EncodedCommand',
       Buffer.from(
-        windowsLauncher(program, args, String(options.cwd ?? process.cwd())),
+        windowsLauncher(program, args, String(options.cwd ?? process.cwd()), jobName, grace),
         'utf16le',
       ).toString('base64'),
     ],
-    { ...options, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true },
+    { ...rest, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true },
   )
   child.stdin.on('error', () => {
     // The launcher may have failed before it read the handshake; its exit reports the failure.
@@ -269,6 +356,7 @@ export function spawnWindowsGroup(
       start = identifyWindows(child.pid)
       if (!start) throw new Error(`Could not identify Windows process ${child.pid}`)
       writeFileSync(`${pidFile}.start`, `${start}\n`)
+      writeFileSync(`${pidFile}.job`, `${jobName}\n`)
       writeFileSync(pidFile, `${child.pid}\n`)
     }
   } catch (error) {
@@ -281,7 +369,8 @@ export function spawnWindowsGroup(
     ended,
     closed,
     stop: () => child.stdin.write('STOP\n'),
-    force: () => child.kill('SIGKILL'),
+    force: () => stopWindowsJob(jobName, grace),
+    job: jobName,
     ...(start ? { start } : {}),
   }
 }
