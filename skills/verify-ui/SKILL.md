@@ -15,9 +15,10 @@ Never claim a UI change works without an image of it.
 
 ## How
 
-- `screenshot {url}` for a still image; `selector` for one element, `fullPage` for long pages, `width: 390` for phone,
+- Before browser work, read the shipped `ego-browser` skill, run `ego-browser skill`, and follow that versioned guide. Prefer ego-browser; the built-in Playwright tools below are fallback when it is unavailable or does not support the needed operation.
+- Built-in fallback: `screenshot {url}` for a still image; `selector` for one element, `fullPage` for long pages, `width: 390` for phone,
   `theme: 'light'` and `'dark'` for both themes. Omit `path` so the PNG stays outside your checkout.
-- `browser {url, steps}` to drive a state: `click`, `fill` (`#composer-input` is the composer), `press`
+- Built-in fallback: `browser {url, steps}` to drive a state: `click`, `fill` (`#composer-input` is the composer), `press`
   (`Control+k` opens ⌘K), `wait`, `eval`. The result lists console errors and failed requests: read them.
 - Wait on Ultimate's state, never a guessed time: `{send: 'prompt'}` submits without the composer, then
   `{until: 'idle'}` returns when that turn is done, `{until: 'quiet'}` when nothing runs (branches and subagents
