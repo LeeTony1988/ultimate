@@ -20,7 +20,8 @@ import type {
   Tx,
 } from '@earendil-works/pi-durable'
 import { git } from '../../lib/git.ts'
-import { processGroups, runGroup, sweepPidFiles } from '../../lib/process-group.ts'
+import { shell } from '../../lib/shell.ts'
+import { runGroup, sweepPidFiles } from '../../lib/process-group.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { definitionAgent, discoverAgents } from '../../lib/agents.ts'
 import { CheckRan, Handoff, SubmissionLanded } from './api.ts'
@@ -203,10 +204,8 @@ export const sweepChecks = async (home: string) => {
 export const checkTemp = (home: string) => join(home, 'lander-tmp')
 
 /**
- * Run `command` with bash in its own process group, recorded in `pids` while it runs, with `TMPDIR` set to a fresh
- * directory in `temp` that is removed when it ends. The watchdog and task cancellation both stop the whole group:
- * TERM, then KILL after a short grace. A host without POSIX process groups (`processGroups`) fails the check itself
- * rather than the spawn that would have run it.
+ * Run `command` in the host shell in its own recorded process container. The watchdog and task cancellation stop the
+ * runner and its descendants; a host crash is cleaned up on its next open.
  */
 export async function runLanderCheck(
   path: string,
@@ -216,11 +215,6 @@ export async function runLanderCheck(
   temp: string,
   limits: CheckLimits = checkLimits,
 ) {
-  if (!processGroups)
-    return {
-      failure:
-        'Checks need POSIX process groups to run and stop them; this Windows host has none. Run the check in a terminal and report its result.',
-    }
   // Synchronous, so the watchdog's timers start in the same tick as the call.
   mkdirSync(temp, { recursive: true })
   const tmp = mkdtempSync(join(temp, `${process.pid}-`))
@@ -265,7 +259,8 @@ export async function runLanderCheck(
   try {
     let exitCode: number
     try {
-      exitCode = await runGroup('/bin/bash', ['-c', command], {
+      const { program, args } = shell.argv(command)
+      exitCode = await runGroup(program, args, {
         cwd: path,
         env: { ...process.env, TMPDIR: tmp },
         pidFile: join(pids, `${process.pid}-${randomUUID()}.pid`),

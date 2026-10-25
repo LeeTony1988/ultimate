@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import { fill, shell, shellFor } from '../lib/shell.ts'
 
@@ -5,6 +8,20 @@ it('names the shell each platform runs commands in', () => {
   expect(shellFor('win32').name).toBe('powershell')
   expect(shellFor('linux').name).toBe('bash')
   expect(shellFor('darwin').name).toBe('bash')
+})
+
+it('resolves a Windows shebang to its installed interpreter and arguments', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'ultimate-shell-script-'))
+  const path = join(directory, 'run')
+  try {
+    await writeFile(path, '#!/usr/bin/env -S node --no-warnings\n')
+    expect(shellFor('win32').script(path)).toEqual({
+      program: 'node',
+      args: ['--no-warnings', path],
+    })
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
 })
 
 it('writes a variable reference in each shell its own way, and leaves a longer name alone', () => {

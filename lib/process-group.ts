@@ -6,33 +6,37 @@ import { constants as osConstants } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { Readable, Writable } from 'node:stream'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { identifyWindows, spawnWindowsGroup } from './windows-process-group.ts'
 
 /** The program cannot start until its pid is recorded; a parent that dies before go gives EOF instead. */
 export const handshake = 'read -r _ || exit 1; exec "$0" "$@"'
 
-/**
- * Whether this platform has POSIX process groups: what `spawnGroup`, `stopGroup` and `runGroup` are built on (a group
- * leader behind `/bin/sh`, group signals, `/proc` or `ps` to identify a pid). The lander's checks and the automation
- * scripts are POSIX-only until a Windows runner exists.
- */
-export const processGroups = process.platform !== 'win32'
-
 export type GroupProcess = ChildProcessByStdio<Writable, Readable, Readable>
 /**
- * A process group this process started. `ended` resolves once the leader has exited and nothing of its group is left:
- * `true`, or `false` when a member survived KILL. `closed` resolves when its output pipes have closed.
+ * An owned process container. `ended` resolves after its leader and descendants have exited. `closed` resolves when its
+ * output pipes have closed.
  */
-export type Group = { child: GroupProcess; ended: Promise<boolean>; closed: Promise<void> }
+export type Group = {
+  child: GroupProcess
+  ended: Promise<boolean>
+  closed: Promise<void>
+  /** Send an orderly stop request to a Windows job owner. */
+  stop?: () => boolean
+  /** Force-close a Windows job owner after an orderly stop request timed out. */
+  force?: () => void
+  /** Windows runner process creation time, used to avoid removing a newer owner's pid file. */
+  start?: string
+}
 
 /**
- * Signalling a group needs positive evidence that it is ours: its leader not yet reaped by this process, or a pid file
- * whose recorded start time is the leader's. While any member lives, the kernel never gives the group's id to
- * another process; once it is empty, reuse needs the pid counter to wrap. So a group verified once stays ours while
- * it is polled every few milliseconds, never across a gap.
+ * Signalling an owned container needs positive evidence that it is ours: on POSIX its leader is unreaped, or a pid file
+ * records the leader's start time; on Windows the runner's creation time must match. The POSIX group id stays ours while
+ * it has members; on Windows the launcher owns a Job Object that contains the target and its descendants.
  */
 
 /** Who process `pid` is, the same on every read while it lives (its start time), or undefined once it is gone. */
 function identify(pid: number): string | undefined {
+  if (process.platform === 'win32') return identifyWindows(pid)
   if (process.platform === 'darwin') {
     try {
       return execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' }).trim()
@@ -57,7 +61,7 @@ function identify(pid: number): string | undefined {
 export function groupAlive(pid?: number) {
   if (!pid) return false
   try {
-    process.kill(-pid, 0)
+    process.kill(process.platform === 'win32' ? pid : -pid, 0)
     return true
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false
@@ -78,7 +82,7 @@ function probe(pid: number) {
 
 function send(pid: number, name: NodeJS.Signals) {
   try {
-    process.kill(-pid, name)
+    process.kill(process.platform === 'win32' ? pid : -pid, name)
   } catch (error) {
     // The group may empty between the check and the signal.
     if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
@@ -104,7 +108,7 @@ async function gone(pid: number, ms: number) {
   return !groupAlive(pid)
 }
 
-/** Stop group `pid`, verified ours just now: TERM, KILL after `grace` ms; whether it emptied. */
+/** Stop an owned POSIX container, verified ours just now: TERM, KILL after `grace` ms. */
 async function drain(pid: number, grace: number) {
   send(pid, 'SIGTERM')
   if (await gone(pid, grace)) return true
@@ -113,10 +117,9 @@ async function drain(pid: number, grace: number) {
 }
 
 /**
- * Start `program` as the leader of its own process group, held behind the handshake until `pidFile` (when given)
- * records it. `exec` keeps the pid and group, and the program gets an empty stdin. When the leader exits, whatever it
- * left in its group is stopped too (TERM, KILL after `grace` ms): nothing of a group outlives its leader. A failed pid
- * write throws; the held process then reads EOF and exits without running.
+ * Start `program` inside an owned process container, held behind a handshake until `pidFile` (when given) records the
+ * runner. POSIX uses a shell leader and process group; Windows delegates to its Job Object runner. A failed pid write
+ * closes the handshake and the target never runs.
  */
 export function spawnGroup(
   program: string,
@@ -124,6 +127,7 @@ export function spawnGroup(
   options: Omit<SpawnOptions, 'detached' | 'stdio'> & { pidFile?: string; grace?: number },
 ): Group {
   const { pidFile, grace = 3000, ...rest } = options
+  if (process.platform === 'win32') return spawnWindowsGroup(program, args, rest, pidFile)
   const child = spawn('/bin/sh', ['-c', handshake, program, ...args], {
     ...rest,
     detached: true,
@@ -185,12 +189,10 @@ export async function readPidFile(path: string) {
 }
 
 /**
- * Stop the whole group `pid` and wait until nothing of it is left; rejects when a member survives KILL.
- * - With `leader`, the group this process started: signalled only while its leader is unreaped; after that the
- *   leader's own exit stops the rest (`Group.ended`).
- * - Otherwise `pidFile` must name `pid` and record its leader's start time: a recycled pid, or a leader that is gone,
- *   is never signalled. A file without a start time (written by hand or by an older Ultimate) counts while its pid
- *   runs and leads its group.
+ * Stop the owned container `pid` and wait until nothing of it is left; rejects when cleanup does not finish.
+ * - With `leader`, it is a container started by this process and may be signalled while its launcher is unreaped.
+ * - Otherwise `pidFile` must name `pid` and record its process start time; a recycled pid is never signalled. Windows
+ *   records must include a start time.
  *
  * The pid file is removed once the group is gone, unless it names another process by then.
  */
@@ -202,26 +204,54 @@ export async function stopGroup(
   const unreaped = () => leader!.child.exitCode === null && leader!.child.signalCode === null
   if (leader) {
     if (unreaped()) {
-      send(pid, 'SIGTERM')
-      if ((await within(leader.ended, grace)) === undefined && unreaped()) send(pid, 'SIGKILL')
+      if (process.platform === 'win32' && leader.stop) leader.stop()
+      else send(pid, 'SIGTERM')
+      const stopped = await within(leader.ended, grace)
+      if (stopped === undefined && unreaped()) {
+        if (process.platform === 'win32' && leader.force) leader.force()
+        else send(pid, 'SIGKILL')
+      }
     }
-    // After a KILL the leader's exit drains the rest of the group, with its own grace. `ended` is settled once and
-    // for all, so a group that reported a survivor is probed again: once empty, it exited after all.
-    if (!(await within(leader.ended, grace + 3500)) && (unreaped() || probe(pid)))
+    // After KILL, the leader's exit drains the rest of a POSIX group; the Windows runner waits for its Job Object.
+    const ended = await within(leader.ended, grace + 3500)
+    if (process.platform === 'win32' && ended !== true)
+      throw new Error(`Process group ${pid} did not exit`)
+    if (ended !== true && (unreaped() || probe(pid)))
       throw new Error(`Process group ${pid} did not exit`)
   } else {
     const recorded = pidFile && (await readPidFile(pidFile)) === pid
     const start = recorded ? await text(`${pidFile}.start`) : undefined
     const ours =
       recorded &&
-      (start === undefined
-        ? identify(pid) !== undefined && groupAlive(pid)
-        : identify(pid) === start)
-    if (ours && !(await drain(pid, grace))) throw new Error(`Process group ${pid} did not exit`)
+      (process.platform === 'win32'
+        ? start !== undefined && identify(pid) === start
+        : start === undefined
+          ? identify(pid) !== undefined && groupAlive(pid)
+          : identify(pid) === start)
+    if (ours) {
+      const stopped =
+        process.platform === 'win32' ? await gone(pid, grace + 3000) : await drain(pid, grace)
+      if (!stopped) throw new Error(`Process group ${pid} did not exit`)
+    }
+    if (
+      pidFile &&
+      (await readPidFile(pidFile)) === pid &&
+      (process.platform !== 'win32' || (await text(`${pidFile}.start`)) === start)
+    ) {
+      await rm(`${pidFile}.start`, { force: true })
+      await rm(pidFile, { force: true })
+    }
+    return
   }
   if (pidFile && (await readPidFile(pidFile)) === pid) {
-    await rm(`${pidFile}.start`, { force: true })
-    await rm(pidFile, { force: true })
+    const ownsFile =
+      process.platform !== 'win32' ||
+      !leader ||
+      (leader.start !== undefined && (await text(`${pidFile}.start`)) === leader.start)
+    if (ownsFile) {
+      await rm(`${pidFile}.start`, { force: true })
+      await rm(pidFile, { force: true })
+    }
   }
 }
 

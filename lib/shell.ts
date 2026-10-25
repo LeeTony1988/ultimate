@@ -1,9 +1,10 @@
 /**
  * The shell this host runs commands in: Bash everywhere, PowerShell on Windows (`pwsh`, else Windows PowerShell).
  * This is the one place that asks the platform, so no other module does. A caller that must know which shell it is
- * asking uses `name`, registers the tool with `create`, and runs a command string with `argv`. The browser dispatches on
- * a tool call's own name and never imports this file: `process` does not exist there.
+ * asking uses `name`, registers the tool with `create`, and spawns a command string with `argv` or a shebang script with
+ * `script`. The browser dispatches on a tool call's own name and never imports this file: `process` does not exist there.
  */
+import { readFileSync } from 'node:fs'
 import type { BashPrepare } from '@earendil-works/pi-durable/tools'
 import { createBashTool, createPowerShellTool } from '@earendil-works/pi-durable/tools'
 import { getPowerShellConfig, getShellConfig } from '@earendil-works/pi-coding-agent'
@@ -24,6 +25,8 @@ export interface Shell {
    * either.
    */
   argv(command: string, variables?: readonly string[]): { program: string; args: string[] }
+  /** Resolve a shebang script to the executable and arguments that run it on this host. */
+  script(path: string): { program: string; args: string[] }
 }
 
 /** `command` with each of `names` written in `shell`'s syntax: `$NAME` reads in either shell's own spelling. */
@@ -45,6 +48,7 @@ const utf8 = 'try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } cat
 const bash: Shell = {
   name: 'bash',
   create: (options) => createBashTool(options),
+  script: (path) => ({ program: path, args: [] }),
   argv: (command, variables = []) => {
     const { shell, args } = getShellConfig()
     // Pi asks for stdin only for the legacy WSL `bash.exe`, which this platform never selects: `win32` runs PowerShell.
@@ -58,6 +62,38 @@ const bash: Shell = {
 const powershell: Shell = {
   name: 'powershell',
   create: (options) => createPowerShellTool(options),
+  script: (path) => {
+    const line = readFileSync(path, 'utf8').split(/\r?\n/, 1)[0]
+    if (!line.startsWith('#!')) throw new Error(`Windows script ${path} needs a shebang`)
+    const words = line.slice(2).trim().split(/\s+/)
+    const commandName = (value: string) =>
+      value.replaceAll('\\', '/').split('/').at(-1)?.toLowerCase()
+    if (commandName(words[0]) === 'env') {
+      words.shift()
+      if (words[0] === '-S') words.shift()
+    }
+    const interpreter = words.shift()
+    if (!interpreter) throw new Error(`Windows script ${path} has an empty shebang`)
+    const name = interpreter.replaceAll('\\', '/').split('/').at(-1)!.toLowerCase()
+    if (name === 'sh' || name === 'bash') {
+      const config = getShellConfig()
+      if (config.commandTransport === 'stdin')
+        throw new Error(`Windows script ${path} needs a Bash that accepts a script path`)
+      return { program: config.shell, args: [...words, path] }
+    }
+    if (name === 'pwsh' || name === 'powershell') {
+      return {
+        program: getPowerShellConfig().shell,
+        args: [
+          ...words,
+          '-Command',
+          `& ([ScriptBlock]::Create([IO.File]::ReadAllText('${path.replaceAll("'", "''")}')))`,
+        ],
+      }
+    }
+    const program = interpreter.startsWith('/') ? name : interpreter
+    return { program, args: [...words, path] }
+  },
   argv: (command, variables = []) => {
     // Throws a clear error when neither PowerShell starts; nothing else runs commands on Windows.
     const { shell, args } = getPowerShellConfig()
