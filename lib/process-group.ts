@@ -317,10 +317,10 @@ export async function runGroup(
   try {
     const code = await Promise.race([exited, failure.promise])
     await stop()
-    await closeOutput(group)
     return code
   } finally {
     signal?.removeEventListener('abort', halt)
+    await closeOutput(group)
   }
 }
 
