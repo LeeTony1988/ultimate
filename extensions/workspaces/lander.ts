@@ -24,6 +24,7 @@ import { runGroup, sweepPidFiles } from '../../lib/process-group.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { definitionAgent, discoverAgents } from '../../lib/agents.ts'
 import { CheckRan, Handoff, SubmissionLanded } from './api.ts'
+import { samePath, worktreePath } from './paths.ts'
 import { setup } from './setup.ts'
 import type {
   Landed,
@@ -63,7 +64,10 @@ export async function landerCheckout(home: string, source: string, tip = 'HEAD')
     .then(async () => {
       const registered = (await git(source, 'worktree', 'list', '--porcelain'))
         .split('\n\n')
-        .some((entry) => entry.split('\n').includes(`worktree ${path}`))
+        .some((entry) => {
+          const entryPath = worktreePath(entry)
+          return entryPath !== undefined && samePath(entryPath, path)
+        })
       if (!registered) {
         // The directory is the lander's own; a crash may have left it half created.
         await rm(path, { recursive: true, force: true })
