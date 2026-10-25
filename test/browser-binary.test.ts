@@ -125,6 +125,7 @@ it('checks installed Windows browsers before the Playwright cache', async () => 
 
 it('does not probe relative Windows paths for blank environment roots', async () => {
   const probed: string[] = []
+  const cacheDirectories: string[] = []
   const userCache = win32.join(home, 'AppData', 'Local', 'ms-playwright')
   await expect(
     browserBinary({
@@ -141,12 +142,13 @@ it('does not probe relative Windows paths for blank environment roots', async ()
         throw new Error(`ENOENT: ${path}`)
       },
       readDirectory: async (path) => {
-        expect(path).toBe(userCache)
+        cacheDirectories.push(path)
         return []
       },
     }),
   ).rejects.toThrow('No Chromium found')
 
+  expect(cacheDirectories).toEqual([userCache])
   expect(probed.every((path) => win32.isAbsolute(path))).toBe(true)
 })
 
