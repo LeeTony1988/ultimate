@@ -8,7 +8,7 @@ import { projectHome } from '../server/project.ts'
 import { acquireLock, readOwner, retireStorageOwner, pause } from '../server/lock.ts'
 import { watch, existsSync } from 'node:fs'
 import { watchRoots } from '../server/watch-roots.ts'
-import { join, resolve as resolvePath } from 'node:path'
+import { join, delimiter, resolve as resolvePath } from 'node:path'
 import { createServer, connect } from 'node:net'
 import type { Socket } from 'node:net'
 import { fileURLToPath } from 'node:url'
@@ -17,6 +17,7 @@ import type { ChildMessage, SupervisorMessage } from '../server/supervisor-proto
 import { loopbackAuthority, proxied } from '../server/request-security.ts'
 import { isCoreReport } from '../server/supervisor-protocol.ts'
 import type { CoreReport } from '../server/supervisor-protocol.ts'
+import { browserOpenCommand } from './open-window.ts'
 import { dashboard } from './dashboard.ts'
 
 // `ultimate --cli …` is the emergency terminal agent: no supervisor, lock, server or storage.
@@ -35,20 +36,19 @@ if (positionals.length > 1)
   throw new Error('Usage: ultimate [dir] [--port N] [--no-open] | ultimate --cli [pi args…]')
 const opening = !values['no-open'] && process.env.ULTIMATE_NO_OPEN !== '1'
 const available = (name: string) =>
-  process.env.PATH?.split(':').some((path) => existsSync(join(path, name)))
+  process.env.PATH?.split(delimiter).some((path) => existsSync(join(path, name)))
 /** Opens a chromeless app window, like an installed web app, in the first Chrome-family browser; else a tab. */
 function openWindow(port: number) {
   const app = `http://ultimate.localhost:${port}`
   const tab = `http://127.0.0.1:${port}`
-  let command = process.platform === 'darwin' ? 'open' : 'xdg-open'
-  let args = [tab]
+  let { command, args } = browserOpenCommand(process.platform, tab)
   if (process.platform === 'darwin') {
     if (existsSync('/Applications/Google Chrome.app'))
       args = ['-na', 'Google Chrome', '--args', `--app=${app}`]
-  } else if (available('omarchy-launch-webapp')) {
+  } else if (process.platform !== 'win32' && available('omarchy-launch-webapp')) {
     command = 'omarchy-launch-webapp'
     args = [app]
-  } else {
+  } else if (process.platform !== 'win32') {
     const browser = [
       'google-chrome-stable',
       'google-chrome',
