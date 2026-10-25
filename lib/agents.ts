@@ -9,6 +9,7 @@ import type { ModelRuntime } from '@earendil-works/pi-coding-agent'
 import type { Source } from '../server/project.ts'
 // oxlint-disable-next-line no-restricted-imports -- agent discovery follows the core project trust decision
 import { projectDecision, useProjectSetup } from '../server/project-setup.ts'
+import { shellFor } from './shell.ts'
 
 export interface AgentDefinition {
   name: string
@@ -45,8 +46,8 @@ export function previewModel(env: NodeJS.ProcessEnv = process.env) {
 }
 
 export function runtimeToolName(name: string, platform: NodeJS.Platform = process.platform) {
-  if (name === 'bash' && platform === 'win32') return 'powershell'
-  if (name === 'powershell' && platform !== 'win32') return 'bash'
+  // Both portable names mean "the shell this host runs", whatever a definition was written for.
+  if (name === 'bash' || name === 'powershell') return shellFor(platform).name
   return name
 }
 
@@ -101,8 +102,7 @@ export function definitionAgent(
     },
     tools: tools.filter(
       (tool) =>
-        !excludeTools.includes(tool.name) &&
-        (!effective?.tools || named.includes(tool.name)),
+        !excludeTools.includes(tool.name) && (!effective?.tools || named.includes(tool.name)),
     ),
     extensions: parent.extensions.filter(
       (extension) => !excludeExtensions.includes(extension.name),
@@ -408,9 +408,7 @@ export function serializeDefinition(
     `description: ${scalar(frontmatter.description.trim())}`,
     ...(frontmatter.model ? [`model: ${scalar(frontmatter.model)}`] : []),
     ...(frontmatter.thinking ? [`thinking: ${scalar(frontmatter.thinking)}`] : []),
-    ...(frontmatter.tools
-      ? [`tools: ${toolList(portableToolNames(frontmatter.tools))}`]
-      : []),
+    ...(frontmatter.tools ? [`tools: ${toolList(portableToolNames(frontmatter.tools))}`] : []),
     ...(frontmatter.denyTools?.length
       ? [`denyTools: ${toolList(portableToolNames(frontmatter.denyTools))}`]
       : []),

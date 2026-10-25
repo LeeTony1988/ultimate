@@ -36,6 +36,7 @@ export function phaseState(entries: readonly EntryRecord[], roots: readonly stri
       let value: string
       switch (call.name) {
         case 'bash':
+        case 'powershell':
           value = clip(
             (typeof args.command === 'string' ? args.command : '').replace(
               /^\s*cd\s+(?:"[^"]*"|'[^']*'|\S+?)\s*(?:&&|;)\s*/,

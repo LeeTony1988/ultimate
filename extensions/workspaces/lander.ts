@@ -20,7 +20,7 @@ import type {
   Tx,
 } from '@earendil-works/pi-durable'
 import { git } from '../../lib/git.ts'
-import { runGroup, sweepPidFiles } from '../../lib/process-group.ts'
+import { processGroups, runGroup, sweepPidFiles } from '../../lib/process-group.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { definitionAgent, discoverAgents } from '../../lib/agents.ts'
 import { CheckRan, Handoff, SubmissionLanded } from './api.ts'
@@ -205,7 +205,8 @@ export const checkTemp = (home: string) => join(home, 'lander-tmp')
 /**
  * Run `command` with bash in its own process group, recorded in `pids` while it runs, with `TMPDIR` set to a fresh
  * directory in `temp` that is removed when it ends. The watchdog and task cancellation both stop the whole group:
- * TERM, then KILL after a short grace.
+ * TERM, then KILL after a short grace. A host without POSIX process groups (`processGroups`) fails the check itself
+ * rather than the spawn that would have run it.
  */
 export async function runLanderCheck(
   path: string,
@@ -215,6 +216,11 @@ export async function runLanderCheck(
   temp: string,
   limits: CheckLimits = checkLimits,
 ) {
+  if (!processGroups)
+    return {
+      failure:
+        'Checks need POSIX process groups to run and stop them; this Windows host has none. Run the check in a terminal and report its result.',
+    }
   // Synchronous, so the watchdog's timers start in the same tick as the call.
   mkdirSync(temp, { recursive: true })
   const tmp = mkdtempSync(join(temp, `${process.pid}-`))

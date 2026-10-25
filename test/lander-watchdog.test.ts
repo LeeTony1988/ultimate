@@ -11,7 +11,10 @@ import {
   runLanderCheck as run,
 } from '../extensions/workspaces/lander.ts'
 
-vi.mock('../lib/process-group.ts', () => ({ runGroup: vi.fn<typeof runGroup>() }))
+vi.mock('../lib/process-group.ts', () => ({
+  processGroups: true,
+  runGroup: vi.fn<typeof runGroup>(),
+}))
 const runLanderCheck = (
   path: string,
   command: string,

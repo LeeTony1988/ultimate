@@ -83,7 +83,7 @@ Optional project `.ultimate/settings.json` configuration:
 }
 ```
 
-Commands run in order with `sh -c`, closed stdin and a two-minute timeout. `ULTIMATE_SOURCE` is the parent checkout path. Interrupted setup repeats, so commands must be safe to repeat. Failure keeps the output tail and removes only a clean checkout; dirty output stays. Failed or removed workspaces block tool calls with an explanation, which the child's answer can report to its parent.
+Commands run in order in the host's shell (`bash -c`, or PowerShell on Windows), closed stdin and a two-minute timeout. `ULTIMATE_SOURCE` is the parent checkout path. Interrupted setup repeats, so commands must be safe to repeat. Failure keeps the output tail and removes only a clean checkout; dirty output stays. Failed or removed workspaces block tool calls with an explanation, which the child's answer can report to its parent.
 
 Verify the child's commits, then `land {id}` fast-forwards its saved source branch. Both checkouts must be clean, and the child must have no live run or queued input. If the target changed or diverged, update the workspace onto it and verify again; landing never rebases or pushes. An integrated tip is a no-op. Results list commits and paths and report whether the running Ultimate clone needs restart. `discard {id}` removes only a clean, idle checkout and keeps its branch. See [workspaces](../workspaces/README.md).
 

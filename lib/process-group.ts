@@ -10,6 +10,13 @@ import { setTimeout as sleep } from 'node:timers/promises'
 /** The program cannot start until its pid is recorded; a parent that dies before go gives EOF instead. */
 export const handshake = 'read -r _ || exit 1; exec "$0" "$@"'
 
+/**
+ * Whether this platform has POSIX process groups: what `spawnGroup`, `stopGroup` and `runGroup` are built on (a group
+ * leader behind `/bin/sh`, group signals, `/proc` or `ps` to identify a pid). The lander's checks and the automation
+ * scripts are POSIX-only until a Windows runner exists.
+ */
+export const processGroups = process.platform !== 'win32'
+
 export type GroupProcess = ChildProcessByStdio<Writable, Readable, Readable>
 /**
  * A process group this process started. `ended` resolves once the leader has exited and nothing of its group is left:

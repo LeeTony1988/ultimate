@@ -90,7 +90,7 @@ See [integration details](docs/worktrees.md#standing-permission-to-push-this-rep
 
 ## Conventions
 
-- Commits made through Ultimate's bash tool carry `Ultimate-Conversation: <id>`; find the conversation behind a commit with `git log --format=%(trailers:key=Ultimate-Conversation)`.
+- Commits made through Ultimate's shell tool (`bash`, or `powershell` on Windows) carry `Ultimate-Conversation: <id>`; find the conversation behind a commit with `git log --format=%(trailers:key=Ultimate-Conversation)`.
 - Pi is the role model: minimal, readable, malleable. Prefer platform features and existing dependencies; justify every
   new dependency in its commit message.
 - `pnpm check` enforces import boundaries; see `lint/ultimate.ts` and `vite.config.ts`. It also runs `pnpm deps`,

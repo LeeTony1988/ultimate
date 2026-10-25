@@ -116,9 +116,9 @@ it('ends any call the user cancels, kills it, and lets the run go on', async () 
     'cancel',
   )
   expect(cancels).toEqual([
-    { status: 500, error: 'That bash call is not running' },
+    { status: 500, error: 'That shell call is not running' },
     { status: 200, error: undefined },
-    { status: 500, error: 'That bash call is not running' },
+    { status: 500, error: 'That shell call is not running' },
   ])
   expect(ms).toBeLessThan(15000)
   expect(isError).toBe(false)

@@ -110,12 +110,17 @@ function literalDirectory(word: Word | undefined) {
   return word.value
 }
 
-/** Display only: the command's steps and programs from a real Bash parse; unparsable input stays one raw step. */
-export function formatBashCommand(command: string): BashCommand {
-  const raw: BashCommand = {
+/** Display only: a command shown as one raw step, for shells that are not Bash (PowerShell). */
+export function rawBashCommand(command: string): BashCommand {
+  return {
     steps: [{ text: command, programs: [], heredocs: [] }],
     summary: command.split('\n')[0],
   }
+}
+
+/** Display only: the command's steps and programs from a real Bash parse; unparsable input stays one raw step. */
+export function formatBashCommand(command: string): BashCommand {
+  const raw = rawBashCommand(command)
   const script = parse(command)
   if (script.errors?.length || script.source !== undefined) return raw
   const steps: BashStep[] = []

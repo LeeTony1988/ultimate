@@ -12,7 +12,10 @@ refuses a folder with files, whose first commit is a judgement for an agent; onb
 
 Each conversation has one record in the root `ultimate.workspaces` document.
 Its path is `<home>/worktrees/<conversationId>`; its branch includes the home hash and conversation ID.
-Preparation runs `isolates.worktree.setup` with `ULTIMATE_SOURCE` set to the source checkout.
+Preparation runs `isolates.worktree.setup` with `ULTIMATE_SOURCE` set to the source checkout, each command through
+the host's shell: `bash -c` on macOS and Linux (`sh -c` where no Bash is installed), PowerShell on Windows
+(`lib/shell.ts`). A command list is written for the machine the
+project runs on; `$ULTIMATE_SOURCE` reads in either shell, since it is filled in that shell's syntax.
 Setup commands must be safe to repeat after interruption.
 What a project's setup should do (dependencies, `.env`, a copy-on-write SQLite clone, a dev port per worktree, skipping
 the database in the lander's checkout, and when to ask about Postgres) is the "Worktree setup" step of the
@@ -123,7 +126,9 @@ lander's sidebar row shows the feature it lands or landed last.
    runs once when the checkout is created. With `lander.push`, it fetches the remote branch and merges it when it is ahead.
 2. Merges the submitted tip. A conflict aborts the merge and reports the conflicting paths.
 3. Runs `lander.checks` in order. Each check is stopped after 2 minutes without output or 10 minutes total, or at
-   its own `timeout` (seconds, which also caps the no-output limit), killing its whole process group. Watchdog
+   its own `timeout` (seconds, which also caps the no-output limit), killing its whole process group. Checks are
+   POSIX-only: they run in a process group (`lib/process-group.ts`), so a Windows host fails each check with that
+   reason instead of running it. Watchdog
    failures name the limit that fired, the failed test lines seen so far (vitest's `FAIL`/`×` lines, kept even when
    they scrolled out of the tail) and the output tail, and enter the same rerun/fix flow as other check failures.
    An entry is a check or an array of checks, a group that runs concurrently; a check is a command string or
