@@ -24,7 +24,7 @@ export async function browserBinary(options: BrowserBinaryOptions = {}) {
   const accessFile = options.accessFile ?? ((path: string) => access(path))
   const readDirectory = options.readDirectory ?? ((path: string) => readdir(path))
   const isWindows = platform === 'win32'
-  const localAppData = env.LOCALAPPDATA || undefined
+  const localAppData = env.LOCALAPPDATA?.trim() || undefined
   const cache = isWindows
     ? joinPath(localAppData ?? joinPath(home, 'AppData', 'Local'), 'ms-playwright')
     : joinPath(home, '.cache', 'ms-playwright')
@@ -32,18 +32,21 @@ export async function browserBinary(options: BrowserBinaryOptions = {}) {
     // A missing Playwright cache is normal; continue with installed browser candidates.
     return []
   })
-  const cachedBrowsers = cacheEntries
-    .filter((name) => name.startsWith('chromium-'))
-    .toSorted()
-    .toReversed()
-    .flatMap((name) =>
-      isWindows
-        ? [
-            joinPath(cache, name, 'chrome-win64', 'chrome.exe'),
-            joinPath(cache, name, 'chrome-win', 'chrome.exe'),
-          ]
-        : [joinPath(cache, name, 'chrome-linux64', 'chrome')],
-    )
+  const cachedEntries = cacheEntries.filter((name) => name.startsWith('chromium-'))
+  const orderedCacheEntries = isWindows
+    ? cachedEntries.toSorted(
+        (left, right) =>
+          Number(right.slice('chromium-'.length)) - Number(left.slice('chromium-'.length)),
+      )
+    : cachedEntries.toSorted().toReversed()
+  const cachedBrowsers = orderedCacheEntries.flatMap((name) =>
+    isWindows
+      ? [
+          joinPath(cache, name, 'chrome-win64', 'chrome.exe'),
+          joinPath(cache, name, 'chrome-win', 'chrome.exe'),
+        ]
+      : [joinPath(cache, name, 'chrome-linux64', 'chrome')],
+  )
   const windowsRoots = [
     env.ProgramFiles,
     env.ProgramW6432,

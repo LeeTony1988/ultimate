@@ -32,6 +32,11 @@ it.each([
     win32.join('C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe'),
   ],
   [
+    'Chrome under ProgramW6432',
+    { ProgramW6432: 'C:\\Program Files' },
+    win32.join('C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+  ],
+  [
     'Edge under ProgramFiles(x86)',
     { 'ProgramFiles(x86)': 'C:\\Program Files (x86)' },
     win32.join('C:\\Program Files (x86)', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
@@ -76,6 +81,21 @@ it.each([
   },
 )
 
+it('uses numeric Windows revision order when digit widths differ', async () => {
+  const cache = win32.join('C:\\Users\\test\\AppData\\Local', 'ms-playwright')
+  const older = win32.join(cache, 'chromium-999', 'chrome-win64', 'chrome.exe')
+  const newer = win32.join(cache, 'chromium-1000', 'chrome-win64', 'chrome.exe')
+  const result = await browserBinary({
+    platform: 'win32',
+    env: { LOCALAPPDATA: 'C:\\Users\\test\\AppData\\Local' },
+    home,
+    accessFile: accessOnly(older, newer),
+    readDirectory: async () => ['chromium-999', 'chromium-1000'],
+  })
+
+  expect(result).toBe(newer)
+})
+
 it('checks installed Windows browsers before the Playwright cache', async () => {
   const programFiles = 'C:\\Program Files'
   const localAppData = 'C:\\Users\\test\\AppData\\Local'
@@ -98,18 +118,27 @@ it('checks installed Windows browsers before the Playwright cache', async () => 
   expect(result).toBe(chrome)
 })
 
-it('does not probe relative Windows paths for empty environment roots', async () => {
+it('does not probe relative Windows paths for blank environment roots', async () => {
   const probed: string[] = []
+  const userCache = win32.join(home, 'AppData', 'Local', 'ms-playwright')
   await expect(
     browserBinary({
       platform: 'win32',
-      env: { ProgramFiles: '', ProgramW6432: '', 'ProgramFiles(x86)': '', LOCALAPPDATA: '' },
+      env: {
+        ProgramFiles: '   ',
+        ProgramW6432: ' ',
+        'ProgramFiles(x86)': '   ',
+        LOCALAPPDATA: '  ',
+      },
       home,
       accessFile: async (path) => {
         probed.push(path)
         throw new Error(`ENOENT: ${path}`)
       },
-      readDirectory: async () => [],
+      readDirectory: async (path) => {
+        expect(path).toBe(userCache)
+        return []
+      },
     }),
   ).rejects.toThrow('No Chromium found')
 
