@@ -53,6 +53,69 @@ it.each([
   expect(result).toBe(expected)
 })
 
+it.each([
+  ['chrome-win64', 'chrome-win64'],
+  ['chrome-win', 'chrome-win'],
+])(
+  'finds Windows Playwright cache layout %s in LOCALAPPDATA, newest first',
+  async (_layout, folder) => {
+    const localAppData = 'C:\\Users\\test\\AppData\\Local'
+    const cache = win32.join(localAppData, 'ms-playwright')
+    const candidates = ['chromium-1', 'chromium-2'].map((version) =>
+      win32.join(cache, version, folder, 'chrome.exe'),
+    )
+    const result = await browserBinary({
+      platform: 'win32',
+      env: { LOCALAPPDATA: localAppData },
+      home,
+      accessFile: accessOnly(...candidates),
+      readDirectory: async () => ['chromium-1', 'chromium-2'],
+    })
+
+    expect(result).toBe(candidates[1])
+  },
+)
+
+it('checks installed Windows browsers before the Playwright cache', async () => {
+  const programFiles = 'C:\\Program Files'
+  const localAppData = 'C:\\Users\\test\\AppData\\Local'
+  const chrome = win32.join(programFiles, 'Google', 'Chrome', 'Application', 'chrome.exe')
+  const cached = win32.join(
+    localAppData,
+    'ms-playwright',
+    'chromium-1',
+    'chrome-win64',
+    'chrome.exe',
+  )
+  const result = await browserBinary({
+    platform: 'win32',
+    env: { ProgramFiles: programFiles, LOCALAPPDATA: localAppData },
+    home,
+    accessFile: accessOnly(chrome, cached),
+    readDirectory: async () => ['chromium-1'],
+  })
+
+  expect(result).toBe(chrome)
+})
+
+it('does not probe relative Windows paths for empty environment roots', async () => {
+  const probed: string[] = []
+  await expect(
+    browserBinary({
+      platform: 'win32',
+      env: { ProgramFiles: '', ProgramW6432: '', 'ProgramFiles(x86)': '', LOCALAPPDATA: '' },
+      home,
+      accessFile: async (path) => {
+        probed.push(path)
+        throw new Error(`ENOENT: ${path}`)
+      },
+      readDirectory: async () => [],
+    }),
+  ).rejects.toThrow('No Chromium found')
+
+  expect(probed.every((path) => win32.isAbsolute(path))).toBe(true)
+})
+
 it('preserves Unix system browser candidates', async () => {
   const result = await browserBinary({
     platform: 'linux',
@@ -70,7 +133,10 @@ it('uses the newest Unix Playwright cache candidate', async () => {
     platform: 'linux',
     env: {},
     home: '/home/test',
-    accessFile: accessOnly('/home/test/.cache/ms-playwright/chromium-2/chrome-linux64/chrome'),
+    accessFile: accessOnly(
+      '/home/test/.cache/ms-playwright/chromium-1/chrome-linux64/chrome',
+      '/home/test/.cache/ms-playwright/chromium-2/chrome-linux64/chrome',
+    ),
     readDirectory: async () => ['chromium-1', 'chromium-2'],
   })
 

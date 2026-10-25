@@ -1,6 +1,6 @@
 ---
 name: verify-ui
-description: Check a UI change in Ultimate by looking at it with the screenshot and browser tools, on the running host or a preview. Use after changing anything a person sees (web/, a web.tsx, a card, a renderer) and before reporting it done or asking for approval.
+description: Check UI changes with ego-browser first and built-in browser tools as fallback. Use after changing anything a person sees (web/, a web.tsx, a card, a renderer) and before reporting it done or asking for approval.
 ---
 
 # Look at the change
