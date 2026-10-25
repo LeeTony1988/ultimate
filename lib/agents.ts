@@ -44,6 +44,29 @@ export function previewModel(env: NodeJS.ProcessEnv = process.env) {
   return { provider: value.slice(0, slash), modelId: value.slice(slash + 1) }
 }
 
+export function runtimeToolName(name: string, platform: NodeJS.Platform = process.platform) {
+  if (name === 'bash' && platform === 'win32') return 'powershell'
+  if (name === 'powershell' && platform !== 'win32') return 'bash'
+  return name
+}
+
+export function runtimeToolNames(names: string[], platform: NodeJS.Platform = process.platform) {
+  return [...new Set(names.map((name) => runtimeToolName(name, platform)))]
+}
+
+function portableToolNames(names: string[]) {
+  return [...new Set(names.map((name) => (name === 'powershell' ? 'bash' : name)))]
+}
+
+export function runtimeDefinition(definition: AgentDefinition): AgentDefinition {
+  return {
+    ...definition,
+    ...(definition.tools ? { tools: runtimeToolNames(definition.tools) } : {}),
+    ...(definition.addTools ? { addTools: runtimeToolNames(definition.addTools) } : {}),
+    ...(definition.denyTools ? { denyTools: runtimeToolNames(definition.denyTools) } : {}),
+  }
+}
+
 /** The agent change a definition makes over `parent`; in a preview, its model replaces every other choice. */
 export function definitionAgent(
   definition: AgentDefinition | undefined,
@@ -61,14 +84,15 @@ export function definitionAgent(
     thinking?: ModelThinkingLevel
   } = {},
 ): AgentChange {
-  const excludeTools = [...excluded, ...(definition?.denyTools ?? [])]
-  const ref = previewModel() ?? overrideModel ?? definition?.model ?? parent.model
+  const effective = definition && runtimeDefinition(definition)
+  const excludeTools = [...excluded, ...runtimeToolNames(effective?.denyTools ?? [])]
+  const ref = previewModel() ?? overrideModel ?? effective?.model ?? parent.model
   const model = ref && modelRuntime.getModel(ref.provider, ref.modelId)
-  const thinking = overrideThinking ?? definition?.thinking ?? parent.thinkingLevel
+  const thinking = overrideThinking ?? effective?.thinking ?? parent.thinkingLevel
   const tools = [
     ...new Map([...parent.tools, ...parent.deferred].map((tool) => [tool.name, tool])).values(),
   ]
-  const named = [...(definition?.tools ?? []), ...(definition?.addTools ?? [])]
+  const named = runtimeToolNames([...(effective?.tools ?? []), ...(effective?.addTools ?? [])])
   return {
     modelTools: {
       add: tools.filter(
@@ -78,12 +102,12 @@ export function definitionAgent(
     tools: tools.filter(
       (tool) =>
         !excludeTools.includes(tool.name) &&
-        (!definition?.tools || definition.tools.includes(tool.name)),
+        (!effective?.tools || named.includes(tool.name)),
     ),
     extensions: parent.extensions.filter(
       (extension) => !excludeExtensions.includes(extension.name),
     ),
-    instructions: definition?.instructions ?? parent.instructions ?? null,
+    instructions: effective?.instructions ?? parent.instructions ?? null,
     model: ref ?? null,
     thinkingLevel: thinking && model ? clampThinkingLevel(model, thinking) : (thinking ?? null),
   }
@@ -384,8 +408,12 @@ export function serializeDefinition(
     `description: ${scalar(frontmatter.description.trim())}`,
     ...(frontmatter.model ? [`model: ${scalar(frontmatter.model)}`] : []),
     ...(frontmatter.thinking ? [`thinking: ${scalar(frontmatter.thinking)}`] : []),
-    ...(frontmatter.tools ? [`tools: ${toolList(frontmatter.tools)}`] : []),
-    ...(frontmatter.denyTools?.length ? [`denyTools: ${toolList(frontmatter.denyTools)}`] : []),
+    ...(frontmatter.tools
+      ? [`tools: ${toolList(portableToolNames(frontmatter.tools))}`]
+      : []),
+    ...(frontmatter.denyTools?.length
+      ? [`denyTools: ${toolList(portableToolNames(frontmatter.denyTools))}`]
+      : []),
     ...(frontmatter.isolate === 'worktree' ? ['isolate: worktree'] : []),
     ...(frontmatter.resident !== undefined ? [`resident: ${frontmatter.resident}`] : []),
     ...(frontmatter.onFailure ? [`onFailure: ${frontmatter.onFailure}`] : []),
@@ -496,27 +524,30 @@ export async function saveOverlay(
   if ((form.summaries ?? true) !== (base.summaries ?? true))
     settings.push(`summaries: ${form.summaries ?? true}`)
 
+  const baseTools = base.tools ? portableToolNames(base.tools) : undefined
+  const formTools = form.tools ? portableToolNames(form.tools) : undefined
   if (!base.tools && form.tools) throw cannot('limit the tools of a definition that inherits all')
   if (base.tools && !form.tools) throw cannot('make it inherit every tool')
-  const removed = base.tools?.filter((tool) => !form.tools?.includes(tool)) ?? []
+  const removed = baseTools?.filter((tool) => !formTools?.includes(tool)) ?? []
   if (removed.length) throw cannot(`remove ${removed.join(', ')}`)
   // A base that inherits every tool shows no list in the form, so the file keeps the names it adds (deferred ones).
   const addTools =
-    form.tools?.filter((tool) => !base.tools?.includes(tool)) ??
+    formTools?.filter((tool) => !baseTools?.includes(tool)) ??
     (await readFile(path, 'utf8').then(
       (text) => {
         const kept = parseFrontmatter(text).frontmatter.addTools
-        return isTools(kept) ? kept : []
+        return isTools(kept) ? portableToolNames(kept) : []
       },
       (error: NodeJS.ErrnoException) => {
         if (error.code === 'ENOENT') return []
         throw error
       },
     ))
-  const baseDeny = base.denyTools ?? []
-  const undenied = baseDeny.filter((tool) => !form.denyTools?.includes(tool))
+  const baseDeny = portableToolNames(base.denyTools ?? [])
+  const formDeny = portableToolNames(form.denyTools ?? [])
+  const undenied = baseDeny.filter((tool) => !formDeny.includes(tool))
   if (undenied.length) throw cannot(`allow ${undenied.join(', ')} again`)
-  const denyTools = (form.denyTools ?? []).filter((tool) => !baseDeny.includes(tool))
+  const denyTools = formDeny.filter((tool) => !baseDeny.includes(tool))
   if (denyTools.length) settings.push(`denyTools: ${toolList(denyTools)}`)
 
   const start = base.instructions.trim()
