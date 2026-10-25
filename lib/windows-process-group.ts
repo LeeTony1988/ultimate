@@ -257,10 +257,9 @@ export function spawnWindowsGroup(
   child.stdin.on('error', () => {
     // The launcher may have failed before it read the handshake; its exit reports the failure.
   })
-  let forced = false
   const ended = new Promise<boolean>((resolve) => {
     child.once('error', () => resolve(false))
-    child.once('exit', () => resolve(!forced))
+    child.once('exit', () => resolve(true))
   })
   const closed = new Promise<void>((resolve) => child.once('close', () => resolve()))
   if (child.pid === undefined) return { child, ended, closed }
@@ -282,10 +281,7 @@ export function spawnWindowsGroup(
     ended,
     closed,
     stop: () => child.stdin.write('STOP\n'),
-    force: () => {
-      forced = true
-      child.kill('SIGKILL')
-    },
+    force: () => child.kill('SIGKILL'),
     ...(start ? { start } : {}),
   }
 }
