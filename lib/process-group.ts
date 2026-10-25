@@ -229,6 +229,7 @@ export async function stopGroup(
           ? identify(pid) !== undefined && groupAlive(pid)
           : identify(pid) === start)
     if (ours) {
+      if (process.platform === 'win32') send(pid, 'SIGKILL')
       const stopped =
         process.platform === 'win32' ? await gone(pid, grace + 3000) : await drain(pid, grace)
       if (!stopped) throw new Error(`Process group ${pid} did not exit`)
@@ -246,7 +247,6 @@ export async function stopGroup(
   if (pidFile && (await readPidFile(pidFile)) === pid) {
     const ownsFile =
       process.platform !== 'win32' ||
-      !leader ||
       (leader.start !== undefined && (await text(`${pidFile}.start`)) === leader.start)
     if (ownsFile) {
       await rm(`${pidFile}.start`, { force: true })

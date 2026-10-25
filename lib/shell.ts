@@ -67,14 +67,14 @@ const powershell: Shell = {
     if (!line.startsWith('#!')) throw new Error(`Windows script ${path} needs a shebang`)
     const words = line.slice(2).trim().split(/\s+/)
     const commandName = (value: string) =>
-      value.replaceAll('\\', '/').split('/').at(-1)?.toLowerCase()
+      value.replaceAll('\\', '/').split('/').at(-1)?.toLowerCase() ?? ''
     if (commandName(words[0]) === 'env') {
       words.shift()
       if (words[0] === '-S') words.shift()
     }
     const interpreter = words.shift()
     if (!interpreter) throw new Error(`Windows script ${path} has an empty shebang`)
-    const name = interpreter.replaceAll('\\', '/').split('/').at(-1)!.toLowerCase()
+    const name = commandName(interpreter)
     if (name === 'sh' || name === 'bash') {
       const config = getShellConfig()
       if (config.commandTransport === 'stdin')

@@ -17,6 +17,7 @@ it('runs lander checks through the selected host shell', async () => {
   try {
     const command = 'pnpm check'
     const shellCommand = shell.argv(command)
+    expect(shell.name).toBe(process.platform === 'win32' ? 'powershell' : 'bash')
     const result = await runLanderCheck(path, command, context, path, tempPath)
     expect(result.failure).toBeUndefined()
     expect(runGroup).toHaveBeenCalledWith(
