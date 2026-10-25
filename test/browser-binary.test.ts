@@ -32,6 +32,11 @@ it.each([
     win32.join('C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe'),
   ],
   [
+    'Chrome under a padded ProgramFiles root',
+    { ProgramFiles: ' C:\\Program Files ' },
+    win32.join('C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+  ],
+  [
     'Chrome under ProgramW6432',
     { ProgramW6432: 'C:\\Program Files' },
     win32.join('C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe'),

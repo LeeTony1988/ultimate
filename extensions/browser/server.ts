@@ -47,12 +47,9 @@ export async function browserBinary(options: BrowserBinaryOptions = {}) {
         ]
       : [joinPath(cache, name, 'chrome-linux64', 'chrome')],
   )
-  const windowsRoots = [
-    env.ProgramFiles,
-    env.ProgramW6432,
-    env['ProgramFiles(x86)'],
-    localAppData,
-  ].filter((root): root is string => !!root?.trim())
+  const windowsRoots = [env.ProgramFiles, env.ProgramW6432, env['ProgramFiles(x86)'], localAppData]
+    .filter((root): root is string => !!root?.trim())
+    .map((root) => root.trim())
   const windowsBrowsers = [...new Set(windowsRoots)].flatMap((root) => [
     joinPath(root, 'Google', 'Chrome', 'Application', 'chrome.exe'),
     joinPath(root, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
