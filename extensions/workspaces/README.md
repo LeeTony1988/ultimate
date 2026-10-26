@@ -126,9 +126,9 @@ lander's sidebar row shows the feature it lands or landed last.
    runs once when the checkout is created. With `lander.push`, it fetches the remote branch and merges it when it is ahead.
 2. Merges the submitted tip. A conflict aborts the merge and reports the conflicting paths.
 3. Runs `lander.checks` in order. Each check is stopped after 2 minutes without output or 10 minutes total, or at
-   its own `timeout` (seconds, which also caps the no-output limit), killing its whole process group. Checks are
-   POSIX-only: they run in a process group (`lib/process-group.ts`), so a Windows host fails each check with that
-   reason instead of running it. Watchdog
+   its own `timeout` (seconds, which also caps the no-output limit), stopping its whole process container. Checks run
+   through the host shell (`bash` on macOS/Linux; PowerShell on Windows) and use POSIX process groups or a Windows Job
+   Object to contain descendants. Watchdog
    failures name the limit that fired, the failed test lines seen so far (vitest's `FAIL`/`×` lines, kept even when
    they scrolled out of the tail) and the output tail, and enter the same rerun/fix flow as other check failures.
    An entry is a check or an array of checks, a group that runs concurrently; a check is a command string or

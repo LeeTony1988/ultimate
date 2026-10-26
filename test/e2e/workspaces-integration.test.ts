@@ -27,7 +27,6 @@ import workspaceExtension, {
 import { Workspaces, workspaces } from '../../extensions/workspaces/workspaces.ts'
 import { git } from '../../lib/git.ts'
 import { setup } from '../../extensions/workspaces/setup.ts'
-import { processGroups } from '../../lib/process-group.ts'
 import type { LanderEntry, WorkspaceIndex } from '../../extensions/workspaces/types.ts'
 import { createLander, landerCheckout, landerPath } from '../../extensions/workspaces/lander.ts'
 import { CheckRan, Handoff, SubmissionLanded } from '../../extensions/workspaces/api.ts'
@@ -383,48 +382,45 @@ it.concurrent('creates through the action; setup receives ULTIMATE_SOURCE and th
   expect(await git(f.projectRoot, 'status', '--porcelain')).toBe('')
 })
 // POSIX /bin/sh + /proc + FIFO Git hook; other preparation and prompt ordering coverage remains portable.
-it.skipIf(!processGroups).concurrent(
-  'renders workspace preparation before project context in the first composed provider request',
-  async () => {
-    const paths = await repository()
-    const marker = 'CHECKOUT_RULE_ULT_123: preserve the release manifest.'
-    await writeFile(join(paths.projectRoot, 'AGENTS.md'), marker)
-    await git(paths.projectRoot, 'add', 'AGENTS.md')
-    await git(paths.projectRoot, 'commit', '-m', 'checkout instructions')
-    const f = await fixture([], paths)
-    f.host.build = () =>
-      ({ id: 'test-build', generation: 1, core: 'core', extensions: {}, changed: [] }) as never
-    // As the server orders them: the workspace section waits for preparation before project context renders.
-    f.prepared.extensionOrders.set('workspaces', workspacesOrder)
-    f.prepared.extensionOrders.set('prompt', promptOrder)
-    f.prepared.registry.install(promptExtension(f.host))
-    const requests: string[] = []
-    f.prepared.faux!.setResponses([
-      (transcript) => {
-        requests.push(
-          JSON.stringify(transcript.messages.filter((message) => message.role === 'system')),
-        )
-        return fauxAssistantMessage('instructions read')
-      },
-    ])
-    const worktree = await holdGit(f.projectRoot, 'worktree')
-    const id = await f.create()
-    const workspace = (await f.service.get(id, context))!
-    await worktree.started()
-    await expect(access(join(workspace.path, 'AGENTS.md'))).rejects.toThrow('ENOENT')
-    const conversation = (await f.opened.harness.conversation(id, context))!
-    const submission = await conversation.submit(
-      { type: 'input', content: 'Read the checkout rules.' },
-      context,
-    )
-    expect((await f.service.get(id, context))!.state).toBe('preparing')
-    await worktree.release()
-    await submission.wait(context)
-    expect(requests).toHaveLength(1)
-    expect(requests[0]).toContain(marker)
-    expect(await readFile(join(workspace.path, 'AGENTS.md'), 'utf8')).toBe(marker)
-  },
-)
+it.concurrent('renders workspace preparation before project context in the first composed provider request', async () => {
+  const paths = await repository()
+  const marker = 'CHECKOUT_RULE_ULT_123: preserve the release manifest.'
+  await writeFile(join(paths.projectRoot, 'AGENTS.md'), marker)
+  await git(paths.projectRoot, 'add', 'AGENTS.md')
+  await git(paths.projectRoot, 'commit', '-m', 'checkout instructions')
+  const f = await fixture([], paths)
+  f.host.build = () =>
+    ({ id: 'test-build', generation: 1, core: 'core', extensions: {}, changed: [] }) as never
+  // As the server orders them: the workspace section waits for preparation before project context renders.
+  f.prepared.extensionOrders.set('workspaces', workspacesOrder)
+  f.prepared.extensionOrders.set('prompt', promptOrder)
+  f.prepared.registry.install(promptExtension(f.host))
+  const requests: string[] = []
+  f.prepared.faux!.setResponses([
+    (transcript) => {
+      requests.push(
+        JSON.stringify(transcript.messages.filter((message) => message.role === 'system')),
+      )
+      return fauxAssistantMessage('instructions read')
+    },
+  ])
+  const worktree = await holdGit(f.projectRoot, 'worktree')
+  const id = await f.create()
+  const workspace = (await f.service.get(id, context))!
+  await worktree.started()
+  await expect(access(join(workspace.path, 'AGENTS.md'))).rejects.toThrow('ENOENT')
+  const conversation = (await f.opened.harness.conversation(id, context))!
+  const submission = await conversation.submit(
+    { type: 'input', content: 'Read the checkout rules.' },
+    context,
+  )
+  expect((await f.service.get(id, context))!.state).toBe('preparing')
+  await worktree.release()
+  await submission.wait(context)
+  expect(requests).toHaveLength(1)
+  expect(requests[0]).toContain(marker)
+  expect(await readFile(join(workspace.path, 'AGENTS.md'), 'utf8')).toBe(marker)
+})
 it.concurrent('setup closes stdin so commands waiting for EOF finish', async () => {
   const paths = await repository()
   await setup(
@@ -582,28 +578,25 @@ it.concurrent('lands fast-forward, lists commits and paths, and is idempotent', 
   await commit(workspace.path, 'server/change.ts')
   expect((await f.service.land(id, context)).needsRestart).toBe(true)
 })
-it.skipIf(!processGroups).concurrent(
-  'queued landing reads the current record after another workspace lands',
-  async () => {
-    const f = await fixture()
-    const first = await f.create()
-    const second = await f.create()
-    await f.service.ready(first, context)
-    await f.service.ready(second, context)
-    await commit((await f.service.get(first, context))!.path)
-    const merge = await holdGit(f.projectRoot, 'merge')
-    const landing = f.service.land(first, context)
-    await merge.started()
-    const queued = f.service.land(second, context).catch((error: Error) => error)
-    try {
-      await actions.discard({ id: second }, { host: f.host } as ActionContext)
-    } finally {
-      await merge.release()
-    }
-    await landing
-    expect(await queued).toMatchObject({ message: 'Workspace is removed' })
-  },
-)
+it.concurrent('queued landing reads the current record after another workspace lands', async () => {
+  const f = await fixture()
+  const first = await f.create()
+  const second = await f.create()
+  await f.service.ready(first, context)
+  await f.service.ready(second, context)
+  await commit((await f.service.get(first, context))!.path)
+  const merge = await holdGit(f.projectRoot, 'merge')
+  const landing = f.service.land(first, context)
+  await merge.started()
+  const queued = f.service.land(second, context).catch((error: Error) => error)
+  try {
+    await actions.discard({ id: second }, { host: f.host } as ActionContext)
+  } finally {
+    await merge.release()
+  }
+  await landing
+  expect(await queued).toMatchObject({ message: 'Workspace is removed' })
+})
 it.concurrent('requires nonempty divergence for submit before queuing anything', async () => {
   const f = await lander({})
   const id = await f.create()
@@ -1551,49 +1544,46 @@ it.concurrent('lands two submissions in order onto a moved target and reports bo
     )
 })
 // FIFO barriers specifically synchronize POSIX lander checks; no Windows runner is assumed here.
-it.skipIf(!processGroups).concurrent(
-  'runs a check group concurrently and records each summary',
-  async () => {
-    const f = await fixture()
-    /** Both checks must start before either gate is released; serial execution cannot pass. */
-    const meet = (name: string) =>
-      `mkfifo '${join(f.directory, name)}.gate'; touch '${join(f.directory, name)}'; read release < '${join(f.directory, name)}.gate'; printf 'log\\n\\033[32m${name} met\\033[0m\\n\\n'`
-    const group = [meet('one'), meet('two')]
-    f.host.projectSettings = async () => ({ lander: { checks: ['true', group] } })
-    const id = await f.create()
-    await f.service.ready(id, context)
-    await commit((await f.service.get(id, context))!.path)
-    await f.service.submit(id, 'None', context)
-    await until(async () => {
-      const started = await Promise.all(
-        ['one', 'two'].map((name) =>
-          access(join(f.directory, name)).then(
-            () => true,
-            () => false,
-          ),
-        ),
-      )
-      return started.every(Boolean)
-    })
-    await Promise.all(
-      ['one', 'two'].map((name) => writeFile(join(f.directory, name) + '.gate', 'ready\n')),
-    )
-    const [report] = await submitted(f, id)
-    expect(report).toContain('landed as')
-    expect(report).not.toContain('Flaky')
-    const checks = (await landerLog(f)).log.flatMap((line) => (line.check ? [line.check] : []))
-    expect(checks[0]).toEqual({ command: 'true', result: 'passed' })
-    // ANSI stripped, trailing blank lines skipped.
-    expect(checks.slice(1)).toEqual(
-      expect.arrayContaining(
-        ['one met', 'two met'].map((summary) =>
-          expect.objectContaining({ result: 'passed', summary }),
+it.concurrent('runs a check group concurrently and records each summary', async () => {
+  const f = await fixture()
+  /** Both checks must start before either gate is released; serial execution cannot pass. */
+  const meet = (name: string) =>
+    `mkfifo '${join(f.directory, name)}.gate'; touch '${join(f.directory, name)}'; read release < '${join(f.directory, name)}.gate'; printf 'log\\n\\033[32m${name} met\\033[0m\\n\\n'`
+  const group = [meet('one'), meet('two')]
+  f.host.projectSettings = async () => ({ lander: { checks: ['true', group] } })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await commit((await f.service.get(id, context))!.path)
+  await f.service.submit(id, 'None', context)
+  await until(async () => {
+    const started = await Promise.all(
+      ['one', 'two'].map((name) =>
+        access(join(f.directory, name)).then(
+          () => true,
+          () => false,
         ),
       ),
     )
-    expect(checks).toHaveLength(3)
-  },
-)
+    return started.every(Boolean)
+  })
+  await Promise.all(
+    ['one', 'two'].map((name) => writeFile(join(f.directory, name) + '.gate', 'ready\n')),
+  )
+  const [report] = await submitted(f, id)
+  expect(report).toContain('landed as')
+  expect(report).not.toContain('Flaky')
+  const checks = (await landerLog(f)).log.flatMap((line) => (line.check ? [line.check] : []))
+  expect(checks[0]).toEqual({ command: 'true', result: 'passed' })
+  // ANSI stripped, trailing blank lines skipped.
+  expect(checks.slice(1)).toEqual(
+    expect.arrayContaining(
+      ['one met', 'two met'].map((summary) =>
+        expect.objectContaining({ result: 'passed', summary }),
+      ),
+    ),
+  )
+  expect(checks).toHaveLength(3)
+})
 it.concurrent('reruns only the failing command of a group, reports its output twice failed, and lands a flaky one', async () => {
   const f = await lander({
     checks: [['echo PASSING_SUMMARY', 'echo CHECK_OUTPUT_TAIL; test ! -f fail.txt']],
@@ -1728,39 +1718,36 @@ it.concurrent('counts checkouts by state, commits and uncommitted changes, and m
   // Counting never removes anything.
   expect((await f.service.get(landed, context))!.state).toBe('ready')
 })
-it.skipIf(!processGroups).concurrent(
-  'kills the whole process group of a running check when the lander is aborted',
-  async () => {
-    const f = await fixture()
-    const pidFile = join(f.directory, 'child.pid')
-    f.host.projectSettings = async () => ({
-      // An indefinitely blocked child lets the test observe process-group cancellation, not elapsed time.
-      lander: { checks: [`tail -f /dev/null & echo $! > '${pidFile}'; wait`] },
-    })
-    const id = await f.create()
-    await f.service.ready(id, context)
-    await commit((await f.service.get(id, context))!.path)
-    await f.service.submit(id, 'None', context)
-    await until(() =>
-      readFile(pidFile, 'utf8').then(
-        (text) => text.trim() !== '',
-        () => false,
-      ),
-    )
-    const pid = Number(await readFile(pidFile, 'utf8'))
-    expect(() => process.kill(pid, 0)).not.toThrow()
-    const index = (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
-    await f.opened.harness.abortTask(Object.values(index.landers)[0] as TaskId, context)
-    await until(() => {
-      try {
-        process.kill(pid, 0)
-        return false
-      } catch {
-        return true
-      }
-    }, 5000)
-  },
-)
+it.concurrent('kills the whole process group of a running check when the lander is aborted', async () => {
+  const f = await fixture()
+  const pidFile = join(f.directory, 'child.pid')
+  f.host.projectSettings = async () => ({
+    // An indefinitely blocked child lets the test observe process-group cancellation, not elapsed time.
+    lander: { checks: [`tail -f /dev/null & echo $! > '${pidFile}'; wait`] },
+  })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await commit((await f.service.get(id, context))!.path)
+  await f.service.submit(id, 'None', context)
+  await until(() =>
+    readFile(pidFile, 'utf8').then(
+      (text) => text.trim() !== '',
+      () => false,
+    ),
+  )
+  const pid = Number(await readFile(pidFile, 'utf8'))
+  expect(() => process.kill(pid, 0)).not.toThrow()
+  const index = (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
+  await f.opened.harness.abortTask(Object.values(index.landers)[0] as TaskId, context)
+  await until(() => {
+    try {
+      process.kill(pid, 0)
+      return false
+    } catch {
+      return true
+    }
+  }, 5000)
+})
 it.concurrent('runs worktree setup on the merged revision before the checks', async () => {
   const f = await fixture()
   await writeFile(join(f.projectRoot, '.gitignore'), 'have.txt\n')
@@ -1885,75 +1872,68 @@ it.concurrent('reports a local landing whose push retry conflicts as landed loca
   ).toBe(true)
   expect((await f.service.get(id, context))!.landed).toBe(landed)
 })
-it.skipIf(!processGroups).concurrent(
-  'resumes checks after a restart without rerunning passed ones and keeps flaky notes',
-  async () => {
-    const f = await fixture()
-    const log = join(f.directory, 'runs')
-    const marker = join(f.directory, 'failed-once')
-    const gate = join(f.directory, 'rerun-gate')
-    f.host.projectSettings = async () => ({
-      lander: {
-        checks: [
-          `echo first >> '${log}'`,
-          `echo second >> '${log}'; if [ ! -f '${marker}' ]; then touch '${marker}'; exit 1; fi; while [ ! -f '${gate}' ]; do sleep 0.05; done`,
-        ],
-      },
-    })
-    const id = await f.create()
-    await f.service.ready(id, context)
-    await commit((await f.service.get(id, context))!.path)
-    await f.service.submit(id, 'None', context)
-    const runs = () => readFile(log, 'utf8').catch(() => '')
-    await until(async () => (await runs()) === 'first\nsecond\nsecond\n')
-    const merged = await git(
-      join(f.home, 'lander', (await readdir(join(f.home, 'lander')))[0]),
-      'rev-parse',
-      'HEAD',
-    )
-    await f.reopen()
-    await writeFile(gate, '')
-    const [report] = await submitted(f, id)
-    expect(await runs()).toBe('first\nsecond\nsecond\nsecond\n')
-    expect(report).toContain('landed as')
-    expect(report).toContain(`Flaky: echo second`)
-    expect(await git(f.projectRoot, 'rev-parse', 'main')).toBe(merged)
-  },
-)
-it.skipIf(!processGroups).concurrent(
-  'starts a lander for queued submissions left by a lander task that ended',
-  async () => {
-    const f = await lander({})
-    const id = await f.create()
-    await f.service.ready(id, context)
-    await commit((await f.service.get(id, context))!.path, 'left.txt')
-    // A held check keeps the first task landing; then it ends without draining its queue.
-    const gate = join(f.directory, 'gate')
-    f.host.projectSettings = async () => ({
-      lander: { checks: [`while [ ! -f '${gate}' ]; do sleep 0.05; done`] },
-    })
-    await f.service.submit(id, 'None', context)
-    const index = () => f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
-    await until(async () => (await index())!.queue[0]?.state === 'landing')
-    const first = Object.values((await index())!.landers)[0] as TaskId
-    await f.opened.harness.abortTask(first, context)
-    await until(
-      async () =>
-        (await f.opened.harness.commit((tx) => tx.task(first), context))!.state.status ===
-        'terminal',
-    )
-    expect((await index())!.queue).toMatchObject([{ state: 'queued' }])
-    await writeFile(gate, '')
-    await f.reopen()
-    const second = Object.values((await index())!.landers)[0]
-    expect(second).not.toBe(first)
-    expect((await submitted(f, id))[0]).toContain('landed as')
-    expect(await readFile(join(f.projectRoot, 'left.txt'), 'utf8')).toBe('left.txt')
-    // Opening again with nothing queued starts nothing.
-    await f.reopen()
-    expect((await index())!.landers).toEqual({})
-  },
-)
+it.concurrent('resumes checks after a restart without rerunning passed ones and keeps flaky notes', async () => {
+  const f = await fixture()
+  const log = join(f.directory, 'runs')
+  const marker = join(f.directory, 'failed-once')
+  const gate = join(f.directory, 'rerun-gate')
+  f.host.projectSettings = async () => ({
+    lander: {
+      checks: [
+        `echo first >> '${log}'`,
+        `echo second >> '${log}'; if [ ! -f '${marker}' ]; then touch '${marker}'; exit 1; fi; while [ ! -f '${gate}' ]; do sleep 0.05; done`,
+      ],
+    },
+  })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await commit((await f.service.get(id, context))!.path)
+  await f.service.submit(id, 'None', context)
+  const runs = () => readFile(log, 'utf8').catch(() => '')
+  await until(async () => (await runs()) === 'first\nsecond\nsecond\n')
+  const merged = await git(
+    join(f.home, 'lander', (await readdir(join(f.home, 'lander')))[0]),
+    'rev-parse',
+    'HEAD',
+  )
+  await f.reopen()
+  await writeFile(gate, '')
+  const [report] = await submitted(f, id)
+  expect(await runs()).toBe('first\nsecond\nsecond\nsecond\n')
+  expect(report).toContain('landed as')
+  expect(report).toContain(`Flaky: echo second`)
+  expect(await git(f.projectRoot, 'rev-parse', 'main')).toBe(merged)
+})
+it.concurrent('starts a lander for queued submissions left by a lander task that ended', async () => {
+  const f = await lander({})
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await commit((await f.service.get(id, context))!.path, 'left.txt')
+  // A held check keeps the first task landing; then it ends without draining its queue.
+  const gate = join(f.directory, 'gate')
+  f.host.projectSettings = async () => ({
+    lander: { checks: [`while [ ! -f '${gate}' ]; do sleep 0.05; done`] },
+  })
+  await f.service.submit(id, 'None', context)
+  const index = () => f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
+  await until(async () => (await index())!.queue[0]?.state === 'landing')
+  const first = Object.values((await index())!.landers)[0] as TaskId
+  await f.opened.harness.abortTask(first, context)
+  await until(
+    async () =>
+      (await f.opened.harness.commit((tx) => tx.task(first), context))!.state.status === 'terminal',
+  )
+  expect((await index())!.queue).toMatchObject([{ state: 'queued' }])
+  await writeFile(gate, '')
+  await f.reopen()
+  const second = Object.values((await index())!.landers)[0]
+  expect(second).not.toBe(first)
+  expect((await submitted(f, id))[0]).toContain('landed as')
+  expect(await readFile(join(f.projectRoot, 'left.txt'), 'utf8')).toBe('left.txt')
+  // Opening again with nothing queued starts nothing.
+  await f.reopen()
+  expect((await index())!.landers).toEqual({})
+})
 /** A `lander` definition in the user's agents, as an override of a project would be. */
 async function landerDefinition(
   f: Awaited<ReturnType<typeof fixture>>,
@@ -2072,7 +2052,7 @@ it.concurrent('answers the user in the lander conversation with its definition, 
   // This fixture registers pi-durable CodingTools, whose shell tool is named bash everywhere. On Windows the
   // lander's portable bash name becomes powershell, which this fixture does not register, so only read remains.
   expect((await conversation.agent(context)).tools.map((tool) => tool.name).toSorted()).toEqual(
-    processGroups ? ['bash', 'read'] : ['read'],
+    process.platform === 'win32' ? ['read'] : ['bash', 'read'],
   )
   // Main conversations get no lander state.
   await f.call(id, 'workspace', { action: 'status' })
@@ -2256,80 +2236,74 @@ it.concurrent('fix: a follow-up queued behind the failure run gets nothing lande
     view.dispose()
   }
 })
-it.skipIf(!processGroups).concurrent(
-  'resumes a group after a restart without a third run of its twice-failed member',
-  async () => {
-    const f = await fixture()
-    const runs = join(f.directory, 'runs')
-    const held = heldCheck(f)
-    const failing = `echo failing >> '${runs}'; echo FAILING_OUTPUT; exit 1`
-    f.host.projectSettings = async () => ({ lander: { checks: [[failing, held.command]] } })
-    const id = await f.create()
-    await f.service.ready(id, context)
-    await commit((await f.service.get(id, context))!.path)
-    const head = await git(f.projectRoot, 'rev-parse', 'HEAD')
-    const { id: submission } = await f.service.submit(id, 'None', context)
-    const index = () => f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
-    const task = Object.values((await index())!.landers)[0] as TaskId
-    // The failing member's rerun outcome is stored while its sibling still runs.
-    await until(async () => {
-      const record = await f.opened.harness.commit((tx) => tx.task(task), context)
-      return record?.memos?.[`check:${submission}:1:0.0:rerun`] !== undefined
-    })
-    await held.started()
-    await f.reopen()
-    await held.release()
-    const [report] = await submitted(f, id)
-    expect(await readFile(runs, 'utf8')).toBe('failing\nfailing\n')
-    expect(report).toContain(`was not landed: check failed twice: ${failing}`)
-    expect(report).toContain('FAILING_OUTPUT')
-    expect((await index())!.results[submission]).toMatchObject({
-      outcome: 'failed',
-      output: expect.stringContaining('FAILING_OUTPUT'),
-    })
-    expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
-  },
-)
-it.skipIf(!processGroups).concurrent(
-  'fix: a rejected fix stays rejected when the lander crashes during its cleanup',
-  async () => {
-    const f = await lander({})
-    await landerDefinition(f, 'fix')
-    // Resolves and commits the conflict, then leaves base.txt modified: a dirty fix, rejected.
-    f.answerLander(() =>
-      fauxAssistantMessage(
-        fauxToolCall('bash', {
-          command:
-            'echo resolved > base.txt && git add base.txt && git commit -q --no-edit && echo dirty >> base.txt',
-        }),
-        { stopReason: 'toolUse' },
-      ),
-    )
-    const id = await f.create()
-    await f.service.ready(id, context)
-    const head = await conflicting(f, id)
-    const index = () => f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
-    const { id: submission } = await f.service.submit(id, 'None', context)
-    await until(async () => (await index())!.queue[0]?.agent === 'fix')
-    // The cleanup's reset cleans the checkout, then the process goes down before the rejection is reported.
-    const reset = await holdGit(f.projectRoot, 'reset', true)
-    await reset.started()
-    const crashed = f.opened
-    const reopening = f.reopen()
-    await until(() =>
-      crashed.harness.conversation(ROOT_CONVERSATION_ID, context).then(
-        () => false,
-        () => true,
-      ),
-    )
-    await reset.release()
-    await reopening
-    const [report] = await submitted(f, id)
-    expect(report).toContain("The lander's fix left uncommitted changes.")
-    expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
-    expect((await index())!.results[submission]).toMatchObject({ outcome: 'failed' })
-  },
-)
+it.concurrent('resumes a group after a restart without a third run of its twice-failed member', async () => {
+  const f = await fixture()
+  const runs = join(f.directory, 'runs')
+  const held = heldCheck(f)
+  const failing = `echo failing >> '${runs}'; echo FAILING_OUTPUT; exit 1`
+  f.host.projectSettings = async () => ({ lander: { checks: [[failing, held.command]] } })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await commit((await f.service.get(id, context))!.path)
+  const head = await git(f.projectRoot, 'rev-parse', 'HEAD')
+  const { id: submission } = await f.service.submit(id, 'None', context)
+  const index = () => f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
+  const task = Object.values((await index())!.landers)[0] as TaskId
+  // The failing member's rerun outcome is stored while its sibling still runs.
+  await until(async () => {
+    const record = await f.opened.harness.commit((tx) => tx.task(task), context)
+    return record?.memos?.[`check:${submission}:1:0.0:rerun`] !== undefined
+  })
+  await held.started()
+  await f.reopen()
+  await held.release()
+  const [report] = await submitted(f, id)
+  expect(await readFile(runs, 'utf8')).toBe('failing\nfailing\n')
+  expect(report).toContain(`was not landed: check failed twice: ${failing}`)
+  expect(report).toContain('FAILING_OUTPUT')
+  expect((await index())!.results[submission]).toMatchObject({
+    outcome: 'failed',
+    output: expect.stringContaining('FAILING_OUTPUT'),
+  })
+  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
+})
+it.concurrent('fix: a rejected fix stays rejected when the lander crashes during its cleanup', async () => {
+  const f = await lander({})
+  await landerDefinition(f, 'fix')
+  // Resolves and commits the conflict, then leaves base.txt modified: a dirty fix, rejected.
+  f.answerLander(() =>
+    fauxAssistantMessage(
+      fauxToolCall('bash', {
+        command:
+          'echo resolved > base.txt && git add base.txt && git commit -q --no-edit && echo dirty >> base.txt',
+      }),
+      { stopReason: 'toolUse' },
+    ),
+  )
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const head = await conflicting(f, id)
+  const index = () => f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
+  const { id: submission } = await f.service.submit(id, 'None', context)
+  await until(async () => (await index())!.queue[0]?.agent === 'fix')
+  // The cleanup's reset cleans the checkout, then the process goes down before the rejection is reported.
+  const reset = await holdGit(f.projectRoot, 'reset', true)
+  await reset.started()
+  const crashed = f.opened
+  const reopening = f.reopen()
+  await until(() =>
+    crashed.harness.conversation(ROOT_CONVERSATION_ID, context).then(
+      () => false,
+      () => true,
+    ),
+  )
+  await reset.release()
+  await reopening
+  const [report] = await submitted(f, id)
+  expect(report).toContain("The lander's fix left uncommitted changes.")
+  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
+  expect((await index())!.results[submission]).toMatchObject({ outcome: 'failed' })
+})
 it.concurrent('fix: the lander model resolves a conflict with the remote target, then the submission merges, checks and lands', async () => {
   const { paths, bare } = await withRemote()
   const f = await lander({ push: 'origin', checks: ['grep -q resolved base.txt'] }, paths)
@@ -2585,44 +2559,41 @@ it.concurrent('release handles failed checkouts but never removes detached unlan
   expect(await git(workspace.path, 'rev-parse', 'HEAD')).toBe(tip)
 })
 
-it.skipIf(!processGroups).concurrent(
-  'aborting release finishes the current checkout and leaves the remaining batch untouched',
-  async () => {
-    const f = await fixture()
-    const ids = [await f.create(), await f.create(), await f.create()]
-    for (const id of ids) await f.service.ready(id, context)
-    const workspacesBefore = await Promise.all(ids.map((id) => f.service.get(id, context)))
-    const deletingBranch = await holdGit(f.projectRoot, 'branch')
-    const controller = new AbortController()
-    let finished = false
-    const releasing = f.service.release(ids, context, controller.signal).then((kept) => {
-      finished = true
-      return kept
-    })
-    try {
-      // Hold the first checkout's final branch deletion, after its folder has been removed.
-      await deletingBranch.started()
-      controller.abort()
-      expect(finished).toBe(false)
-      await expect(access(workspacesBefore[0]!.path)).rejects.toThrow('ENOENT')
-    } finally {
-      await deletingBranch.release()
-      await releasing
-    }
-    expect(finished).toBe(true)
-    expect(await git(f.projectRoot, 'branch', '--list', workspacesBefore[0]!.branch)).toBe('')
-    const registered = await git(f.projectRoot, 'worktree', 'list', '--porcelain')
-    for (let i = 1; i < ids.length; i++) {
-      const workspace = workspacesBefore[i]!
-      expect((await f.service.get(ids[i], context))!.state).toBe('ready')
-      await access(workspace.path)
-      expect(registered).toContain(workspace.path)
-      expect(await git(f.projectRoot, 'branch', '--list', workspace.branch)).toContain(
-        workspace.branch,
-      )
-    }
-  },
-)
+it.concurrent('aborting release finishes the current checkout and leaves the remaining batch untouched', async () => {
+  const f = await fixture()
+  const ids = [await f.create(), await f.create(), await f.create()]
+  for (const id of ids) await f.service.ready(id, context)
+  const workspacesBefore = await Promise.all(ids.map((id) => f.service.get(id, context)))
+  const deletingBranch = await holdGit(f.projectRoot, 'branch')
+  const controller = new AbortController()
+  let finished = false
+  const releasing = f.service.release(ids, context, controller.signal).then((kept) => {
+    finished = true
+    return kept
+  })
+  try {
+    // Hold the first checkout's final branch deletion, after its folder has been removed.
+    await deletingBranch.started()
+    controller.abort()
+    expect(finished).toBe(false)
+    await expect(access(workspacesBefore[0]!.path)).rejects.toThrow('ENOENT')
+  } finally {
+    await deletingBranch.release()
+    await releasing
+  }
+  expect(finished).toBe(true)
+  expect(await git(f.projectRoot, 'branch', '--list', workspacesBefore[0]!.branch)).toBe('')
+  const registered = await git(f.projectRoot, 'worktree', 'list', '--porcelain')
+  for (let i = 1; i < ids.length; i++) {
+    const workspace = workspacesBefore[i]!
+    expect((await f.service.get(ids[i], context))!.state).toBe('ready')
+    await access(workspace.path)
+    expect(registered).toContain(workspace.path)
+    expect(await git(f.projectRoot, 'branch', '--list', workspace.branch)).toContain(
+      workspace.branch,
+    )
+  }
+})
 
 it.concurrent('input admitted after release marks removed waits for deletion and recreates a usable checkout', async () => {
   const f = await fixture()
@@ -2781,44 +2752,41 @@ it.concurrent('failed setup while recreating a discarded branch preserves its un
   expect(await git(f.projectRoot, 'rev-parse', workspace.branch)).toBe(tip)
 })
 
-it.skipIf(!processGroups)(
-  'resuming a child after its removal keeps the parent in the same release batch',
-  async () => {
-    const { f, parent, child, parentWorkspace, childWorkspace } = await nestedFixture()
-    const deletingChildBranch = await holdGit(f.projectRoot, 'branch')
-    const queues = f.host.resource('workspaces.land', () => new Map<string, Promise<unknown>>())
-    const queued = vi.spyOn(queues, 'set')
-    const releasing = f.service.release([parent], context)
-    const conversation = (await f.opened.harness.conversation(child, context))!
-    let request: ReturnType<typeof conversation.submit> | undefined
-    try {
-      await deletingChildBranch.started()
-      expect((await f.service.get(child, context))!.state).toBe('removed')
-      await expect(access(childWorkspace.path)).rejects.toThrow('ENOENT')
-      request = conversation.submit(
-        { type: 'input', content: 'resume child between removals' },
-        context,
-      )
-      await request
-      // The child readies its parent, then holds the parent's source queue while waiting for child removal.
-      await until(
-        () => queued.mock.calls.filter(([source]) => source === parentWorkspace.source).length >= 2,
-      )
-    } finally {
-      await deletingChildBranch.release()
-    }
-    const kept = await releasing
-    queued.mockRestore()
-    await (await request).wait(context)
-    await conversation.waitForIdle(context)
-    expect(kept).toEqual([{ id: parent, uncommitted: 0, unlanded: 0, descendant: child }])
-    for (const id of [parent, child]) {
-      const workspace = (await f.service.get(id, context))!
-      expect(workspace.state).toBe('ready')
-      await access(workspace.path)
-    }
-  },
-)
+it('resuming a child after its removal keeps the parent in the same release batch', async () => {
+  const { f, parent, child, parentWorkspace, childWorkspace } = await nestedFixture()
+  const deletingChildBranch = await holdGit(f.projectRoot, 'branch')
+  const queues = f.host.resource('workspaces.land', () => new Map<string, Promise<unknown>>())
+  const queued = vi.spyOn(queues, 'set')
+  const releasing = f.service.release([parent], context)
+  const conversation = (await f.opened.harness.conversation(child, context))!
+  let request: ReturnType<typeof conversation.submit> | undefined
+  try {
+    await deletingChildBranch.started()
+    expect((await f.service.get(child, context))!.state).toBe('removed')
+    await expect(access(childWorkspace.path)).rejects.toThrow('ENOENT')
+    request = conversation.submit(
+      { type: 'input', content: 'resume child between removals' },
+      context,
+    )
+    await request
+    // The child readies its parent, then holds the parent's source queue while waiting for child removal.
+    await until(
+      () => queued.mock.calls.filter(([source]) => source === parentWorkspace.source).length >= 2,
+    )
+  } finally {
+    await deletingChildBranch.release()
+  }
+  const kept = await releasing
+  queued.mockRestore()
+  await (await request).wait(context)
+  await conversation.waitForIdle(context)
+  expect(kept).toEqual([{ id: parent, uncommitted: 0, unlanded: 0, descendant: child }])
+  for (const id of [parent, child]) {
+    const workspace = (await f.service.get(id, context))!
+    expect(workspace.state).toBe('ready')
+    await access(workspace.path)
+  }
+})
 
 it.concurrent('refused release and recovery restore ready and report the reason without moving detached HEAD', async () => {
   const f = await fixture()

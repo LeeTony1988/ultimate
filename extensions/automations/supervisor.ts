@@ -7,6 +7,7 @@ import { defineTask, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { Agent, ConversationId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { discoverAgents } from '../../lib/agents.ts'
+import { shell } from '../../lib/shell.ts'
 import type { AgentDefinition } from '../../lib/agents.ts'
 import {
   closeOutput,
@@ -502,10 +503,11 @@ export function supervisor(
     }
     await access(runPath(sub), constants.X_OK)
     if (shared.closing) throw new Error('Automation supervisor is closing')
+    const { program, args } = shell.script(runPath(sub))
     let group: Group
     try {
       // The script waits behind the handshake until its pid file is written.
-      group = spawnGroup(runPath(sub), [], {
+      group = spawnGroup(program, args, {
         cwd: sub.scope === 'project' ? host.projectRoot : dir,
         env,
         pidFile: join(dir, 'pid'),
