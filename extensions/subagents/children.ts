@@ -73,10 +73,11 @@ export async function createChild(
     ...change,
     cwd: options.cwd ?? parent.cwd ?? null,
   })
-  Object.assign(await tx.doc(options.metadata, child.id), {
-    label: options.label,
-    title: options.title,
-  })
+  const metadata = await tx.doc(options.metadata, child.id)
+  metadata.label = options.label
+  // An identity-only task has no task line to name the child; leave it untitled rather than storing a blank title.
+  if (options.title) metadata.title = options.title
+  else delete metadata.title
   if (definition) (await tx.doc(Profile, child.id)).definition = definition.name
   if (definition?.summaries === false)
     await host.need(ConversationsApi).setAutomaticSummaries(tx, child.id, false)
