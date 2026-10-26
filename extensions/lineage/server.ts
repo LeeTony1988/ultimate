@@ -155,7 +155,11 @@ export function sourceText(
   return blocks.join('\n\n')
 }
 
-/** Ask `model` once with a system prompt and one user message; returns the text, or throws on a failed answer. */
+/**
+ * Ask `model` once with a system prompt and one user message; returns the text, or throws on a failed answer. A stray
+ * tool call with text is only a warning: the text is the answer. Without text, ask once more, telling it not to call a
+ * tool; another tool call without text fails with the stop reason.
+ */
 async function ask(
   models: Models,
   tx: (change: (tx: Tx) => Promise<void>) => Promise<void>,
@@ -168,25 +172,44 @@ async function ask(
 ) {
   const model = models.getModel(ref.provider, ref.modelId)
   if (!model) throw new Error(`Model ${ref.provider}/${ref.modelId} is unavailable`)
-  const answer = await models.completeSimple(
-    model,
-    { systemPrompt, messages: [{ role: 'user', content: input, timestamp: Date.now() }] },
-    {
-      ...(thinking && thinking !== 'off' ? { reasoning: thinking } : {}),
-      maxTokens: Math.min(ASK_TOKENS, model.maxTokens || ASK_TOKENS),
-      signal,
-    },
-  )
-  await tx(async (draft) => {
-    const usage = (await draft.doc(UsageDoc, usageConversation)).models
-    const key = `${answer.provider}/${answer.model}`
-    const total = Object.hasOwn(usage, key) ? usage[key] : undefined
-    if (!total) usage[key] = answer.usage
-    else
-      for (const counter of ['input', 'output', 'cacheRead', 'cacheWrite', 'totalTokens'] as const)
-        total[counter] += answer.usage[counter]
-  })
-  const result = contentText(answer.content).trim()
+  const complete = async (content: string) => {
+    const answer = await models.completeSimple(
+      model,
+      { systemPrompt, messages: [{ role: 'user', content, timestamp: Date.now() }] },
+      {
+        ...(thinking && thinking !== 'off' ? { reasoning: thinking } : {}),
+        maxTokens: Math.min(ASK_TOKENS, model.maxTokens || ASK_TOKENS),
+        signal,
+      },
+    )
+    await tx(async (draft) => {
+      const usage = (await draft.doc(UsageDoc, usageConversation)).models
+      const key = `${answer.provider}/${answer.model}`
+      const total = Object.hasOwn(usage, key) ? usage[key] : undefined
+      if (!total) usage[key] = answer.usage
+      else
+        for (const counter of [
+          'input',
+          'output',
+          'cacheRead',
+          'cacheWrite',
+          'totalTokens',
+        ] as const)
+          total[counter] += answer.usage[counter]
+    })
+    return answer
+  }
+  let answer = await complete(input)
+  let result = contentText(answer.content).trim()
+  // A model that ends a summary with a stray tool call still said the summary: keep it.
+  if (answer.stopReason === 'toolUse' && result) return result
+  if (answer.stopReason === 'toolUse') {
+    answer = await complete(`${input}\n\nDo not call any tool: answer with the summary text only.`)
+    result = contentText(answer.content).trim()
+    if (answer.stopReason === 'toolUse' && result) return result
+    // The retry had no text either: name why it stopped rather than retry again.
+    if (!result) throw new Error(answer.errorMessage ?? `The model stopped: ${answer.stopReason}`)
+  }
   if (answer.stopReason !== 'stop' && answer.stopReason !== 'length')
     throw new Error(answer.errorMessage ?? `The model stopped: ${answer.stopReason}`)
   if (!result) throw new Error('The model returned no answer')

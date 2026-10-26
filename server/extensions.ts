@@ -17,6 +17,7 @@ import type {
   Harness,
   JsonObject,
 } from '@earendil-works/pi-durable'
+import { normalizePath } from 'vite-plus'
 import type { ViteDevServer } from 'vite-plus'
 import type { ConversationSummary, ExtensionInfo, SystemInfo } from '../shared/protocol.ts'
 import type { PreparedHost } from './harness.ts'
@@ -115,7 +116,7 @@ export async function loadExtensions(
   const trace = host.callTrace
   const log = eventLog(runtime.harness, trace.run, trace.keep)
   const roots = discoveryRoots(host.ultimateRoot, host.projectRoot, host.userHome)
-  const directories = roots.map((root) => join(root.path, 'extensions'))
+  const directories = roots.map((root) => normalizePath(join(root.path, 'extensions')))
   const provided = new Map<ExtensionHost, Map<string, unknown>>()
   const providers = new Map<string, { owner: ExtensionHost; value: unknown }>()
   const facetHosts = new Map<string, ExtensionHost>()
@@ -413,7 +414,7 @@ export async function loadExtensions(
       await work
       for (const id of [
         '\0virtual:ultimate/web-facets',
-        join(host.ultimateRoot, 'web/src/index.css'),
+        normalizePath(join(host.ultimateRoot, 'web/src/index.css')),
       ]) {
         const module = vite.moduleGraph.getModuleById(id)
         if (module) {
@@ -456,7 +457,7 @@ export async function loadExtensions(
   const settingsFiles = [
     ...extensionSettingsFiles(host.projectRoot, host.userHome),
     join(host.userHome, '.ultimate/trust.json'),
-  ]
+  ].map(normalizePath)
   let previousSettings: string | undefined
   let diagnostics: string[] = []
   async function discover() {
@@ -636,16 +637,18 @@ export async function loadExtensions(
   // A restarted Vite starts with an empty module graph, so the next change reloads every extension.
   let graphLost = false
   // Vite owns the transitive local module graph; query-string imports do not.
-  const onChange = (file: string) => {
+  const onChange = (eventFile: string) => {
+    // Watcher paths are native; Vite's file map and module ids use forward slashes.
+    const file = normalizePath(resolve(eventFile))
     if (
       closed ||
       ![host.ultimateRoot, host.projectRoot, ...roots.slice(1).map((root) => root.path)].some(
-        (root) => resolve(file).startsWith(root + '/'),
+        (root) => file.startsWith(normalizePath(root) + '/'),
       ) ||
       file.includes('/node_modules/')
     )
       return
-    if (settingsFiles.includes(resolve(file))) {
+    if (settingsFiles.includes(file)) {
       enqueue(reloadSettings)
       return
     }
@@ -665,7 +668,8 @@ export async function loadExtensions(
           if (visited.has(module)) return
           visited.add(module)
           for (const name of records.keys())
-            if (module.file === join(records.get(name)!.path, 'server.ts')) selected.add(name)
+            if (module.file === normalizePath(join(records.get(name)!.path, 'server.ts')))
+              selected.add(name)
           for (const importer of module.importers) visit(importer)
         }
         for (const module of modules ?? []) visit(module)
@@ -674,7 +678,7 @@ export async function loadExtensions(
         const servers = new Set(selected)
         if (name) {
           selected.add(name)
-          if (directory && file === join(directory, name, 'server.ts')) servers.add(name)
+          if (directory && file === `${directory}/${name}/server.ts`) servers.add(name)
         }
         await reload(selected, servers)
       } catch (error) {
@@ -684,7 +688,8 @@ export async function loadExtensions(
       }
     })
   }
-  const onStructure = (file: string) => {
+  const onStructure = (eventFile: string) => {
+    const file = normalizePath(resolve(eventFile))
     const directory = directories.find((root) => file.startsWith(root + '/'))
     if (!directory) return onChange(file)
     if (graphLost) {

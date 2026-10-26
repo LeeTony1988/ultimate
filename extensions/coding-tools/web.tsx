@@ -24,7 +24,7 @@ import {
   useToolDuration,
 } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
-import { type BashStep, formatBashCommand } from './bash-command.tsx'
+import { type BashStep, formatBashCommand, rawBashCommand } from './bash-command.tsx'
 import { countChanges, Diff, editRows, parseDisplayDiff, parsePatch } from './diff.tsx'
 import { CancelAction } from './refs.ts'
 
@@ -115,7 +115,7 @@ function Read({ call }: { call: ToolCallView }) {
   )
 }
 
-/** Keeps a growing body scrolled to its end while `following`, as a running bash call does. */
+/** Keeps a growing body scrolled to its end while `following`, as a running shell call does. */
 function useFollow<T extends HTMLElement>(following: boolean, content: unknown) {
   const ref = useRef<T>(null)
   useEffect(() => {
@@ -297,7 +297,7 @@ function BashSummary({ steps }: { steps: BashStep[] }) {
   )
 }
 
-/** Cancel a running bash call: its command is killed and the model gets the output so far. */
+/** Cancel a running shell call: its command is killed and the model gets the output so far. */
 function CancelCall({ callId }: { callId: string }) {
   const conversationId = useConversation((conversation) => conversation.id)
   const [sent, setSent] = useState(false)
@@ -324,7 +324,12 @@ function CancelCall({ callId }: { callId: string }) {
 
 function Bash({ call }: { call: ToolCallView }) {
   const command = text(call.args.command)
-  const display = useMemo(() => formatBashCommand(command), [command])
+  const powershell = call.name === 'powershell'
+  // PowerShell commands are not Bash: show them as one raw step instead of a misleading parse.
+  const display = useMemo(
+    () => (powershell ? rawBashCommand(command) : formatBashCommand(command)),
+    [command, powershell],
+  )
   const directory = usePath(display.directory ?? '')
   const parsed = display.steps.some((step) => step.programs.length > 0)
   const plain =
@@ -363,7 +368,7 @@ function Bash({ call }: { call: ToolCallView }) {
           </>
         }
         action={running && <CancelCall callId={call.id} />}
-        name="$"
+        name={powershell ? 'PS' : '$'}
         state={call.status}
         title={
           <span title={command.split('\n')[0]}>
@@ -463,13 +468,17 @@ function ReadLine({ call }: { call: ToolCallView }) {
   )
 }
 
-/** A bash call as a step line: its programs, as its header shows them. */
+/** A shell call as a step line: its programs, as its header shows them. */
 function BashLine({ call }: { call: ToolCallView }) {
   const command = text(call.args.command)
-  const display = useMemo(() => formatBashCommand(command), [command])
+  const powershell = call.name === 'powershell'
+  const display = useMemo(
+    () => (powershell ? rawBashCommand(command) : formatBashCommand(command)),
+    [command, powershell],
+  )
   return (
     <>
-      <span className="text-foreground/80">$</span>{' '}
+      <span className="text-foreground/80">{powershell ? 'PS' : '$'}</span>{' '}
       {display.steps.some((step) => step.programs.length > 0) ? (
         <BashSummary steps={display.steps} />
       ) : (
@@ -480,11 +489,12 @@ function BashLine({ call }: { call: ToolCallView }) {
 }
 
 export default defineWebExtension({
-  tools: { read: Read, write: Write, edit: Edit, bash: Bash },
+  tools: { read: Read, write: Write, edit: Edit, bash: Bash, powershell: Bash },
   toolLines: {
     read: ReadLine,
     write: fileLine('write'),
     edit: fileLine('edit'),
     bash: BashLine,
+    powershell: BashLine,
   },
 })

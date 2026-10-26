@@ -81,7 +81,9 @@ Worker reports and submissions state divergence from the task as given (agreemen
   check warns about it.
 - **Lander:** checks and push are per project, in `<project>/.ultimate/settings.json` (read once the project is
   chosen): `"lander": { "checks": [...], "push": "origin" }` lists the project's own check commands in order (an array
-  runs as a concurrent group) and the remote to push to; push only with the owner's consent. The lander's checkout
+  runs as a concurrent group) and the remote to push to; push only with the owner's consent. Checks run in the host's
+  shell and are stopped with their whole process tree: POSIX process groups on macOS/Linux, a Job Object on Windows. The
+  lander's checkout
   runs the worktree setup below first. To let the lander's model resolve
   conflicts and failing checks instead of only diagnosing them, add a `lander` definition with `onFailure: fix` and the
   tools it needs (`.ultimate/agents/lander.md`), per project or in `~/.ultimate/agents/`. Details:
@@ -96,7 +98,9 @@ this, even unasked (setup health warns while it is missing), and propose it.
 - **Read:** the package managers and lockfiles, `.env.example` and how `.env` is made, the database config (driver,
   file path), generated files the build or tests need, and the dev-server scripts and their ports.
 - **Write** `isolates.worktree.setup` in `.ultimate/settings.json`: a list of shell commands, run in order in the new
-  worktree with `ULTIMATE_SOURCE` set to the source checkout, before the conversation's first tool call. A list that
+  worktree with `ULTIMATE_SOURCE` set to the source checkout, before the conversation's first tool call. They run through
+  the host's shell — `bash -c` on macOS and Linux, PowerShell on Windows — so write them for the machine the project runs
+  on; the POSIX recipes and `.sh` scripts below need macOS or Linux. A list that
   grows past a few lines goes into `.ultimate/worktree-setup.sh`, referenced as `["sh -e .ultimate/worktree-setup.sh"]` (`sh` ignores the shebang, so `-e` goes here).
   Every command must be safe to repeat, and each has 120 seconds.
 - **Recipes** (no Ultimate support needed):

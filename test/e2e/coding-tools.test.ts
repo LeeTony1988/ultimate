@@ -3,9 +3,11 @@ import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { expect, it, vi } from 'vitest'
 import { context } from '../../server/harness.ts'
+import { shell } from '../../lib/shell.ts'
 import { fauxServer, temp, removeTemp } from '../helpers.ts'
 
-it('stops default bash at the tripwire, kills its process, and preserves explicit timeout errors', async () => {
+it('stops the default shell at the tripwire, kills its process, and preserves explicit timeout errors', async () => {
+  const name = shell.name
   vi.stubEnv('ULTIMATE_BASH_TIMEOUT', '0.1')
   const directory = await temp('ultimate-bash-tripwire-')
   const server = await fauxServer({
@@ -19,8 +21,11 @@ it('stops default bash at the tripwire, kills its process, and preserves explici
       server.host.faux!.setResponses([
         fauxAssistantMessage(
           [
-            fauxToolCall('bash', {
-              command: `echo $$ > '${pidFile}'; sleep 10`,
+            fauxToolCall(name, {
+              command:
+                name === 'powershell'
+                  ? `$PID | Set-Content -LiteralPath '${pidFile}'; Start-Sleep -Seconds 10`
+                  : `echo $$ > '${pidFile}'; sleep 10`,
               ...(explicit ? { timeout: 0.2 } : {}),
             }),
           ],
@@ -39,7 +44,7 @@ it('stops default bash at the tripwire, kills its process, and preserves explici
         expect(JSON.stringify(result)).toContain(
           explicit
             ? 'Command timed out after 0.2 seconds'
-            : 'Tripwire: bash ran past the 0.1 s default limit',
+            : `Tripwire: ${name} ran past the 0.1 s default limit`,
         )
         expect(JSON.stringify(result).includes('Tripwire:')).toBe(!explicit)
       } finally {

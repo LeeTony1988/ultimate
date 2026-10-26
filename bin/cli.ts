@@ -38,7 +38,7 @@ function recoveryPrompt(host: CliHost) {
 - Project home: ${host.home}: \`state.sqlite\` (conversations, entries, documents, tasks), \`trace.sqlite\` (call traces), \`supervisor.log\`, \`ultimate.lock\` and \`storage.lock\`.
 - Read the databases only with \`sqlite3 -readonly\`, and never while guessing: a running server owns them. Changing or moving them needs the user's explicit yes.
 - Checks: \`pnpm check\`, \`pnpm test\`. Start the server with \`pnpm start\` (see docs/running.md).${scripts.reset ? "\n- `pnpm reset` backs up the project state and starts Ultimate fresh; offer it only when the state is beyond repair, and only with the user's yes." : ''}
-- Provider logins live per machine in ~/.pi/agent/auth.json: never read, print or copy it, nor ~/.ultimate/secrets.json.
+- Provider logins live per machine in Pi's agent directory (\`PI_CODING_AGENT_DIR\`, \`~/.pi/agent\` by default), \`auth.json\`: never read, print or copy it, nor \`~/.ultimate/secrets.json\`.
 - Be concise; report what you found, what you changed and how you verified it.
 
 ${context}`

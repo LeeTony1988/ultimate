@@ -12,7 +12,10 @@ refuses a folder with files, whose first commit is a judgement for an agent; onb
 
 Each conversation has one record in the root `ultimate.workspaces` document.
 Its path is `<home>/worktrees/<conversationId>`; its branch includes the home hash and conversation ID.
-Preparation runs `isolates.worktree.setup` with `ULTIMATE_SOURCE` set to the source checkout.
+Preparation runs `isolates.worktree.setup` with `ULTIMATE_SOURCE` set to the source checkout, each command through
+the host's shell: `bash -c` on macOS and Linux (`sh -c` where no Bash is installed), PowerShell on Windows
+(`lib/shell.ts`). A command list is written for the machine the
+project runs on; `$ULTIMATE_SOURCE` reads in either shell, since it is filled in that shell's syntax.
 Setup commands must be safe to repeat after interruption.
 What a project's setup should do (dependencies, `.env`, a copy-on-write SQLite clone, a dev port per worktree, skipping
 the database in the lander's checkout, and when to ask about Postgres) is the "Worktree setup" step of the
@@ -120,10 +123,15 @@ the root's landing note; its one-line `Subject` heads each submission in the lan
 lander's sidebar row shows the feature it lands or landed last.
 
 1. Resets its own detached checkout, `<home>/lander/<hash of source>`, to the target branch tip. `isolates.worktree.setup`
-   runs once when the checkout is created. With `lander.push`, it fetches the remote branch and merges it when it is ahead.
+   runs once when the checkout is created. A checkout materialized before `.gitattributes` required LF keeps CRLF in
+   unchanged tracked files; before setup and checks the lander re-materializes those files from its clean index, and
+   never touches a worktree with uncommitted changes. With `lander.push`, it fetches the remote branch and merges it
+   when it is ahead.
 2. Merges the submitted tip. A conflict aborts the merge and reports the conflicting paths.
 3. Runs `lander.checks` in order. Each check is stopped after 2 minutes without output or 10 minutes total, or at
-   its own `timeout` (seconds, which also caps the no-output limit), killing its whole process group. Watchdog
+   its own `timeout` (seconds, which also caps the no-output limit), stopping its whole process container. Checks run
+   through the host shell (`bash` on macOS/Linux; PowerShell on Windows) and use POSIX process groups or a Windows Job
+   Object to contain descendants. Watchdog
    failures name the limit that fired, the failed test lines seen so far (vitest's `FAIL`/`×` lines, kept even when
    they scrolled out of the tail) and the output tail, and enter the same rerun/fix flow as other check failures.
    An entry is a check or an array of checks, a group that runs concurrently; a check is a command string or
@@ -178,7 +186,8 @@ it to settle; a resume waits for the same run.
 - fix: the checkout must be clean, without a merge in progress, with new commits on top of the failed merge. Then the
   next attempt starts from that commit and runs every check again; landing reports "Fixed by lander" with the
   model's commits (`fixed`). Anything else, or a fix that still fails, is reported as not landed. A submission gets
-  one fix.
+  one fix. Environment or gate failures (missing shell/POSIX tools, a CRLF or formatting baseline unrelated to the
+  submission, provider limits) are reported exactly and never fixed in product code outside the submission.
 
 Without a `lander` definition, failures are reported without a model.
 Each attempt starts from a reset checkout, and the integrated commit is memoized after the checks, so a crash resumes

@@ -1,15 +1,5 @@
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
-import {
-  cp,
-  mkdir,
-  readdir,
-  readFile,
-  writeFile,
-  access,
-  symlink,
-  realpath,
-  unlink,
-} from 'node:fs/promises'
+import { cp, mkdir, readdir, readFile, writeFile, access, realpath, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Type } from '@earendil-works/pi-ai'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
@@ -57,7 +47,7 @@ import { Messages, MessagesApi } from '../../extensions/messages/api.ts'
 import promptExtension, { order as promptOrder } from '../../extensions/prompt/server.ts'
 import subagents from '../../extensions/subagents/server.ts'
 import { Subagents } from '../../extensions/subagents/api.ts'
-import { seedTally, temp, until } from '../helpers.ts'
+import { linkDirectory, seedTally, temp, until } from '../helpers.ts'
 
 /** The part of the conversations service a test stands in for; standing a lander turns its summaries off and marks it standing. */
 const conversations = (service: Partial<ConversationsService>) =>
@@ -391,6 +381,7 @@ it.concurrent('creates through the action; setup receives ULTIMATE_SOURCE and th
   expect(await git(pending.path, 'branch', '--show-current')).toBe(pending.branch)
   expect(await git(f.projectRoot, 'status', '--porcelain')).toBe('')
 })
+// POSIX /bin/sh + /proc + FIFO Git hook; other preparation and prompt ordering coverage remains portable.
 it.concurrent('renders workspace preparation before project context in the first composed provider request', async () => {
   const paths = await repository()
   const marker = 'CHECKOUT_RULE_ULT_123: preserve the release manifest.'
@@ -436,7 +427,13 @@ it.concurrent('setup closes stdin so commands waiting for EOF finish', async () 
     paths.projectRoot,
     paths.projectRoot,
     {
-      isolates: { worktree: { setup: ['cat >/dev/null; echo eof > eof.txt'] } },
+      isolates: {
+        worktree: {
+          setup: [
+            `node -e "process.stdin.resume(); process.stdin.on('end', () => require('node:fs').writeFileSync('eof.txt', 'eof\\n'))"`,
+          ],
+        },
+      },
     },
     AbortSignal.timeout(2000),
   )
@@ -459,7 +456,9 @@ it.concurrent('failed setup keeps its output tail, removes its empty branch, and
 })
 it.concurrent('retries a failed setup on the next tool call, so a fixed environment takes effect without a new conversation', async () => {
   // The setup fails until the environment is fixed, as a unit PATH without pnpm did.
-  const f = await fixture(['test -f "$ULTIMATE_SOURCE/fixed" || { echo NOT_FIXED >&2; exit 1; }'])
+  const f = await fixture([
+    `node -e "if (!require('node:fs').existsSync(process.env.ULTIMATE_SOURCE + '/fixed')) { console.error('NOT_FIXED'); process.exit(1) }"`,
+  ])
   const id = await f.create()
   await f.service.ready(id, context)
   expect((await f.service.get(id, context))!.state).toBe('failed')
@@ -573,7 +572,7 @@ it.concurrent('lands fast-forward, lists commits and paths, and is idempotent', 
   expect((await f.service.get(id, context))!.landed).toBe(tip)
   expect(result.needsRestart).toBeUndefined()
   const alias = join(f.directory, 'running-clone')
-  await symlink(f.projectRoot, alias)
+  await linkDirectory(f.projectRoot, alias)
   f.host.ultimateRoot = alias
   await mkdir(join(workspace.path, 'server'))
   await commit(workspace.path, 'server/change.ts')
@@ -1544,6 +1543,41 @@ it.concurrent('lands two submissions in order onto a moved target and reports bo
       'Only a top-level main conversation',
     )
 })
+it.concurrent('re-materializes a long-lived CRLF lander checkout before its checks', async () => {
+  const directory = await temp('ultimate-workspaces-crlf-')
+  const projectRoot = join(directory, 'project')
+  await mkdir(projectRoot)
+  await git(projectRoot, 'init', '-b', 'main')
+  await git(projectRoot, 'config', 'user.email', 'test@example.com')
+  await git(projectRoot, 'config', 'user.name', 'Test')
+  // A checkout made before `.gitattributes`: Git stores LF in the index but writes CRLF.
+  await git(projectRoot, 'config', 'core.autocrlf', 'true')
+  await writeFile(join(projectRoot, 'base.txt'), 'base\r\n')
+  await git(projectRoot, 'add', '.')
+  await git(projectRoot, 'commit', '-m', 'base')
+  const f = await fixture([], { directory, projectRoot, home: join(directory, 'state') })
+  const cwd = (await landerLog(f)).cwd!
+  expect(await readFile(join(cwd, 'base.txt'), 'utf8')).toBe('base\r\n')
+  f.host.projectSettings = async () => ({
+    lander: {
+      checks: [
+        `node -e "process.exit(require('node:fs').readFileSync('base.txt','utf8').includes(String.fromCharCode(13)) ? 1 : 0)"`,
+      ],
+    },
+  })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const workspace = (await f.service.get(id, context))!
+  // The submission introduces `.gitattributes`; the lander's unchanged base.txt is still CRLF after the merge.
+  await writeFile(join(workspace.path, '.gitattributes'), '* text=auto eol=lf\n')
+  await commit(workspace.path)
+  await f.service.submit(id, 'None', context)
+  const [report] = await submitted(f, id)
+  expect(report).toContain('landed as')
+  // Only the lander's own clean checkout is re-materialized; the user's checkout stays as it is.
+  expect(await readFile(join(projectRoot, 'base.txt'), 'utf8')).toBe('base\r\n')
+})
+// FIFO barriers specifically synchronize POSIX lander checks; no Windows runner is assumed here.
 it.concurrent('runs a check group concurrently and records each summary', async () => {
   const f = await fixture()
   /** Both checks must start before either gate is released; serial execution cannot pass. */
@@ -2012,6 +2046,37 @@ it.concurrent('fix: a fix that still fails the check is not landed and leaves th
   expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
   expect(await readFile(join(f.projectRoot, 'base.txt'), 'utf8')).toBe('target')
 })
+it.concurrent('fix: an environment check failure is reported and changes no product code', async () => {
+  const f = await lander({
+    checks: [`node -e "console.error('CHECK_ENV: spawn /bin/sh ENOENT'); process.exit(1)"`],
+  })
+  await landerDefinition(f, 'fix')
+  let prompt = ''
+  f.answerLander((text) => {
+    prompt = text
+    return fauxAssistantMessage(
+      'CANNOT FIX: the check needs /bin/sh, which this host lacks; the submission is unchanged.',
+    )
+  })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const workspace = (await f.service.get(id, context))!
+  const head = await git(f.projectRoot, 'rev-parse', 'HEAD')
+  await commit(workspace.path)
+  await f.service.submit(id, 'None', context)
+  const [report] = await submitted(f, id)
+  expect(prompt).toContain('Mode: fix')
+  expect(prompt).toContain('An environment or gate failure is not fixed in product code')
+  expect(prompt).toContain('missing shell or POSIX tool')
+  expect(prompt).toContain('CRLF or formatting baseline unrelated to the submission')
+  expect(prompt).toContain('provider limit')
+  expect(report).toContain('was not landed: check failed twice')
+  expect(report).toContain("The lander's fix added no commits.")
+  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
+  expect(await readFile(join(f.projectRoot, 'base.txt'), 'utf8')).toBe('base')
+  const cwd = (await landerLog(f)).cwd!
+  expect(await git(cwd, 'status', '--porcelain')).toBe('')
+})
 it.concurrent('starts an isolated branch of a tally whose first request sees its ready checkout', async () => {
   const f = await fixture()
   // Its prompt task delivers the first input.
@@ -2049,10 +2114,11 @@ it.concurrent('answers the user in the lander conversation with its definition, 
   const system = JSON.stringify(request.messages.filter((message) => message.role === 'system'))
   expect(system).toContain('Land it.')
   expect(system).toContain(`${submission} landed`)
-  expect((await conversation.agent(context)).tools.map((tool) => tool.name).toSorted()).toEqual([
-    'bash',
-    'read',
-  ])
+  // This fixture registers pi-durable CodingTools, whose shell tool is named bash everywhere. On Windows the
+  // lander's portable bash name becomes powershell, which this fixture does not register, so only read remains.
+  expect((await conversation.agent(context)).tools.map((tool) => tool.name).toSorted()).toEqual(
+    process.platform === 'win32' ? ['read'] : ['bash', 'read'],
+  )
   // Main conversations get no lander state.
   await f.call(id, 'workspace', { action: 'status' })
   const main = await (await f.opened.harness.conversation(id, context))!.context(context)
@@ -2061,7 +2127,7 @@ it.concurrent('answers the user in the lander conversation with its definition, 
 it.concurrent('gives the standing lander a checkout at the target tip before any submission', async () => {
   const f = await lander({})
   const { id, cwd } = await landerLog(f)
-  expect(cwd).toMatch(/\/lander\/[0-9a-f]{12}$/)
+  expect(cwd).toMatch(/[\\/]lander[\\/][0-9a-f]{12}$/)
   const result = JSON.stringify(await f.call(id, 'bash', { command: 'git log -1 --format=%H' }))
   expect(result).toContain(await git(f.projectRoot, 'rev-parse', 'HEAD'))
   // Opening again keeps the checkout and updates an existing lander's old title.
@@ -2814,73 +2880,84 @@ it.concurrent('refused release and recovery restore ready and report the reason 
   expect(await git(workspace.path, 'rev-parse', 'HEAD')).toBe(workspace.base)
 })
 
-it.concurrent('a branch deletion failure after removing the worktree stays removed and the next request recreates it', async () => {
-  const f = await fixture()
-  const id = await f.create()
-  await f.service.ready(id, context)
-  const workspace = (await f.service.get(id, context))!
-  const branch = await holdGit(f.projectRoot, 'branch', true)
-  const releasing = f.service.release([id], context)
-  try {
-    await branch.started()
-    await expect(access(workspace.path)).rejects.toThrow('ENOENT')
-  } finally {
-    await branch.release()
-  }
-  expect(await releasing).toEqual([{ id, uncommitted: 0, unlanded: 0, reason: expect.any(String) }])
-  expect((await f.service.get(id, context))!).toMatchObject({
-    state: 'removed',
-    error: expect.any(String),
-  })
-  expect(await git(f.projectRoot, 'worktree', 'list', '--porcelain')).not.toContain(workspace.path)
-  const result = await f.call(id, 'bash', { command: 'pwd' })
-  expect(JSON.stringify(result)).toContain(workspace.path)
-  expect((await f.service.get(id, context))!.state).toBe('ready')
-  await access(workspace.path)
-})
+it.skipIf(process.platform === 'win32').concurrent(
+  'a branch deletion failure after removing the worktree stays removed and the next request recreates it',
+  async () => {
+    const f = await fixture()
+    const id = await f.create()
+    await f.service.ready(id, context)
+    const workspace = (await f.service.get(id, context))!
+    const branch = await holdGit(f.projectRoot, 'branch', true)
+    const releasing = f.service.release([id], context)
+    try {
+      await branch.started()
+      await expect(access(workspace.path)).rejects.toThrow('ENOENT')
+    } finally {
+      await branch.release()
+    }
+    expect(await releasing).toEqual([
+      { id, uncommitted: 0, unlanded: 0, reason: expect.any(String) },
+    ])
+    expect((await f.service.get(id, context))!).toMatchObject({
+      state: 'removed',
+      error: expect.any(String),
+    })
+    expect(await git(f.projectRoot, 'worktree', 'list', '--porcelain')).not.toContain(
+      workspace.path,
+    )
+    const result = await f.call(id, 'bash', { command: 'pwd' })
+    expect(JSON.stringify(result)).toContain(workspace.path)
+    expect((await f.service.get(id, context))!.state).toBe('ready')
+    await access(workspace.path)
+  },
+)
 
-it.concurrent('a persistent branch deletion failure blocks tools with its reason while the model can explain', async () => {
-  const f = await fixture()
-  const id = await f.create()
-  await f.service.ready(id, context)
-  const workspace = (await f.service.get(id, context))!
-  await writeFile(
-    join(f.projectRoot, '.git/hooks/reference-transaction'),
-    `#!/bin/sh
+// This fixture intercepts the caller via /proc/$PPID/cmdline inside a POSIX Git hook.
+it.skipIf(process.platform === 'win32').concurrent(
+  'a persistent branch deletion failure blocks tools with its reason while the model can explain',
+  async () => {
+    const f = await fixture()
+    const id = await f.create()
+    await f.service.ready(id, context)
+    const workspace = (await f.service.get(id, context))!
+    await writeFile(
+      join(f.projectRoot, '.git/hooks/reference-transaction'),
+      `#!/bin/sh
 cat >/dev/null
 [ "$1" = prepared ] || exit 0
 case "$(tr '\\0' ' ' < /proc/$PPID/cmdline)" in "git branch -D "*) exit 1 ;; esac
 `,
-    { mode: 0o755 },
-  )
-  const kept = await f.service.release([id], context)
-  expect(kept).toEqual([{ id, uncommitted: 0, unlanded: 0, reason: expect.any(String) }])
-  const result = await f.call(id, 'write_commit')
-  expect(result?.role === 'toolResult' && result.isError).toBe(true)
-  expect(
-    result?.role === 'toolResult' &&
-      result.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n'),
-  ).toContain(kept[0].reason!)
-  expect(f.writes).toBe(0)
-  const conversation = (await f.opened.harness.conversation(id, context))!
-  const view = await conversation.viewState(context)
-  try {
-    const reply = view.value.entries
-      .flatMap((entry) => entry.model ?? [])
-      .findLast((message) => message.role === 'assistant')
+      { mode: 0o755 },
+    )
+    const kept = await f.service.release([id], context)
+    expect(kept).toEqual([{ id, uncommitted: 0, unlanded: 0, reason: expect.any(String) }])
+    const result = await f.call(id, 'write_commit')
+    expect(result?.role === 'toolResult' && result.isError).toBe(true)
     expect(
-      reply?.role === 'assistant' &&
-        reply.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n'),
+      result?.role === 'toolResult' &&
+        result.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n'),
     ).toContain(kept[0].reason!)
-  } finally {
-    view.dispose()
-  }
-  expect((await f.service.get(id, context))!).toMatchObject({
-    state: 'removed',
-    error: kept[0].reason,
-  })
-  await expect(access(workspace.path)).rejects.toThrow('ENOENT')
-})
+    expect(f.writes).toBe(0)
+    const conversation = (await f.opened.harness.conversation(id, context))!
+    const view = await conversation.viewState(context)
+    try {
+      const reply = view.value.entries
+        .flatMap((entry) => entry.model ?? [])
+        .findLast((message) => message.role === 'assistant')
+      expect(
+        reply?.role === 'assistant' &&
+          reply.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n'),
+      ).toContain(kept[0].reason!)
+    } finally {
+      view.dispose()
+    }
+    expect((await f.service.get(id, context))!).toMatchObject({
+      state: 'removed',
+      error: kept[0].reason,
+    })
+    await expect(access(workspace.path)).rejects.toThrow('ENOENT')
+  },
+)
 
 it.concurrent('recovery does not mark an unregistered folder ready or run tools there', async () => {
   const f = await fixture()

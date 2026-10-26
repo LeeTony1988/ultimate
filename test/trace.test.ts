@@ -1,4 +1,4 @@
-import { mkdir, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { afterAll, expect, it, vi } from 'vitest'
@@ -10,7 +10,7 @@ import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { classify, guardToolArguments } from '../server/tool-arguments.ts'
 import { callTrace, summary, traceContext } from '../server/trace.ts'
 import type { Call, CallTree } from '../server/trace.ts'
-import { fauxServer, linkDependencies, temp, until } from './helpers.ts'
+import { fauxServer, linkDependencies, linkDirectory, moduleURL, temp, until } from './helpers.ts'
 
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
 afterAll(async () => {
@@ -20,8 +20,8 @@ afterAll(async () => {
 const tokens = `
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
-import { defineApi } from '${resolve('shared/extension-api.ts')}'
-import { defineEvent } from '${resolve('shared/events.ts')}'
+import { defineApi } from '${moduleURL('shared/extension-api.ts')}'
+import { defineEvent } from '${moduleURL('shared/events.ts')}'
 const Beta = defineApi()('beta')
 const Delta = defineApi()('delta')
 const Worked = defineEvent('beta.worked')`
@@ -94,7 +94,7 @@ async function start() {
     "export default { root: 'web', optimizeDeps: { noDiscovery: true } }",
   )
   await mkdir(join(root, 'extensions'))
-  await symlink(resolve('extensions/secrets'), join(root, 'extensions/secrets'))
+  await linkDirectory(resolve('extensions/secrets'), join(root, 'extensions/secrets'))
   for (const [name, source] of Object.entries(extensions)) {
     await mkdir(join(root, 'extensions', name))
     await writeFile(join(root, 'extensions', name, 'server.ts'), source)

@@ -26,16 +26,19 @@ import { sidebarWidthBeyondPhone } from './primitives.tsx'
  * name and that conversation, and a server with a home outside `~/.ultimate/projects`, as test previews have, says
  * it is a preview.
  */
+/** Windows paths use `\`; the patterns and comparisons here use `/`. */
+const slashed = (path: string) => path.replaceAll('\\', '/')
+
 export function projectTitle(system: SystemInfo | undefined) {
   if (!system) return undefined
   const { home } = system.machine
   const worktree = /\/\.ultimate\/projects\/(.+)-[\da-f]{8}\/worktrees\/(\d+)$/.exec(
-    system.project.root,
+    slashed(system.project.root),
   )
   const project = worktree
     ? `${worktree[1]} #${worktree[2]}`
     : shortenPath(system.project.root, { home })
-  return system.persistence.path.startsWith(`${home}/.ultimate/projects/`)
+  return slashed(system.persistence.path).startsWith(`${slashed(home)}/.ultimate/projects/`)
     ? project
     : `preview · ${project}`
 }
@@ -47,7 +50,7 @@ export function projectTitle(system: SystemInfo | undefined) {
 export function projectName(system: SystemInfo | undefined) {
   if (!system) return ''
   const worktree = /\/\.ultimate\/projects\/(.+)-[\da-f]{8}\/worktrees\/(\d+)$/.exec(
-    system.project.root,
+    slashed(system.project.root),
   )
   const name = worktree?.[1] ?? system.project.name
   const own = name.toLowerCase() === 'ultimate'
@@ -66,7 +69,10 @@ export const ProjectChip = forwardRef<
   const system = useSystem()
   const name = projectName(system)
   const preview =
-    system && !system.persistence.path.startsWith(`${system.machine.home}/.ultimate/projects/`)
+    system &&
+    !slashed(system.persistence.path).startsWith(
+      `${slashed(system.machine.home)}/.ultimate/projects/`,
+    )
   if (!system || (!name && !preview && !menu)) return null
   const body = (
     <>

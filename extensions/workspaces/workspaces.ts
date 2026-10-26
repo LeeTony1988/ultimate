@@ -15,6 +15,7 @@ import { exec } from '../../lib/exec.ts'
 import { git, isolatable } from '../../lib/git.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ConversationsApi } from '../conversations/api.ts'
+import { samePath, worktreePath } from './paths.ts'
 import { WorkspacesDoc } from './refs.ts'
 import { setup } from './setup.ts'
 import { createLander, landerAgent, landerCheckout, landerPath, log } from './lander.ts'
@@ -149,7 +150,10 @@ async function held(
 async function listedBySource(workspace: WorkspaceIndex['items'][string]) {
   return (await git(workspace.source, 'worktree', 'list', '--porcelain'))
     .split('\n\n')
-    .some((entry) => entry.split('\n').includes(`worktree ${workspace.path}`))
+    .some((entry) => {
+      const entryPath = worktreePath(entry)
+      return entryPath !== undefined && samePath(entryPath, workspace.path)
+    })
 }
 async function registeredCheckout(workspace: WorkspaceIndex['items'][string]) {
   if (!(await onDisk(workspace.path))) return false
@@ -157,9 +161,10 @@ async function registeredCheckout(workspace: WorkspaceIndex['items'][string]) {
     // A folder Git cannot inspect is not a usable registered checkout.
     () => '',
   )
-  return listed
-    .split('\n\n')
-    .some((entry) => entry.split('\n').includes(`worktree ${workspace.path}`))
+  return listed.split('\n\n').some((entry) => {
+    const entryPath = worktreePath(entry)
+    return entryPath !== undefined && samePath(entryPath, workspace.path)
+  })
 }
 export function workspaces(host: Host) {
   const queues = host.resource('workspaces.land', () => new Map<string, Promise<unknown>>())
@@ -324,7 +329,10 @@ export function workspaces(host: Host) {
           await serial(workspace.source, async () => {
             const registered = (await git(workspace.source, 'worktree', 'list', '--porcelain'))
               .split('\n\n')
-              .find((entry) => entry.split('\n').includes(`worktree ${workspace.path}`))
+              .find((entry) => {
+                const entryPath = worktreePath(entry)
+                return entryPath !== undefined && samePath(entryPath, workspace.path)
+              })
             const resumed = await runtime.memo<boolean>('started', context)
             if (registered) {
               if (
@@ -384,11 +392,14 @@ export function workspaces(host: Host) {
             // Remove only the registered checkout created for this record, never an existing path.
             const registered = (await git(workspace.source, 'worktree', 'list', '--porcelain'))
               .split('\n\n')
-              .find(
-                (entry) =>
-                  entry.split('\n').includes(`worktree ${workspace.path}`) &&
-                  entry.split('\n').includes(`branch refs/heads/${workspace.branch}`),
-              )
+              .find((entry) => {
+                const entryPath = worktreePath(entry)
+                return (
+                  entryPath !== undefined &&
+                  samePath(entryPath, workspace.path) &&
+                  entry.split('\n').includes(`branch refs/heads/${workspace.branch}`)
+                )
+              })
             if (created) {
               if (registered)
                 await git(workspace.source, 'worktree', 'remove', workspace.path).catch(

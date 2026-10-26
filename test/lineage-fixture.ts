@@ -2,7 +2,7 @@ import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Message } from '@earendil-works/pi-ai'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
-import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
+import type { FauxResponseFactory, FauxResponseStep } from '@earendil-works/pi-ai/providers/faux'
 import { estimateMessageTokens } from '@earendil-works/pi-ai/utils/estimate'
 import { defineTask, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
@@ -46,7 +46,8 @@ export function section(server: Server, id: ConversationId) {
 
 /**
  * A faux server whose provider answers lineage summaries with LINEAGE SUMMARY and everything else with the last user
- * text echoed; `requests` keeps every conversation request's messages.
+ * text echoed; `requests` keeps every conversation request's messages. A queued `condenseAnswers` answer handles the
+ * next compaction summary request instead of the default.
  */
 export async function fixture(reopen?: string) {
   const home = reopen ?? (await temp('ultimate-lineage-'))
@@ -54,14 +55,18 @@ export async function fixture(reopen?: string) {
   servers.push(server)
   const requests: Message[][] = []
   const condensed: string[] = []
+  const condenseAnswers: FauxResponseStep[] = []
   /** While `condense` is set, compaction summaries wait for it. */
   const gate: { condense?: Promise<void> } = {}
-  const route: FauxResponseFactory = async (transcript) => {
+  const route: FauxResponseFactory = async (transcript, options, state, model) => {
     server.host.faux!.appendResponses([route])
     const [system, first] = transcript.messages
     if (textOf(system.content).startsWith('You condense')) {
       condensed.push(textOf(first.content))
       await gate.condense
+      const answer = condenseAnswers.shift()
+      if (answer !== undefined)
+        return typeof answer === 'function' ? answer(transcript, options, state, model) : answer
       return fauxAssistantMessage(`LINEAGE SUMMARY of ${textOf(first.content).slice(0, 40)}`)
     }
     requests.push([...transcript.messages])
@@ -76,7 +81,7 @@ export async function fixture(reopen?: string) {
     return fauxAssistantMessage(`echo ${textOf(last?.content)}`)
   }
   server.host.faux!.setResponses([route])
-  return { server, home, requests, condensed, gate }
+  return { server, home, requests, condensed, condenseAnswers, gate }
 }
 
 export const branchFrom = async (server: Server, args: Record<string, unknown>) => {

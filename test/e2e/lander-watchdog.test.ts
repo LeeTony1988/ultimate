@@ -5,6 +5,7 @@ import { runLanderCheck } from '../../extensions/workspaces/lander.ts'
 import { context } from '../../server/harness.ts'
 import { removeTemp, temp } from '../helpers.ts'
 
+// This integration test specifically exercises POSIX process-group cleanup through /bin/sh and /proc.
 it('kills a silent process group on stall and a printing process on the total cap', async () => {
   const directory = await temp('ultimate-lander-watchdog-')
   try {

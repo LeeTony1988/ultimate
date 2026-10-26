@@ -3,9 +3,8 @@
  * address the user set in `remotes` elsewhere, else the tailnet address its machine registered with the cloud.
  * Codemode reads through it and Messages’ Ultimate-to-Ultimate messages travel it. Nothing falls back to a copy.
  */
-import { hostname } from 'node:os'
 import type { JsonValue } from '@earendil-works/chord'
-import { cloudConfig, fetchRegister } from './cloud.ts'
+import { cloudConfig, fetchRegister, machineName } from './cloud.ts'
 import type { Register } from './cloud.ts'
 import { projectIdentity } from './project-identity.ts'
 import { readSettings, userSettingsPath } from './settings.ts'
@@ -88,11 +87,6 @@ async function remotes(host: Pick<ExtensionHost, 'userHome'>) {
         typeof url === 'string' ? [{ machine, name, url }] : [],
       ),
   )
-}
-
-/** This machine's name: the cloud's `machine` setting, else the host name. */
-async function machineName(host: Pick<ExtensionHost, 'userHome' | 'notice'>) {
-  return (await cloudConfig(host))?.machine ?? hostname()
 }
 
 /** This instance as another one names it: its project's name and this machine's name. */

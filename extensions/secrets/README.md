@@ -1,8 +1,8 @@
 Manage user-global secrets through metadata-only server actions, shared by every Ultimate project.
 
-Values live in `~/.ultimate/secrets.json`, plaintext at 0600 in a 0700 directory, like Pi's `auth.json`. This is not a vault: the agent's shell runs as the same user and can access the file. Prompt guidance prevents accidental reading, not malicious access. Never include values in conversations, notices, documents, or logs.
+Values live in `~/.ultimate/secrets.json`: plaintext at 0600 in a 0700 directory on POSIX, like Pi's `auth.json`; on Windows the file inherits the user-profile ACL (`%USERPROFILE%\.ultimate`) and has no POSIX mode bits. This is not a vault: the agent's shell runs as the same user and can access the file. Prompt guidance prevents accidental reading, not malicious access. Never include values in conversations, notices, documents, or logs.
 
-The Secrets panel uses `list`, `set { name, value }`, and `delete { name }`. Rotation means setting the same name again; deletion removes it. Results contain metadata only. Writes use atomic rename under a pid-owned lock shared across processes. Unsafe file permissions are refused; fix them with `chmod 600 ~/.ultimate/secrets.json`.
+The Secrets panel uses `list`, `set { name, value }`, and `delete { name }`. Rotation means setting the same name again; deletion removes it. Results contain metadata only. Writes use atomic rename under a pid-owned lock shared across processes. Unsafe POSIX permissions are refused; fix them with `chmod 600 ~/.ultimate/secrets.json`.
 
 Other server facets import `readSecret(userHome, name)` from `store.ts`. A user-only action of another extension that takes a secret from its own card writes it through `SecretsApi.set` (`api.ts`), as sync's Join card does; never from an agent tool. Declare required names through the server facet's `secrets` export. The store is independent of project state and `ULTIMATE_HOME`.
 

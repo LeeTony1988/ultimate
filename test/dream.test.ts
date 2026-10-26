@@ -136,6 +136,37 @@ it('follows approved proposals to landing and ends the session when all are sett
   expect(await startSession(tx, 7)).toBe(2)
 })
 
+it('records a branch landed outside the lander with its sha and settles the session', async () => {
+  const tx = fakeTx()
+  await startSession(tx, 1)
+  await fileJournal(tx, journal, 2)
+  await expect(
+    decide(tx, { session: 1, proposal: 'fast-default', status: 'landed', sha: 'abcdef1' }, 3),
+  ).rejects.toThrow('is not approved with a branch')
+  await decide(tx, { session: 1, proposal: 'fast-default', status: 'approved', branch: 77 }, 3)
+  await expect(
+    decide(tx, { session: 1, proposal: 'fast-default', status: 'landed' }, 4),
+  ).rejects.toThrow('sha must be 7 to 40 hex characters')
+  await expect(
+    decide(tx, { session: 1, proposal: 'fast-default', status: 'landed', sha: 'abc' }, 4),
+  ).rejects.toThrow('sha must be 7 to 40 hex characters')
+  await decide(tx, { session: 1, proposal: 'drop-stale', status: 'applied' }, 4)
+  expect((await session(tx)).endedAt).toBeUndefined()
+  const { proposal } = await decide(
+    tx,
+    { session: 1, proposal: 'fast-default', status: 'landed', sha: 'abcdef1234567890' },
+    5,
+  )
+  expect(proposal).toMatchObject({ status: 'landed', sha: 'abcdef1234567890', branch: 77 })
+  const found = await session(tx)
+  expect(found.proposals[0]).toMatchObject({
+    status: 'landed',
+    sha: 'abcdef1234567890',
+    branch: 77,
+  })
+  expect(found.endedAt).toBe(5)
+})
+
 it('returns a journal with no proposals again after its session ended', async () => {
   const tx = fakeTx()
   await startSession(tx, 1)

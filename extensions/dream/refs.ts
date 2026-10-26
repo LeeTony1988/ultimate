@@ -142,15 +142,17 @@ export const ChaptersAction = actionRef<
 /** `{ chapter }`: restart into an existing, idle chapter. User-only; a returned error means restart failed. */
 export const SwitchAction = actionRef<{ chapter: string }, never>('dream', 'switch')
 /**
- * `{ session, proposal, status, branch?, reason? }`: @ultimate records the user's decision on one proposal, or its own
- * with `reason` when it decides in the user's place (a hands-off goal).
+ * `{ session, proposal, status, branch?, sha?, reason? }`: @ultimate records the user's decision on one proposal, or
+ * its own with `reason` when it decides in the user's place (a hands-off goal). `landed` records a branch that landed
+ * outside the lander and needs its `sha`; `branch` stays with the proposal.
  */
 export const DecideAction = actionRef<
   {
     session: number
     proposal: string
-    status: 'approved' | 'rejected' | 'applied'
+    status: 'approved' | 'rejected' | 'applied' | 'landed'
     branch?: number
+    sha?: string
     reason?: string
   },
   Proposal

@@ -3,12 +3,14 @@ import { realpath } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { normalizePath } from 'vite-plus'
 import type { ConversationId, ToolExecutionApi } from '@earendil-works/pi-durable'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import type { createBashTool } from '@earendil-works/pi-durable/tools'
 import type { EventToken } from '../../shared/events.ts'
 import codingTools from '../../extensions/coding-tools/server.ts'
 import { Committed } from '../../extensions/coding-tools/refs.ts'
+import { shell } from '../../lib/shell.ts'
 import { context } from '../../server/harness.ts'
 import { removeTemp, temp } from '../helpers.ts'
 
@@ -20,7 +22,7 @@ let emitted: Event[]
 const git = async (...args: string[]) => (await run('git', args, { cwd })).stdout.trim()
 
 beforeEach(async () => {
-  cwd = await realpath(await temp('ultimate-commit-events-'))
+  cwd = normalizePath(await realpath(await temp('ultimate-commit-events-')))
   emitted = []
   await git('init', '-b', 'main')
   await git('config', 'user.name', 'Event Test')
@@ -31,7 +33,7 @@ afterEach(async () => {
   await removeTemp(cwd)
 })
 
-/** The extension's bash tool, run as one call of conversation 7 in `dir`. */
+/** The extension's shell tool, run as one call of conversation 7 in `dir`. */
 async function bash(command: string, dir = cwd) {
   const extension = codingTools({
     emit: async (_tx, event, data) => {
@@ -40,7 +42,7 @@ async function bash(command: string, dir = cwd) {
       return undefined as never
     },
   })
-  const tool = extension.tools!.find((candidate) => candidate.name === 'bash') as ReturnType<
+  const tool = extension.tools!.find((candidate) => candidate.name === shell.name) as ReturnType<
     typeof createBashTool
   >
   let output = ''
@@ -102,7 +104,7 @@ it('records an amend with the commit it replaced', async () => {
 
 it('records a commit in a linked worktree under its repository and a detached HEAD without branch', async () => {
   await git('commit', '--allow-empty', '-m', 'base')
-  const tree = join(cwd, 'tree')
+  const tree = normalizePath(join(cwd, 'tree'))
   await git('worktree', 'add', '--detach', tree)
   await bash('git commit -q --allow-empty -m detached', tree)
   expect(emitted).toEqual([
@@ -129,7 +131,7 @@ it('records its own merge commits but not fast-forwards', async () => {
 })
 
 it('keeps concurrent calls of the same task apart', async () => {
-  const other = await realpath(await temp('ultimate-commit-events-other-'))
+  const other = normalizePath(await realpath(await temp('ultimate-commit-events-other-')))
   try {
     await run('git', ['init', '-q', '-b', 'main'], { cwd: other })
     const commit = 'git -c user.name=t -c user.email=t@t commit -q --allow-empty -m'
@@ -149,13 +151,15 @@ it('keeps concurrent calls of the same task apart', async () => {
 it('records the commits an apply-backend rebase rewrote, however old their dates', async () => {
   await git('commit', '--allow-empty', '-m', 'base')
   await git('checkout', '-b', 'side')
-  await run('bash', ['-c', 'echo s > s && git add s && git commit -qm side'], {
+  const side = shell.argv('echo s > s && git add s && git commit -qm side')
+  await run(side.program, side.args, {
     cwd,
     env: { ...process.env, GIT_AUTHOR_DATE: '2001-01-01T00:00:00Z' },
   })
   const old = await git('rev-parse', 'HEAD')
   await git('checkout', 'main')
-  await run('bash', ['-c', 'echo m > m && git add m && git commit -qm main'], { cwd })
+  const main = shell.argv('echo m > m && git add m && git commit -qm main')
+  await run(main.program, main.args, { cwd })
   await git('checkout', 'side')
   await bash('git rebase -q --apply --committer-date-is-author-date main')
   expect(emitted).toEqual([
@@ -170,11 +174,14 @@ it('records the commits an apply-backend rebase rewrote, however old their dates
 it('records each commit of a rebase once, in the call that made it, without a branch', async () => {
   await git('commit', '--allow-empty', '-m', 'base')
   await git('checkout', '-b', 'side')
-  await run('bash', ['-c', 'echo a > a && git add a && git commit -qm one'], { cwd })
-  await run('bash', ['-c', 'echo side > f && git add f && git commit -qm two'], { cwd })
+  const one = shell.argv('echo a > a && git add a && git commit -qm one')
+  await run(one.program, one.args, { cwd })
+  const sideFile = shell.argv('echo side > f && git add f && git commit -qm two')
+  await run(sideFile.program, sideFile.args, { cwd })
   const two = await git('rev-parse', 'HEAD')
   await git('checkout', 'main')
-  await run('bash', ['-c', 'echo main > f && git add f && git commit -qm main'], { cwd })
+  const mainFile = shell.argv('echo main > f && git add f && git commit -qm main')
+  await run(mainFile.program, mainFile.args, { cwd })
   await git('checkout', 'side')
   // `one` applies, `two` conflicts: the call stops mid-rebase.
   await bash('git rebase -q main').catch(() => undefined)
@@ -188,7 +195,7 @@ it('records each commit of a rebase once, in the call that made it, without a br
       subject: 'one',
     },
   ])
-  await bash('echo both > f && git add f && GIT_EDITOR=true git rebase --continue')
+  await bash('echo both > f && git add f && git -c core.editor=true rebase --continue')
   expect(emitted.slice(1)).toEqual([
     {
       conversation: 7,
@@ -204,7 +211,8 @@ it('records each commit of a rebase once, in the call that made it, without a br
 it('keeps a commit when a squash merge in the same call leaves HEAD on it', async () => {
   await git('commit', '--allow-empty', '-m', 'base')
   await git('checkout', '-b', 'side')
-  await run('bash', ['-c', 'echo s > s && git add s && git commit -qm side'], { cwd })
+  const side = shell.argv('echo s > s && git add s && git commit -qm side')
+  await run(side.program, side.args, { cwd })
   await git('checkout', 'main')
   await bash('git commit -q --allow-empty -m mine && git merge -q --squash side')
   expect(emitted).toEqual([expect.objectContaining({ subject: 'mine' })])
@@ -240,8 +248,9 @@ it('records nothing when bash made no commit', async () => {
 })
 
 it('never fails a commit when the log cannot be written', async () => {
-  // A log path inside a missing directory makes every hook's append fail.
-  vi.stubEnv('TMPDIR', join(cwd, 'missing'))
+  // A log path inside a missing directory makes every hook's append fail; Node reads TMPDIR on
+  // POSIX and TEMP on Windows.
+  for (const name of ['TMPDIR', 'TEMP']) vi.stubEnv(name, join(cwd, 'missing'))
   const { result } = await bash('git commit -q --allow-empty -m kept && echo ok')
   expect(result.isError).toBeFalsy()
   expect(await git('log', '-1', '--format=%s')).toBe('kept')

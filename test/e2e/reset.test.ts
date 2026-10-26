@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { promisify } from 'node:util'
 import { expect, it } from 'vitest'
 import { projectHome } from '../../server/project.ts'
-import { cleanEnv, temp } from '../helpers.ts'
+import { cleanEnv, moduleURL, temp } from '../helpers.ts'
 
 const run = promisify(execFile)
 const script = resolve('scripts/reset.ts')
@@ -84,7 +84,7 @@ it('refuses while Ultimate runs in the home', async () => {
     [
       '--input-type=module',
       '-e',
-      `const { acquireLock } = await import(${JSON.stringify(resolve('server/lock.ts'))});
+      `const { acquireLock } = await import(${JSON.stringify(moduleURL('server/lock.ts'))});
        await acquireLock(${JSON.stringify(join(home, 'ultimate.lock'))}, { pid: process.pid, port: 4747 });
        console.log('held'); setInterval(() => {}, 1000)`,
     ],

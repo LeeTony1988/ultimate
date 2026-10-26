@@ -1,6 +1,6 @@
 import { access, mkdir, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, posix, resolve, win32 } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { Type } from '@earendil-works/pi-ai'
 import { formatDimensionNote, resizeImage } from '@earendil-works/pi-coding-agent'
@@ -8,28 +8,70 @@ import { defineExtension, defineTool, section } from '@earendil-works/pi-durable
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core'
 import type { ExtensionHost } from '../../server/extensions.ts'
 
-export async function browserBinary() {
-  const cache = join(homedir(), '.cache/ms-playwright')
+type BrowserBinaryOptions = {
+  platform?: NodeJS.Platform
+  env?: Record<string, string | undefined>
+  home?: string
+  accessFile?: (path: string) => Promise<void>
+  readDirectory?: (path: string) => Promise<string[]>
+}
+
+export async function browserBinary(options: BrowserBinaryOptions = {}) {
+  const platform = options.platform ?? process.platform
+  const env = options.env ?? process.env
+  const home = options.home ?? homedir()
+  const joinPath = platform === 'win32' ? win32.join : posix.join
+  const accessFile = options.accessFile ?? ((path: string) => access(path))
+  const readDirectory = options.readDirectory ?? ((path: string) => readdir(path))
+  const isWindows = platform === 'win32'
+  const localAppData = env.LOCALAPPDATA?.trim() || undefined
+  const cache = isWindows
+    ? joinPath(localAppData ?? joinPath(home, 'AppData', 'Local'), 'ms-playwright')
+    : joinPath(home, '.cache', 'ms-playwright')
+  const cacheEntries = await readDirectory(cache).catch(() => {
+    // A missing Playwright cache is normal; continue with installed browser candidates.
+    return []
+  })
+  const cachedEntries = cacheEntries.filter((name) => name.startsWith('chromium-'))
+  const orderedCacheEntries = isWindows
+    ? cachedEntries.toSorted(
+        (left, right) =>
+          Number(right.slice('chromium-'.length)) - Number(left.slice('chromium-'.length)),
+      )
+    : cachedEntries.toSorted().toReversed()
+  const cachedBrowsers = orderedCacheEntries.flatMap((name) =>
+    isWindows
+      ? [
+          joinPath(cache, name, 'chrome-win64', 'chrome.exe'),
+          joinPath(cache, name, 'chrome-win', 'chrome.exe'),
+        ]
+      : [joinPath(cache, name, 'chrome-linux64', 'chrome')],
+  )
+  const windowsRoots = [env.ProgramFiles, env.ProgramW6432, env['ProgramFiles(x86)'], localAppData]
+    .filter((root): root is string => !!root?.trim())
+    .map((root) => root.trim())
+  const windowsBrowsers = [...new Set(windowsRoots)].flatMap((root) => [
+    joinPath(root, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    joinPath(root, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+  ])
   const candidates = [
-    process.env.ULTIMATE_CHROMIUM,
-    '/usr/bin/chromium',
-    '/usr/bin/google-chrome-stable',
-    ...(await readdir(cache).catch(() => []))
-      .filter((name) => name.startsWith('chromium-'))
-      .toSorted()
-      .toReversed()
-      .map((name) => join(cache, name, 'chrome-linux64/chrome')),
+    env.ULTIMATE_CHROMIUM,
+    ...(isWindows
+      ? [...windowsBrowsers, ...cachedBrowsers]
+      : ['/usr/bin/chromium', '/usr/bin/google-chrome-stable', ...cachedBrowsers]),
   ].filter((path): path is string => !!path)
   for (const path of candidates) {
     try {
-      await access(path)
+      await accessFile(path)
       return path
     } catch {
       /* try the next installed browser */
     }
   }
   throw new Error(
-    'No Chromium found. Set ULTIMATE_CHROMIUM or install /usr/bin/chromium, /usr/bin/google-chrome-stable, or ~/.cache/ms-playwright/chromium-*/chrome-linux64/chrome.',
+    isWindows
+      ? 'No Chromium found. Set ULTIMATE_CHROMIUM or install Chrome or Edge under ProgramFiles, ProgramFiles(x86), or LOCALAPPDATA, or install a Playwright browser under LOCALAPPDATA\\ms-playwright.'
+      : 'No Chromium found. Set ULTIMATE_CHROMIUM or install /usr/bin/chromium, /usr/bin/google-chrome-stable, or ~/.cache/ms-playwright/chromium-*/chrome-linux64/chrome.',
   )
 }
 
@@ -113,7 +155,7 @@ export default function browserExtension(host: ExtensionHost) {
       section(
         'visual_verification',
         () =>
-          'After UI changes, use screenshot and look at the image before claiming success. Use browser to drive fresh pages and inspect errors. Omit url to see your own UI, or pass a relative url such as / (it opens @ultimate) or /?conversation=<id>; do not guess its port. Omit path: the PNG then goes to the home, outside your checkout, where a stray file would block landing; pass path: `<file>.png` only for a screenshot you commit. Pass an instance URL to test another server.',
+          'Before browser work, read the shipped ego-browser skill and run `ego-browser skill`; prefer ego-browser and its versioned guide. Use these Playwright browser and screenshot tools only as a fallback. After UI changes, inspect the image before claiming success. Use browser to drive fresh pages and inspect errors. Omit url to see your own UI, or pass a relative url such as / (it opens @ultimate) or /?conversation=<id>; do not guess its port. Omit path: the PNG then goes to the home, outside your checkout, where a stray file would block landing; pass path: `<file>.png` only for a screenshot you commit. Pass an instance URL to test another server.',
       ),
     ],
     tools: [

@@ -20,10 +20,12 @@ import type {
   Tx,
 } from '@earendil-works/pi-durable'
 import { git } from '../../lib/git.ts'
+import { shell } from '../../lib/shell.ts'
 import { runGroup, sweepPidFiles } from '../../lib/process-group.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { definitionAgent, discoverAgents, hostDefaultModel } from '../../lib/agents.ts'
 import { CheckRan, Handoff, SubmissionLanded } from './api.ts'
+import { samePath, worktreePath } from './paths.ts'
 import { setup } from './setup.ts'
 import type {
   Landed,
@@ -63,7 +65,10 @@ export async function landerCheckout(home: string, source: string, tip = 'HEAD')
     .then(async () => {
       const registered = (await git(source, 'worktree', 'list', '--porcelain'))
         .split('\n\n')
-        .some((entry) => entry.split('\n').includes(`worktree ${path}`))
+        .some((entry) => {
+          const entryPath = worktreePath(entry)
+          return entryPath !== undefined && samePath(entryPath, path)
+        })
       if (!registered) {
         // The directory is the lander's own; a crash may have left it half created.
         await rm(path, { recursive: true, force: true })
@@ -79,6 +84,41 @@ export async function landerCheckout(home: string, source: string, tip = 'HEAD')
     if (checkouts.get(path) === queued) checkouts.delete(path)
   }
 }
+/**
+ * A long-lived lander checkout can keep CRLF in tracked files from before `.gitattributes` required LF: `reset
+ * --hard` and `checkout --force` leave unchanged files alone, and Git may trust its stat cache while a formatter
+ * reads the files. Re-materialize them from the index once the checkout is clean; a dirty worktree is never touched.
+ */
+export async function rematerializeLf(path: string) {
+  const list = await git(
+    { cwd: path, maxBuffer: 64 * 1024 * 1024, timeout: 120_000 },
+    'ls-files',
+    '--eol',
+    '-z',
+  )
+  const stale: string[] = []
+  for (const record of list.split('\0')) {
+    if (!record) continue
+    const tab = record.indexOf('\t')
+    if (tab === -1) continue
+    const [index, worktree, ...attributes] = record.slice(0, tab).trim().split(/\s+/)
+    const file = record.slice(tab + 1)
+    if (
+      index === 'i/lf' &&
+      (worktree === 'w/crlf' || worktree === 'w/mixed') &&
+      attributes.includes('eol=lf')
+    )
+      stale.push(file)
+  }
+  if (!stale.length) return
+  // Uncommitted work is not ours to overwrite, above all in a checkout that is not the lander's own.
+  if (await git(path, 'status', '--porcelain')) return
+  // Deleting the files makes checkout write them again through the current attributes; checkout-index may trust
+  // the stat cache and leave an unchanged CRLF file alone.
+  await Promise.all(stale.map((file) => rm(join(path, file), { force: true })))
+  await git(path, 'checkout', '--', '.')
+}
+
 /**
  * Append a log line about `entry`, a draft of its queue entry, to the lander conversation `id`; a step also joins the
  * entry's `steps`, which the submitter's cards show.
@@ -204,9 +244,8 @@ export const sweepChecks = async (home: string) => {
 export const checkTemp = (home: string) => join(home, 'lander-tmp')
 
 /**
- * Run `command` with bash in its own process group, recorded in `pids` while it runs, with `TMPDIR` set to a fresh
- * directory in `temp` that is removed when it ends. The watchdog and task cancellation both stop the whole group:
- * TERM, then KILL after a short grace.
+ * Run `command` in the host shell in its own recorded process container. The watchdog and task cancellation stop the
+ * runner and its descendants; a host crash is cleaned up on its next open.
  */
 export async function runLanderCheck(
   path: string,
@@ -260,9 +299,10 @@ export async function runLanderCheck(
   try {
     let exitCode: number
     try {
-      exitCode = await runGroup('/bin/bash', ['-c', command], {
+      const { program, args } = shell.argv(command)
+      exitCode = await runGroup(program, args, {
         cwd: path,
-        env: { ...process.env, TMPDIR: tmp },
+        env: { ...process.env, TMPDIR: tmp, TEMP: tmp, TMP: tmp },
         pidFile: join(pids, `${process.pid}-${randomUUID()}.pid`),
         signal,
         grace: 2000,
@@ -405,6 +445,32 @@ const textOf = (message: unknown) =>
     .join('')
     .trim()
 
+/** The question a failed submission asks the lander's model, with the mode it must follow. */
+export const failurePrompt = ({
+  id,
+  reason,
+  output,
+  integration,
+  state,
+  mode,
+}: {
+  id: string
+  reason: string
+  output: string
+  integration: string
+  state: string
+  mode: 'fix' | 'diagnose'
+}) =>
+  [
+    `[lander] Submission ${id} failed: ${reason}`,
+    output,
+    '',
+    `Your checkout ${integration} is left as it failed. ${state}`,
+    mode === 'fix'
+      ? 'Mode: fix. Resolve or fix it here with the smallest change and commit it (Conventional Commits). Leave the checkout clean. Never push or touch other checkouts. Every check then runs again before it lands. If it cannot be fixed safely, change nothing and explain why. An environment or gate failure is not fixed in product code: for a missing shell or POSIX tool, a CRLF or formatting baseline unrelated to the submission, or a provider limit, report the exact check, command and failure and change nothing outside the submission.'
+      : `Mode: diagnose. Explain the cause and the smallest fix for the submitter. Change nothing.`,
+  ].join('\n')
+
 export function createLander(
   host: Host,
   Workspaces: ConversationDocToken<WorkspaceIndex>,
@@ -418,6 +484,7 @@ export function createLander(
     await git(path, 'reset', '--hard', '-q')
     await git(path, 'checkout', '-q', '--detach', '--force', tip)
     await git(path, 'clean', '-fdq')
+    await rematerializeLf(path)
     return path
   }
 
@@ -623,15 +690,14 @@ export function createLander(
           const state = failing.conflict
             ? `Merging ${failing.conflict} into ${target} at ${head} stopped with conflicts; the merge is in progress.`
             : `HEAD ${head} is the merge of ${entry.tip} (#${entry.conversationId}) into ${target}, set up as the checks run it.`
-          const prompt = [
-            `[lander] Submission ${id} failed: ${reason}`,
+          const prompt = failurePrompt({
+            id,
+            reason,
             output,
-            '',
-            `Your checkout ${integration} is left as it failed. ${state}`,
-            onFailure === 'fix'
-              ? 'Mode: fix. Resolve or fix it here with the smallest change and commit it (Conventional Commits). Leave the checkout clean. Never push or touch other checkouts. Every check then runs again before it lands. If it cannot be fixed safely, change nothing and explain why.'
-              : `Mode: diagnose. Explain the cause and the smallest fix for the submitter. Change nothing.`,
-          ].join('\n')
+            integration,
+            state,
+            mode: onFailure,
+          })
           return runtime.commit(async (tx) => {
             const saved = (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).queue.find(
               (item) => item.id === id,
@@ -858,6 +924,8 @@ export function createLander(
               )
             }
             const { base } = merged
+            // A merge can add the `.gitattributes` that makes an unchanged CRLF file stale; repair again before setup.
+            await rematerializeLf(path)
             // Setup prepares the merged revision, for example installs its lockfile.
             await step('setting up')
             await setup(source, path, await host.projectSettings(), signal)

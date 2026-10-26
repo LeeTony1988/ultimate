@@ -15,7 +15,7 @@ import { Messages } from '../extensions/messages/api.ts'
 import { Branch, Roots } from '../extensions/lineage/api.ts'
 import { rootOf } from '../extensions/lineage/server.ts'
 import { Standing } from '../extensions/subagents/api.ts'
-import { parseDefinition } from '../lib/agents.ts'
+import { parseDefinition, runtimeToolNames } from '../lib/agents.ts'
 import { fauxServer, seedTally, sourceCopy, temp, removeTemp, until, post } from './helpers.ts'
 
 type Server = Awaited<ReturnType<typeof fauxServer>>
@@ -125,7 +125,9 @@ it.concurrent('ships a resident Ultimate definition with valid tools; standing a
   expect(definition.resident).toBe(true)
   const ultimate = await f.subagents.standing('ultimate', context)
   const agent = await (await f.server.harness.conversation(ultimate, context))!.agent(context)
-  expect(agent.tools.map((tool) => tool.name).toSorted()).toEqual(definition.tools!.toSorted())
+  expect(agent.tools.map((tool) => tool.name).toSorted()).toEqual(
+    runtimeToolNames(definition.tools!).toSorted(),
+  )
   // debug is deferred: @ultimate names it, the root agent does not get it.
   expect(definition.tools).toContain('debug')
   const rootTools = (await f.server.root.agent(context)).tools.map((tool) => tool.name)

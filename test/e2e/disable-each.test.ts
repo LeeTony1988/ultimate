@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path'
 import { afterAll, expect, it, vi } from 'vitest'
 import { context } from '../../server/harness.ts'
 import { extensionGraph } from '../../scripts/deps.ts'
+import { shell } from '../../lib/shell.ts'
 import { fauxServer, removeTemp, temp } from '../helpers.ts'
 
 // Each case boots its own server on its own home; a few at a time keep the machine responsive.
@@ -58,7 +59,7 @@ it.concurrent.each(optional)('boots cleanly with %s disabled', async (name) => {
   expect(state.errors).toEqual([])
   expect(state.diagnostics).toEqual([])
   expect(state.missing).toEqual([])
-  expect(state.tools).toContain('bash')
+  expect(state.tools).toContain(shell.name)
 })
 
 it.concurrent('keeps every core-tier extension enabled when settings disable them all', async () => {
@@ -71,5 +72,5 @@ it.concurrent('keeps every core-tier extension enabled when settings disable the
       .toSorted(),
   )
   expect(state.missing).toEqual([])
-  expect(state.tools).toEqual(expect.arrayContaining(['bash', 'subagent']))
+  expect(state.tools).toEqual(expect.arrayContaining([shell.name, 'subagent']))
 })

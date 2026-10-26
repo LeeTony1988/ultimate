@@ -18,9 +18,11 @@ import {
   temp,
   removeTemp,
   linkDependencies,
+  moduleURL,
   post,
 } from './helpers.ts'
 import { context } from '../server/harness.ts'
+import { shell } from '../lib/shell.ts'
 import { FIRST_CHAPTER, requestChapter } from '../lib/chapters.ts'
 import { Store, SummaryDoc } from '../extensions/codemode/server.ts'
 import { Summarized } from '../extensions/codemode/refs.ts'
@@ -58,8 +60,8 @@ async function fixture() {
   await writeFile(
     join(ultimateRoot, 'extensions/codemode/server.ts'),
     (await readFile(resolve('extensions/codemode/server.ts'), 'utf8'))
-      .replace("'../../lib/agents.ts'", JSON.stringify(resolve('lib/agents.ts')))
-      .replace("'../../lib/api-files.ts'", JSON.stringify(resolve('lib/api-files.ts'))),
+      .replace("'../../lib/agents.ts'", JSON.stringify(moduleURL('lib/agents.ts')))
+      .replace("'../../lib/api-files.ts'", JSON.stringify(moduleURL('lib/api-files.ts'))),
   )
   for (const file of ['api.ts', 'chapters.ts', 'projects.ts', 'refs.ts', 'summary.ts'])
     await cp(resolve('extensions/codemode', file), join(ultimateRoot, 'extensions/codemode', file))
@@ -150,7 +152,7 @@ it('keeps codemode guidance without repeating top-level tool schemas', async () 
   expect(text).toContain(
     'Discover extension contracts with ultimate.apis() and read one with ultimate.api(name); act on them through ultimate.action.',
   )
-  expect(text).toContain('Available: read, write, edit, bash')
+  expect(text).toContain(`Available: read, write, edit, ${shell.name}`)
   expect(text).not.toContain('declare const tools')
   const withRestart = await section.render(
     {
@@ -206,7 +208,7 @@ const shape = (calls: CallTree[]): unknown[] =>
 
 it('traces a tool a codemode script calls, and its service call, inside the codemode call', async () => {
   const { server, options } = await fixture()
-  const token = `import { defineApi } from ${JSON.stringify(resolve('shared/extension-api.ts'))}
+  const token = `import { defineApi } from ${JSON.stringify(moduleURL('shared/extension-api.ts'))}
     const Echo = defineApi()('trace-echo')`
   for (const [name, source] of [
     [
@@ -487,16 +489,16 @@ it('composes read and bash with private nested results and final JSON details', 
   const path = join(server.host.home, 'scratch.txt')
   const result = await run(
     server,
-    `const source = await tools.read({path:${JSON.stringify(path)}}); const shell = await tools.bash({command:'echo nested-private'}); text(source.trim()); return {length:shell.length};`,
+    `const source = await tools.read({path:${JSON.stringify(path)}}); const output = await tools.${shell.name}({command:'echo nested-private'}); text(source.trim()); return {length:output.trim().length};`,
   )
   expect(result.text).toContain('Script completed')
   expect(result.text).toContain('before')
   expect(result.text).not.toContain('nested-private')
   expect(result.data.details.calls.map((call) => [call.name, call.status])).toEqual([
     ['read', 'ok'],
-    ['bash', 'ok'],
+    [shell.name, 'ok'],
   ])
-  expect(result.data.details.value).toEqual({ length: 15 })
+  expect(result.data.details.value).toEqual({ length: 'nested-private'.length })
   const view = await server.root.viewState(context)
   expect(view.value.entries.filter((entry) => entry.kind === 'pi.tool-result')).toHaveLength(1)
   view.dispose()
@@ -758,7 +760,7 @@ it('aborts nested work without committing store writes', async () => {
     fauxAssistantMessage(
       [
         fauxToolCall('codemode', {
-          code: `await tools.read({path:${JSON.stringify(join(server.host.home, 'scratch.txt'))}}); await tools.bash({command:'sleep 30'}); store('aborted', true);`,
+          code: `await tools.read({path:${JSON.stringify(join(server.host.home, 'scratch.txt'))}}); await tools.${shell.name}({command:'sleep 30'}); store('aborted', true);`,
         }),
       ],
       { stopReason: 'toolUse' },
@@ -958,7 +960,7 @@ it('recovers an unsafe interrupted script with its committed nested-call log', a
     fauxAssistantMessage(
       [
         fauxToolCall('codemode', {
-          code: `await tools.read({path:${JSON.stringify(join(server.host.home, 'scratch.txt'))}}); await tools.bash({command:'sleep 30'}); store('finished', true);`,
+          code: `await tools.read({path:${JSON.stringify(join(server.host.home, 'scratch.txt'))}}); await tools.${shell.name}({command:'sleep 30'}); store('finished', true);`,
         }),
       ],
       { stopReason: 'toolUse' },

@@ -6,7 +6,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { definitionAgent, discoverAgents, hostDefaultModel } from '../../lib/agents.ts'
 import { LineageApi, Roots } from '../lineage/api.ts'
 import { actingAs } from '../../lib/acting-as.ts'
-import { imagesParameter } from './images.ts'
+import { imagesParameter, resolveImages } from './images.ts'
 import { send } from './send.ts'
 import { Started } from './route.ts'
 
@@ -39,6 +39,10 @@ export const branchTool = (host: ExtensionHost) =>
           throw new Error(
             `Choose a root. Roots: ${roots.map((candidate) => `#${candidate}`).join(', ') || '(none)'}`,
           )
+        // Resolve before forking: send admits its message in a later commit, so a bad ref must not leave the fork behind.
+        const images = input.images
+        if (images !== undefined)
+          await host.harness().commit((tx) => resolveImages(tx, api.conversationId, images), ctx)
         const { definitions } = await discoverAgents(
           host.ultimateRoot,
           host.projectRoot,

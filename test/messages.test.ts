@@ -1,5 +1,13 @@
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
-import { eventHost, temp, removeTemp, until, fauxServer, linkDependencies } from './helpers.ts'
+import {
+  eventHost,
+  temp,
+  removeTemp,
+  until,
+  fauxServer,
+  linkDependencies,
+  moduleURL,
+} from './helpers.ts'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
@@ -36,7 +44,7 @@ import { UserInputEvent } from '../shared/events.ts'
 import type { MessagesService } from '../extensions/messages/api.ts'
 import { BranchReceipts, Tally, rootOf, startBranch } from '../extensions/lineage/server.ts'
 import type { BranchInput } from '../extensions/lineage/server.ts'
-import { Branch, Roots } from '../extensions/lineage/api.ts'
+import { Branch, Branched, Roots } from '../extensions/lineage/api.ts'
 import { Standing, Subagents } from '../extensions/subagents/api.ts'
 import { Workspaces } from '../extensions/workspaces/workspaces.ts'
 
@@ -970,19 +978,19 @@ async function codemodeFixture() {
   await linkDependencies(home)
   await writeFile(
     join(home, 'extensions/messages/server.ts'),
-    `export { default, actions, docs } from ${JSON.stringify(resolve('extensions/messages/server.ts'))}`,
+    `export { default, actions, docs } from ${JSON.stringify(moduleURL('extensions/messages/server.ts'))}`,
   )
   await writeFile(
     join(home, 'extensions/codemode/server.ts'),
-    `export { default, docs } from ${JSON.stringify(resolve('extensions/codemode/server.ts'))}`,
+    `export { default, docs } from ${JSON.stringify(moduleURL('extensions/codemode/server.ts'))}`,
   )
   // Messages needs the core's subagents and workspaces; stand-ins with no standing agents and no worktrees.
   await mkdir(join(home, 'extensions/core-stand-ins'), { recursive: true })
   await writeFile(
     join(home, 'extensions/core-stand-ins/server.ts'),
-    `import { SubagentsApi } from ${JSON.stringify(resolve('extensions/subagents/api.ts'))}
-import { WorkspacesApi } from ${JSON.stringify(resolve('extensions/workspaces/api.ts'))}
-import { Workspaces } from ${JSON.stringify(resolve('extensions/workspaces/workspaces.ts'))}
+    `import { SubagentsApi } from ${JSON.stringify(moduleURL('extensions/subagents/api.ts'))}
+import { WorkspacesApi } from ${JSON.stringify(moduleURL('extensions/workspaces/api.ts'))}
+import { Workspaces } from ${JSON.stringify(moduleURL('extensions/workspaces/workspaces.ts'))}
 export default (host) => {
   host.implement(SubagentsApi, { residents: async () => [] })
   host.implement(WorkspacesApi, { doc: Workspaces })
@@ -1357,6 +1365,82 @@ async function branched(f: Awaited<ReturnType<typeof fixture>>) {
   await settled()
   return { id, branch, from, later, settled }
 }
+it('rejects invalid branch image references before creating a branch', async () => {
+  const pause = {
+    gate: gate(),
+    afterMemo: true,
+    entered: false,
+    taskId: undefined as TaskId | undefined,
+  }
+  const f = await fixture(undefined, pause)
+  const tool = (await f.opened.root.agent(context)).deferred.find(
+    (candidate) => candidate.name === 'branch',
+  )!
+  await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots = [1]
+    await configure(tx, f.opened.root.id, { modelTools: { add: [tool] } })
+  }, context)
+  const submission = await f.opened.root.submit(
+    {
+      type: 'input',
+      content:
+        'BRANCH ' + JSON.stringify({ prompt: 'No branch', isolated: false, images: 'latest' }),
+    },
+    context,
+  )
+  try {
+    await until(async () => {
+      if (pause.entered) return true
+      const view = await f.opened.root.viewState(context)
+      try {
+        return view.value.entries.some((entry) => entry.kind === 'pi.tool-result')
+      } finally {
+        view.dispose()
+      }
+    })
+    expect(pause.entered).toBe(false)
+  } finally {
+    pause.gate.release()
+  }
+  await submission.wait(context)
+
+  const view = await f.opened.root.viewState(context)
+  try {
+    const toolResult = view.value.entries.findLast((entry) => entry.kind === 'pi.tool-result')!
+    expect(toolResult.model?.[0]).toMatchObject({ isError: true })
+    expect(JSON.stringify(toolResult.model)).toContain('found no entry with images')
+    expect(view.value.entries.some((entry) => entry.kind === 'lineage.branched')).toBe(false)
+  } finally {
+    view.dispose()
+  }
+  expect((await f.log())?.messages ?? []).toHaveLength(0)
+
+  const conversations = await f.opened.harness.commit(
+    (tx) => tx.scanConversations({}, 100),
+    context,
+  )
+  const branchIds = []
+  for (const conversation of conversations.items)
+    if ((await f.opened.harness.snapshot(Branch, conversation.id, context))?.branch)
+      branchIds.push(conversation.id)
+  expect(branchIds).toEqual([])
+
+  const toolTasks = await f.opened.harness.commit(
+    (tx) => tx.scanTasks({ conversationId: ROOT_CONVERSATION_ID, kind: 'pi.tool' }, 100),
+    context,
+  )
+  expect(toolTasks.items).toHaveLength(1)
+  expect(
+    await Promise.all(
+      toolTasks.items.map((task) =>
+        f.opened.harness.snapshot(BranchReceipts, task.id as TaskId, context),
+      ),
+    ),
+  ).toEqual([undefined])
+  expect(
+    await eventHost(() => f.opened.harness, 'test').eventLog.recent({ events: [Branched] }),
+  ).toHaveLength(0)
+})
 it('forwards images into a new branch with its prompt', async () => {
   const f = await fixture()
   const tool = (await f.opened.root.agent(context)).deferred.find((t) => t.name === 'branch')!
@@ -1791,9 +1875,17 @@ const servers: Server[] = []
 afterEach(() => {
   for (const server of servers.splice(0)) server.close()
 })
-/** A fixture whose @ultimate is conversation 1 and whose machine also runs `poe2-rust` at `url`. */
+/**
+ * A fixture whose @ultimate is conversation 1 and whose machine also runs `poe2-rust` at `url`. Its machine is named
+ * `rog`, as the other Ultimate addresses it, which naming reads from the user's settings, not the host's name.
+ */
 async function remoteFixture(url?: string) {
   const f = await fixture()
+  await mkdir(join(f.host.userHome, '.ultimate'), { recursive: true })
+  await writeFile(
+    join(f.host.userHome, '.ultimate/settings.json'),
+    JSON.stringify({ cloud: { machine: 'rog' } }),
+  )
   f.provided.set('subagents', {
     residents: async () => [{ name: 'ultimate', description: 'Ultimate' }],
     standing: async () => ROOT_CONVERSATION_ID,

@@ -25,7 +25,7 @@ Do not use web_search for a URL already provided by the user; use web_fetch for 
 Use web_fetch for a specific public webpage URL, including JavaScript-heavy pages and PDFs.
 Use web_fetch objective when only a particular topic or section of the page is relevant.
 Use web_fetch with an array to fetch up to 20 related webpages in one request.
-Do not use web_fetch for raw files, API endpoints, JSON feeds, or localhost; use curl or bash for those.
+Do not use web_fetch for raw files, API endpoints, JSON feeds, or localhost; use curl or the shell tool for those.
 Do not use web_fetch for discovery; use web_search when no URL is known yet.`
 const missing =
   'Missing PARALLEL_API_KEY or secrets is not enabled. Enable secrets and add PARALLEL_API_KEY in the Secrets panel (⌘K → Secrets).'

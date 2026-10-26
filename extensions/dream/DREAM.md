@@ -9,7 +9,7 @@ until they land. Nothing changes code, memory or storage by itself.
 Session N lives in the `dream.sessions` document (`refs.ts`) on conversation 1: read it with codemode
 `ultimate.doc('dream.sessions', 1)`. Actions, called with codemode
 `ultimate.action('dream', name, args)`: `handoff {text}`, `pass {session, pass, status, note?}`, `journal {session, learned, text,
-proposals, chapter?}`, `decide {session, proposal, status, branch?}` and `stats` (tool numbers from the trace, no model). The trace keeps only about the last 7 days, so
+proposals, chapter?}`, `decide {session, proposal, status, branch?, sha?}` and `stats` (tool numbers from the trace, no model). The trace keeps only about the last 7 days, so
 `stats` and `ultimate.trace` see only that window, and `stats` counts only tool calls; older failures and model
 errors are found in conversation entries.
 
@@ -42,7 +42,8 @@ decision:
 - **Approved code, prompt or doc change:** start a branch for it (it is ordinary work: assess or build, review, land),
   then `decide {status: 'approved', branch}`. The dream marks it landed when that branch lands. A `project` proposal
   is built into the project's `.ultimate/`: put its evidence and the existing extension or feature pull request it
-  adapts into the branch prompt, and the branch follows the integrate-ultimate skill.
+  adapts into the branch prompt, and the branch follows the integrate-ultimate skill. When a branch landed outside the
+  lander, record it yourself with `decide {status: 'landed', sha}`.
 - **Approved memory change:** apply it with one `remember` batch, then `decide {status: 'applied'}`.
 - **Rejected:** `decide {status: 'rejected'}`.
 

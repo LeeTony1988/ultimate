@@ -19,12 +19,12 @@ import {
 } from '@earendil-works/pi-durable'
 import {
   type BashExecution,
-  createBashTool,
   createEditTool,
   createReadTool,
   createWriteTool,
 } from '@earendil-works/pi-durable/tools'
 import { git } from '../../lib/git.ts'
+import { shell } from '../../lib/shell.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { CancelAction, CancelledDoc, Committed } from './refs.ts'
@@ -45,13 +45,14 @@ function defaultBashTimeout() {
   return seconds
 }
 
-const bashTripwireMessage = (seconds: number) =>
-  `Tripwire: bash ran past the ${seconds} s default limit and was stopped. Pass timeout for longer commands.`
+const shellTripwireMessage = (name: string, seconds: number) =>
+  `Tripwire: ${name} ran past the ${seconds} s default limit and was stopped. Pass timeout for longer commands.`
 
 /**
- * Process-local Git hooks for one bash call. Each appends tab-separated lines (kind, sha, branch, worktree, git common
+ * Process-local Git hooks for one shell call. Each appends tab-separated lines (kind, sha, branch, worktree, git common
  * dir, extra) to `$ULTIMATE_COMMIT_LOG` and swallows every failure, so it can never fail a commit; the trailing `#`
- * drops the arguments Git appends.
+ * drops the arguments Git appends. Git runs hooks in its own `sh`, which Git for Windows ships, so PowerShell needs no
+ * second set here.
  */
 const where = `"$(git symbolic-ref -q --short HEAD)" "$(git rev-parse --show-toplevel)" "$(git rev-parse --path-format=absolute --git-common-dir)"`
 const logCommit = `printf 'commit\\t%s\\t%s\\t%s\\t%s\\n' "$(git rev-parse HEAD)" ${where} 2>/dev/null >> "$ULTIMATE_COMMIT_LOG" || true #`
@@ -67,7 +68,7 @@ const hooks = (conversation: number) => ({
   'post-rewrite': `while read -r old new rest; do printf 'rewrite\\t%s\\t\\t\\t%s\\t%s\\n' "$new" "$(git rev-parse --path-format=absolute --git-common-dir)" "$old"; done 2>/dev/null >> "$ULTIMATE_COMMIT_LOG" || true #`,
 })
 
-/** Install the hooks for bash call `api` in `execution`; they log its commits to `log` when given. */
+/** Install the hooks for shell call `api` in `execution`; they log its commits to `log` when given. */
 export function prepareBash(
   execution: BashExecution,
   api: Pick<ToolExecutionApi, 'conversationId'>,
@@ -99,7 +100,7 @@ export function changes(command: string) {
 }
 
 /**
- * The bash calls the user cancelled (`CancelAction`), by call id → when. Durable, so a call started before an extension
+ * The shell calls the user cancelled (`CancelAction`), by call id → when. Durable, so a call started before an extension
  * reload sees a cancel made after it. A restart ends a running call anyway: Pi recovers it as interrupted.
  */
 const Cancelled = defineDoc<{ calls: Record<string, number> }>({
@@ -186,16 +187,16 @@ export const actions = {
     const callId =
       args && typeof args === 'object' && !Array.isArray(args) ? args.callId : undefined
     if (typeof callId !== 'string' || conversationId === undefined)
-      throw new Error('Invalid bash call')
+      throw new Error('Invalid shell call')
     const id = conversationId as ConversationId
     await host.harness().commit(async (tx) => {
       const live = await tx.doc(LiveDoc, id)
       const running = new Set(
         [...(live.tools ?? []), ...(live.nestedTools ?? [])].flatMap((slot) =>
-          slot.name === 'bash' && slot.status === 'running' ? [slot.callId] : [],
+          slot.name === shell.name && slot.status === 'running' ? [slot.callId] : [],
         ),
       )
-      if (!running.has(callId)) throw new Error('That bash call is not running')
+      if (!running.has(callId)) throw new Error('That shell call is not running')
       const calls = (await tx.doc(Cancelled, id)).calls
       // Calls never remove their own marks (one could land as a call ends); each cancel drops those of ended calls.
       for (const ended of Object.keys(calls)) if (!running.has(ended)) delete calls[ended]
@@ -214,7 +215,7 @@ type Made = {
 }
 
 /**
- * The commits a bash call made, from its hook log at `path`, which this removes. Only a commit line, or a post-merge
+ * The commits a shell call made, from its hook log at `path`, which this removes. Only a commit line, or a post-merge
  * line for a real merge commit (first parent the HEAD before it, not a fast-forward), records a commit; a rewrite line
  * only adds `rewrittenFrom` to one, since a resumed rebase also lists commits an earlier call made.
  */
@@ -279,9 +280,9 @@ async function madeCommits(path: string, conversation: number) {
 }
 
 export default function codingTools(host: Pick<ExtensionHost, 'emit'>) {
-  const shell = createBashTool()
+  const tool = shell.create()
   const parameters = Type.Object({
-    ...shell.parameters.properties,
+    ...tool.parameters.properties,
     interruptible: Type.Optional(
       Type.Boolean({
         description:
@@ -290,19 +291,19 @@ export default function codingTools(host: Pick<ExtensionHost, 'emit'>) {
     ),
   })
   // In the tool itself, not a wrap, so the events carry the call's trace and conversation.
-  const bashTool = defineTool({
-    ...shell,
-    description: `${shell.description} Set interruptible for a command that only waits or polls, so a steering message can end it early.`,
+  const shellCall = defineTool({
+    ...tool,
+    description: `${tool.description} Set interruptible for a command that only waits or polls, so a steering message can end it early.`,
     parameters,
     async execute({ interruptible, ...args }, api, context) {
       const change = interruptible ? changes(args.command) : undefined
       if (change)
         throw new Error(
-          `An interruptible command must only wait, but this one changes things (${change}). Run the change in its own bash call, then wait in a separate interruptible one.`,
+          `An interruptible command must only wait, but this one changes things (${change}). Run the change in its own ${shell.name} call, then wait in a separate interruptible one.`,
         )
       // One log per invocation: task ids repeat across projects and a retried call reruns its task.
       const log = join(tmpdir(), `ultimate-commits-${randomUUID()}.log`)
-      const call = createBashTool({
+      const call = shell.create({
         prepare: (execution) => prepareBash(execution, api, log),
       })
       const run = (command: Context) => call.execute(args, api, command)
@@ -326,21 +327,21 @@ export default function codingTools(host: Pick<ExtensionHost, 'emit'>) {
   return defineExtension({
     name: 'coding-tools',
     // Each tool keeps its own parameters; the list is only read through the base registration.
-    tools: [createReadTool(), createWriteTool(), editTool(), bashTool] as ToolRegistration[],
+    tools: [createReadTool(), createWriteTool(), editTool(), shellCall] as ToolRegistration[],
     wraps: [
-      wrapTool(createBashTool(), (bash) => ({
-        ...bash,
+      wrapTool(shell.create(), (wrapped) => ({
+        ...wrapped,
         async execute(args, api, context) {
-          if (args.timeout !== undefined) return bash.execute(args, api, context)
+          if (args.timeout !== undefined) return wrapped.execute(args, api, context)
           const timeout = defaultBashTimeout()
           try {
-            return await bash.execute({ ...args, timeout }, api, context)
+            return await wrapped.execute({ ...args, timeout }, api, context)
           } catch (error) {
             if (
               error instanceof Error &&
               /^Command timed out after [\d.e+-]+ seconds$/.test(error.message)
             )
-              throw new Error(bashTripwireMessage(timeout), { cause: error })
+              throw new Error(shellTripwireMessage(wrapped.name, timeout), { cause: error })
             throw error
           }
         },

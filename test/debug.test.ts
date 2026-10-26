@@ -1,10 +1,18 @@
-import { mkdir, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { afterAll, expect, it } from 'vitest'
 import { context } from '../server/harness.ts'
 import { age } from '../extensions/debug/server.ts'
 import { apiSummary } from '../lib/api-files.ts'
-import { fauxServer, linkDependencies, removeTemp, temp, until } from './helpers.ts'
+import {
+  fauxServer,
+  linkDependencies,
+  linkDirectory,
+  moduleURL,
+  removeTemp,
+  temp,
+  until,
+} from './helpers.ts'
 
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
 const homes: string[] = []
@@ -16,8 +24,8 @@ afterAll(async () => {
 const tokens = `
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { defineExtension } from '@earendil-works/pi-durable'
-import { defineApi } from '${resolve('shared/extension-api.ts')}'
-import { defineEvent } from '${resolve('shared/events.ts')}'
+import { defineApi } from '${moduleURL('shared/extension-api.ts')}'
+import { defineEvent } from '${moduleURL('shared/events.ts')}'
 const Beta = defineApi()('beta')
 const Missing = defineApi()('absent')
 const Pinged = defineEvent('beta.pinged')`
@@ -56,7 +64,7 @@ async function start() {
     "export default { root: 'web', optimizeDeps: { noDiscovery: true } }",
   )
   await mkdir(join(root, 'extensions'))
-  await symlink(resolve('extensions/debug'), join(root, 'extensions/debug'))
+  await linkDirectory(resolve('extensions/debug'), join(root, 'extensions/debug'))
   for (const [name, source] of Object.entries(extensions)) {
     await mkdir(join(root, 'extensions', name))
     await writeFile(join(root, 'extensions', name, 'server.ts'), source)

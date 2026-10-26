@@ -39,10 +39,12 @@ import {
   deleteDefinition,
   discoverAgents,
   hostDefaultModel,
+  runtimeDefinition,
+  runtimeToolNames,
   saveDefinition,
   saveOverlay,
 } from '../../lib/agents.ts'
-import type { DefinitionFields } from '../../lib/agents.ts'
+import type { DefinitionFields, AgentDefinition } from '../../lib/agents.ts'
 import { createChild, started } from './children.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { exec } from '../../lib/exec.ts'
@@ -58,6 +60,7 @@ import {
   SaveDefinitionAction,
   StandingAction,
 } from './refs.ts'
+import type { Definition, Shown } from './refs.ts'
 
 export const docs = [Subagents, Standing, Profile]
 const Anchor = defineTask<null, { phase: 'done' }, null>({
@@ -346,6 +349,24 @@ async function waitInterruptibly(
 /** Extension-owned standing definitions retire when their extension is disabled live. */
 export const reloadOnSettings = true
 
+/**
+ * A definition as the Agents tab shows it: `addTools` only where they name something of their own — a definition that
+ * lists `tools` already carries them there, while one that inherits every tool keeps them as the deferred tools it adds.
+ */
+function withAddedTools(definition: AgentDefinition) {
+  const { addTools, tools, ...result } = runtimeDefinition(definition)
+  return { ...result, ...(tools ? { tools } : {}), ...(addTools && !tools ? { addTools } : {}) }
+}
+
+const browserDefinition = (definition: AgentDefinition & { source: Source }): Definition => {
+  const { instructions: _instructions, ...result } = withAddedTools(definition)
+  return { ...result, source: definition.source }
+}
+
+const browserShownDefinition = (
+  definition: AgentDefinition & { source: Source },
+): Shown['definition'] => ({ ...withAddedTools(definition), source: definition.source })
+
 /** Browser actions for the Agents tab. */
 export const actions = {
   /** `{name}`: open the current definition's standing conversation. */
@@ -370,7 +391,7 @@ export const actions = {
       .harness()
       .conversation(ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT))!.agent(BACKGROUND_CONTEXT)
     return {
-      definitions: definitions.map(({ instructions: _instructions, ...definition }) => definition),
+      definitions: definitions.map(browserDefinition),
       errors,
       main: {
         ...(main.model ? { model: main.model } : {}),
@@ -405,7 +426,8 @@ export const actions = {
     for (const root of await agentRoots(host.ultimateRoot, host.projectRoot, host.userHome))
       if (existsSync(join(root.path, `${name}.md`))) files.push(root.source)
     return {
-      ...(definition ? { definition } : {}),
+      ...(definition ? { definition: browserShownDefinition(definition) } : {}),
+
       ...(invalid ? { invalid } : {}),
       source: shown.source,
       path: shown.path,
@@ -471,8 +493,8 @@ export const actions = {
       description,
       ...(model ? { model } : {}),
       ...(thinking ? { thinking } : {}),
-      ...(tools ? { tools } : {}),
-      ...(denyTools?.length ? { denyTools } : {}),
+      ...(tools ? { tools: runtimeToolNames(tools) } : {}),
+      ...(denyTools?.length ? { denyTools: runtimeToolNames(denyTools) } : {}),
       ...(isolate ? { isolate } : {}),
       ...(resident !== undefined ? { resident } : {}),
       ...(onFailure ? { onFailure } : {}),
@@ -925,7 +947,11 @@ export default function subagents(
               throw new Error(
                 `Unknown agent: ${args.agent}. Pass agent: one of ${definitions.map((agent) => agent.name).join(', ')}`,
               )
-            if (definition?.tools?.some((name) => !parent.tools.some((tool) => tool.name === name)))
+            if (
+              definition?.tools?.some(
+                (name) => !parent.tools.some((tool) => tool.name === runtimeToolNames([name])[0]),
+              )
+            )
               throw new Error('Definition tools must be a subset of parent tools')
             const isolated =
               definition && (args.isolate ?? definition.isolate ?? 'none') === 'worktree'

@@ -92,7 +92,8 @@ const JOURNAL_CHARS = 20_000
 const PROPOSALS = 40
 const PROPOSAL_ID = /^[a-z0-9][a-z0-9-]{0,47}$/
 const STATUSES = ['waiting', 'running', 'done', 'failed'] as const
-const DECISIONS = ['approved', 'rejected', 'applied'] as const
+const DECISIONS = ['approved', 'rejected', 'applied', 'landed'] as const
+const SHA = /^[0-9a-f]{7,40}$/i
 
 const fields = (args: unknown) =>
   args && typeof args === 'object' && !Array.isArray(args) ? (args as Record<string, unknown>) : {}
@@ -103,6 +104,11 @@ const text = (value: unknown, name: string, max: number) => {
 }
 const optional = (value: unknown, name: string, max: number) =>
   value === undefined ? undefined : text(value, name, max)
+const commitSha = (value: unknown) => {
+  if (typeof value !== 'string' || !SHA.test(value.trim()))
+    throw new Error('sha must be 7 to 40 hex characters')
+  return value.trim()
+}
 const positive = (value: unknown, name: string) => {
   if (!Number.isSafeInteger(value) || (value as number) < 1)
     throw new Error(`${name} must be a positive integer`)
@@ -218,7 +224,10 @@ export async function fileJournal(tx: Tx, args: unknown, now: number) {
   return { found, filed: true }
 }
 
-/** @ultimate records the user's decision on one proposal; an approved one names its branch. */
+/**
+ * @ultimate records the user's decision on one proposal; an approved one names its branch, and `landed` records a
+ * branch that landed outside the lander with its sha.
+ */
 export async function decide(tx: Tx, args: unknown, now: number) {
   const input = fields(args)
   const found = await open(tx, input.session)
@@ -227,9 +236,17 @@ export async function decide(tx: Tx, args: unknown, now: number) {
   if (proposal.status === 'landed') throw new Error(`Proposal ${proposal.id} already landed`)
   if (!DECISIONS.includes(input.status as (typeof DECISIONS)[number]))
     throw new Error(`status must be one of ${DECISIONS.join(', ')}`)
-  proposal.status = input.status as Proposal['status']
-  if (proposal.status === 'approved') proposal.branch = positive(input.branch, 'branch')
-  else delete proposal.branch
+  const status = input.status as Proposal['status']
+  if (status === 'landed') {
+    if (proposal.status !== 'approved' || proposal.branch === undefined)
+      throw new Error(`Proposal ${proposal.id} is not approved with a branch`)
+    proposal.sha = commitSha(input.sha)
+    proposal.status = status
+  } else {
+    proposal.status = status
+    if (status === 'approved') proposal.branch = positive(input.branch, 'branch')
+    else delete proposal.branch
+  }
   const reason = optional(input.reason, 'reason', LINE_CHARS)
   if (reason) proposal.reason = reason
   else delete proposal.reason
@@ -260,7 +277,7 @@ export function journalText(found: Session) {
     ...found.journal!.learned.map((line) => `- ${line}`),
     '',
     found.proposals.length
-      ? `Proposals (record each decision with ultimate.action('dream', 'decide', {session: ${found.id}, proposal, status, branch?})):`
+      ? `Proposals (record each decision with ultimate.action('dream', 'decide', {session: ${found.id}, proposal, status, branch?, sha?})):`
       : 'No proposals.',
     ...found.proposals.map(
       (item) =>

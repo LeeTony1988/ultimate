@@ -20,6 +20,11 @@ the full log and shows as working in the Agents tab while it lands. It runs the 
 definition: here `.ultimate/agents/lander.md` with `onFailure: fix`, so a conflict or a twice-failing check is
 resolved and committed by its model, every check runs again, and only then does it land and push. Talk to it in its
 conversation about the queue and recent landings.
+
+On this Windows host the lander cannot run the project's gate (`pnpm test` broad-fails and exceeds its check
+timeout). Land with the `wsl-gate` skill (`skills/wsl-gate/SKILL.md`): a clean ext4 clone in WSL, the full gate at
+the base and after every merge, a Git bundle, then a fast-forward and push from Windows. Never push from WSL.
+
 `workspace land` is the synchronous alternative: it only fast-forwards, refuses moved or diverged targets, and never
 rebases or pushes. Unrelated dirty files in the original checkout block neither.
 For `server/` or `shared/` changes, an authorized `restart` works once the running clone is clean at the landed commit.
