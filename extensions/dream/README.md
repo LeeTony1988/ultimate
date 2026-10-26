@@ -22,7 +22,8 @@ for @ultimate and the dream branch, is in [DREAM.md](DREAM.md); this file is the
    `dream.journal` entry (request id `dream.journal:N`, delivered the same way) goes into @ultimate's conversation;
    its model text lists the proposal ids.
 5. The branch answers @ultimate with a `Decisions:` block. @ultimate records each decision with `decide`: `approved`
-   with the branch doing it, `applied` (a memory change it made with `remember`) or `rejected`.
+   with the branch doing it, `applied` (a memory change it made with `remember`), `rejected`, or `landed` with the
+   commit `sha` when the branch landed outside the lander.
 6. Reactor `dream/landed` marks approved proposals `landed` with the sha when their branch's submission lands. A
    session ends once its journal is filed and no proposal is open or approved; the user can `end` it earlier.
 
@@ -152,7 +153,7 @@ A successful restart never returns: the new host opens the requested chapter.
 
 ## Actions
 
-`refs.ts` holds the documents and actions: `start`, `end`, `asleep`, `switch` (user-only), `chapters`, `pass`, `journal`, `decide` (with an optional one-line `reason`),
+`refs.ts` holds the documents and actions: `start`, `end`, `asleep`, `switch` (user-only), `chapters`, `pass`, `journal`, `decide` (status plus `branch`, `sha` for a landing outside the lander, and an optional one-line `reason`),
 and `stats`, which reads tool calls from `<home>/trace.sqlite` read-only: calls, failures and mean duration per tool,
 the 20 most frequent errors, and enabled tools never called in the trace's window (7 days or 200k rows).
 
