@@ -24,8 +24,6 @@ export type Group = {
   stop?: () => boolean
   /** Force-close a Windows job owner after an orderly stop request timed out. */
   force?: () => void
-  /** Named Windows Job Object, persisted beside a pid file for recovery cleanup. */
-  job?: string
   /** Windows runner process creation time, used to avoid removing a newer owner's pid file. */
   start?: string
 }
@@ -129,7 +127,8 @@ export function spawnGroup(
   options: Omit<SpawnOptions, 'detached' | 'stdio'> & { pidFile?: string; grace?: number },
 ): Group {
   const { pidFile, grace = 3000, ...rest } = options
-  if (process.platform === 'win32') return spawnWindowsGroup(program, args, rest, pidFile)
+  if (process.platform === 'win32')
+    return spawnWindowsGroup(program, args, { ...rest, grace }, pidFile)
   const child = spawn('/bin/sh', ['-c', handshake, program, ...args], {
     ...rest,
     detached: true,
@@ -232,9 +231,10 @@ export async function stopGroup(
           : identify(pid) === start)
     if (ours) {
       if (process.platform === 'win32') {
-        const jobName = pidFile && (await text(`${pidFile}.job`))
-        if (!jobName) throw new Error(`Process group ${pid} is missing its Windows job record`)
-        if (!stopWindowsJob(jobName, grace) && identify(pid) === start) send(pid, 'SIGKILL')
+        const recordedJob = pidFile && (await text(`${pidFile}.job`))
+        if (!recordedJob || !/^Local\\UltimateProcessGroup-[0-9a-f-]+$/i.test(recordedJob))
+          throw new Error(`Process group ${pid} is missing a valid Windows job record`)
+        if (!stopWindowsJob(recordedJob, grace) && identify(pid) === start) send(pid, 'SIGKILL')
       }
       const stopped =
         process.platform === 'win32' ? await gone(pid, grace + 3000) : await drain(pid, grace)
@@ -274,9 +274,9 @@ export async function closeOutput(group: Pick<Group, 'child' | 'closed'>, ms = 1
       ms,
     )) === undefined
   ) {
+    // The leader may still run after a failed stop; 'close' then waits for its exit, so do not await it.
     group.child.stdout.destroy()
     group.child.stderr.destroy()
-    await group.closed
   }
 }
 

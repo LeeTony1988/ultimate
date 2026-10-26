@@ -2,7 +2,13 @@ import { spawn } from 'node:child_process'
 import { readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { runGroup, spawnGroup, stopGroup, sweepPidFiles } from '../../lib/process-group.ts'
+import {
+  closeOutput,
+  runGroup,
+  spawnGroup,
+  stopGroup,
+  sweepPidFiles,
+} from '../../lib/process-group.ts'
 import { shell } from '../../lib/shell.ts'
 import { removeTemp, temp, until } from '../helpers.ts'
 
@@ -101,8 +107,9 @@ it.skipIf(process.platform !== 'win32')(
       pidFile,
       onOutput: (chunk) => (automationOutput += chunk),
     })
-    expect({ automation, automationCode, automationOutput }).toEqual({
-      automation,
+    expect(automation.program.toLowerCase()).toMatch(/(pwsh|powershell)\.exe$/)
+    expect(automation.args.at(-1)).toContain(script)
+    expect({ automationCode, automationOutput }).toEqual({
       automationCode: 6,
       automationOutput: 'automation\r\n',
     })
@@ -130,8 +137,9 @@ it.skipIf(process.platform !== 'win32')(
       pidFile: join(root, 'node.pid'),
       onOutput: (chunk) => (nodeOutput += chunk),
     })
-    expect({ nodeScript, nodeCode, nodeOutput }).toEqual({
-      nodeScript,
+    expect(nodeScript.program.toLowerCase()).toMatch(/node\.exe$/)
+    expect(nodeScript.args).toEqual(['--no-warnings', automationNode])
+    expect({ nodeCode, nodeOutput }).toEqual({
       nodeCode: 5,
       nodeOutput: 'node automation\n',
     })
@@ -146,6 +154,23 @@ it.skipIf(process.platform !== 'win32')(
     ).toBe(1)
     expect(spawnFailure.length).toBeGreaterThan(0)
     expect(await readdir(root)).not.toContain('failed.pid')
+  },
+)
+
+it.skipIf(process.platform !== 'win32')(
+  'closeOutput settles when a failed stop leaves the group running',
+  async () => {
+    const root = await directory()
+    const group = spawnGroup(process.execPath, ['-e', sleeper], { cwd: root })
+    try {
+      const began = Date.now()
+      await closeOutput(group)
+      expect(Date.now() - began).toBeLessThan(2500)
+      expect(alive(group.child.pid!)).toBe(true)
+    } finally {
+      group.child.stdin.end()
+      await group.closed
+    }
   },
 )
 

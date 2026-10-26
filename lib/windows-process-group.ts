@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { execFileSync, spawn } from 'node:child_process'
 import type { SpawnOptions } from 'node:child_process'
-import { writeFileSync } from 'node:fs'
+import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Group } from './process-group.ts'
 
@@ -361,6 +361,9 @@ export function spawnWindowsGroup(
     }
   } catch (error) {
     child.stdin.end()
+    if (pidFile)
+      for (const path of [pidFile, `${pidFile}.start`, `${pidFile}.job`])
+        rmSync(path, { force: true })
     throw error
   }
   child.stdin.write('\n')
@@ -370,7 +373,6 @@ export function spawnWindowsGroup(
     closed,
     stop: () => child.stdin.write('STOP\n'),
     force: () => stopWindowsJob(jobName, grace),
-    job: jobName,
     ...(start ? { start } : {}),
   }
 }
