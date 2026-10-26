@@ -61,7 +61,8 @@ export interface DocumentItem extends DocumentContribution {
 }
 
 export function extensionName(path: string): string | undefined {
-  return /extensions\/([^/]+)\/web\.tsx(?:\?.*)?$/.exec(path)?.[1]
+  // Vite keys facets by native file path: `\` on Windows, `/` elsewhere and in HMR ids.
+  return /extensions[\\/]([^\\/]+)[\\/]web\.tsx(?:\?.*)?$/.exec(path)?.[1]
 }
 
 type Check = (value: unknown) => boolean

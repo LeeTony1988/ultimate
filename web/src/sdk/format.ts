@@ -31,10 +31,13 @@ export { formatAgo } from '../../../lib/ago.ts'
 /** Show `path` relative to `cwd` when inside it, else with `~` for `home` (`system.machine.home`). */
 export function shortenPath(path: string, options: { cwd?: string; home?: string } = {}): string {
   const { cwd, home } = options
-  if (cwd && path.startsWith(cwd.replace(/\/$/, '') + '/'))
-    return path.slice(cwd.replace(/\/$/, '').length + 1)
-  if (home && (path === home || path.startsWith(home + '/'))) return '~' + path.slice(home.length)
-  return path
+  // Comparisons use `/`; Windows paths arrive with `\`, and the result reads the same on every platform.
+  const full = path.replaceAll('\\', '/')
+  const inside = cwd?.replaceAll('\\', '/').replace(/\/$/, '')
+  const at = home?.replaceAll('\\', '/')
+  if (inside && full.startsWith(inside + '/')) return full.slice(inside.length + 1)
+  if (at && (full === at || full.startsWith(at + '/'))) return '~' + full.slice(at.length)
+  return full
 }
 
 /** Elide the middle of a path to at most `max` characters, keeping its first and last segments. */
