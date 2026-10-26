@@ -46,6 +46,7 @@ afterEach(async () => {
 const error = (text = 'invalid model configuration') =>
   fauxAssistantMessage('', { stopReason: 'error', errorMessage: text })
 const overloaded = 'Our servers are currently overloaded. Please try again later.'
+const concurrency = 'Concurrency limit exceeded for user, please retry later'
 const rateHint =
   'Still rate limited after Pi’s retries, so Ultimate is paused; once the limit resets (or the agent has another model), press Play and resume this conversation with a message'
 const model = { provider: 'faux', modelId: 'faux-1' }
@@ -477,6 +478,55 @@ it.each([false, true])('waits 60 s, retries once; retry failure: %s', async (ret
   expect(await f.entries()).toHaveLength(retryFails ? 1 : 0)
 })
 
+it.each([false, true])(
+  'retries a provider concurrency limit once after 60 s; retry failure: %s',
+  async (retryFails) => {
+    const prompts: string[] = []
+    const f = await fixture((transcript) => {
+      const text = inputText(transcript)
+      if (text === 'fail' || text.startsWith('Your previous run')) {
+        prompts.push(text)
+        return text === 'fail' || retryFails
+          ? error(concurrency)
+          : fauxAssistantMessage('recovered')
+      }
+      return fauxAssistantMessage('ok')
+    })
+    const branch = await f.conversation('Concurrency blip')
+    await (await f.submit(branch, 'fail')).wait(context)
+    const sleeping = await f.sleeping()
+    expect(sleeping.state).toMatchObject({ status: 'sleeping', until: 1_060_000 })
+    f.advance(60_000)
+    await until(async () => prompts.length === 2)
+    expect(prompts[1]).toContain(concurrency)
+    expect(prompts[1]).toContain('Continue from where you left off')
+    // The retry is a visible input in the child, not a hidden model call.
+    const entries = (
+      await f.harness.commit(
+        (tx) => tx.scanEntries({ conversationId: branch, order: 'ascending' }, 500),
+        context,
+      )
+    ).items
+    expect(entries.filter((entry) => entry.kind === 'pi.user')).toHaveLength(2)
+    expect(JSON.stringify(entries.findLast((entry) => entry.kind === 'pi.user')?.model)).toContain(
+      concurrency,
+    )
+    if (retryFails) await until(async () => (await f.entries()).length === 1)
+    await f.harness.waitForIdle(context)
+    const retries = (
+      await f.host.scanSubmissions({ conversationId: branch }, 100, undefined, context)
+    ).items.filter((input) => input.requestId?.startsWith('watchdog-retry:'))
+    expect(retries).toHaveLength(1)
+    const retryCard = expect.objectContaining({ error: concurrency, retried: true })
+    expect((await f.entries()).map((entry) => entry.data)).toEqual(retryFails ? [retryCard] : [])
+    // No second wait or retry: the outcome is final, reported once.
+    f.advance(60_000)
+    await f.harness.waitForIdle(context)
+    expect(prompts).toHaveLength(2)
+    expect((await f.tasks()).every((task) => task.state.status === 'terminal')).toBe(true)
+  },
+)
+
 it.each(['retry', 'report'] as const)(
   'deduplicates %s after a crash between submit and its checkpoint',
   async (phase) => {
@@ -803,6 +853,7 @@ it.each([
     undefined,
   ],
   ['Overloaded (529)', true, undefined],
+  [concurrency, true, undefined],
   [
     'Claude Code is not installed. Install it with `npm install -g @anthropic-ai/claude-code` or set PI_CLAUDE_CODE_COMMAND to the executable.',
     false,

@@ -88,9 +88,9 @@ async function boundary(tx: Tx, task: Generation, next?: Generation) {
 /**
  * What a failed run's error asks for: a broken login needs the user, so it reports at once with a hint to log in again;
  * a rate limit that outlasted Pi's retries paused Ultimate (the pause extension), so it reports once and never
- * re-prompts into the limit; an
- * incomplete Claude Code relay response (status 200 or unknown) is a dropped stream, so it retries like Pi's own
- * retryable errors.
+ * re-prompts into the limit; an incomplete Claude Code relay response (status 200 or unknown) is a dropped stream,
+ * so it retries like Pi's own retryable errors; a provider-side per-user concurrency cap frees itself, so it retries
+ * too.
  */
 export function diagnose(error: string, assistant?: AssistantMessage) {
   if (rateLimited(error))
@@ -108,6 +108,7 @@ export function diagnose(error: string, assistant?: AssistantMessage) {
     }
   return {
     temporary:
+      /^Concurrency limit exceeded for user, please retry later\.?$/i.test(error) ||
       /^Incomplete Claude Code upstream response \(status (200|unknown),/.test(error) ||
       !!(assistant && isRetryableAssistantError(assistant)),
   }
