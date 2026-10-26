@@ -1,7 +1,8 @@
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { mkdir, rm, writeFile, symlink } from 'node:fs/promises'
-import { basename, join, resolve } from 'node:path'
+import { basename, join, posix, resolve } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
+import { normalizePath } from 'vite-plus'
 import {
   fauxServer as createServer,
   temp as tempDirectory,
@@ -116,7 +117,7 @@ it('discovers late project and user roots and follows linked extension directori
     await until(
       async () =>
         !!(await server.vite.ssrLoadModule('virtual:ultimate/web-facets')).loaders[
-          join(path, 'web.tsx')
+          normalizePath(join(path, 'web.tsx'))
         ],
     )
   }
@@ -198,17 +199,19 @@ it('loads external project facets over user and built-in names, actions and tran
   await until(
     async () =>
       !!(await server.vite.ssrLoadModule('virtual:ultimate/web-facets')).loaders[
-        join(added, 'web.tsx')
+        normalizePath(join(added, 'web.tsx'))
       ],
   )
   await rm(added, { recursive: true })
   await until(
     async () =>
       !(await server.vite.ssrLoadModule('virtual:ultimate/web-facets')).loaders[
-        join(added, 'web.tsx')
+        normalizePath(join(added, 'web.tsx'))
       ],
   )
-  const browser = await fetch(server.url + '/@fs/' + join(path, 'web.tsx').replaceAll('\\', '/'))
+  const browser = await fetch(
+    server.url + posix.join('/@fs/', normalizePath(join(path, 'web.tsx'))),
+  )
   expect(browser.status).toBe(200)
   expect(await browser.text()).toContain('defineWebExtension')
   expect(
