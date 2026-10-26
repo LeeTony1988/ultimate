@@ -345,7 +345,11 @@ async function waitInterruptibly(
 }
 
 const browserDefinition = (definition: AgentDefinition & { source: Source }): Definition => {
-  const { instructions: _instructions, addTools: _addTools, ...result } = runtimeDefinition(definition)
+  const {
+    instructions: _instructions,
+    addTools: _addTools,
+    ...result
+  } = runtimeDefinition(definition)
   return { ...result, source: definition.source }
 }
 

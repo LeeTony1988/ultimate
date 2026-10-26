@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { runtimeDefinition, runtimeToolName, runtimeToolNames, serializeDefinition } from '../lib/agents.ts'
+import {
+  runtimeDefinition,
+  runtimeToolName,
+  runtimeToolNames,
+  serializeDefinition,
+} from '../lib/agents.ts'
 
 describe('portable shell tools', () => {
   it('maps bash to PowerShell on Windows and PowerShell to bash elsewhere', () => {

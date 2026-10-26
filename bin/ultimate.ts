@@ -353,12 +353,7 @@ async function checkTypes() {
   )
   const child = spawn(
     process.execPath,
-    [
-      join(ultimateRoot, 'node_modules/typescript/bin/tsc'),
-      '--noEmit',
-      '-p',
-      'tsconfig.swap.json',
-    ],
+    [join(ultimateRoot, 'node_modules/typescript/bin/tsc'), '--noEmit', '-p', 'tsconfig.swap.json'],
     { cwd: ultimateRoot, stdio: ['ignore', 'pipe', 'pipe'] },
   )
   let output = ''
