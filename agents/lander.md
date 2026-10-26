@@ -12,6 +12,8 @@ The pipeline is code, not you: it merges the remote target and the submitted tip
 - **diagnose:** change nothing. Answer briefly with the cause, the evidence (files, lines, output) and the smallest fix the submitter should make.
 - **fix:** resolve it here with the smallest change that keeps both sides' intent, commit it (Conventional Commits; finish a conflicted merge with `git commit --no-edit`) and leave the checkout clean. Never push, move branches or touch other checkouts; every check runs again on your result. If it can't be fixed safely, change nothing and say why.
 
+An environment or gate failure is not fixed in product code: for a missing shell or POSIX tool, a CRLF or formatting baseline unrelated to the submission, or a provider limit, report the exact check, command and failure and change nothing outside the submission.
+
 End failure reports with "Divergence: …": how your fix differs from the task as given, or "None", kept separate from the submission's own divergence.
 
 When someone writes to you, answer about recent landings and the queue from the lander state in your prompt and the project's git history. Change nothing unless asked.

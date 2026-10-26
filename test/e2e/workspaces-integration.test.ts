@@ -1543,6 +1543,40 @@ it.concurrent('lands two submissions in order onto a moved target and reports bo
       'Only a top-level main conversation',
     )
 })
+it.concurrent('re-materializes a long-lived CRLF lander checkout before its checks', async () => {
+  const directory = await temp('ultimate-workspaces-crlf-')
+  const projectRoot = join(directory, 'project')
+  await mkdir(projectRoot)
+  await git(projectRoot, 'init', '-b', 'main')
+  await git(projectRoot, 'config', 'user.email', 'test@example.com')
+  await git(projectRoot, 'config', 'user.name', 'Test')
+  // A checkout made before `.gitattributes`: Git stores LF in the index but writes CRLF.
+  await git(projectRoot, 'config', 'core.autocrlf', 'true')
+  await writeFile(join(projectRoot, 'base.txt'), 'base\r\n')
+  await git(projectRoot, 'add', '.')
+  await git(projectRoot, 'commit', '-m', 'base')
+  const f = await fixture([], { directory, projectRoot, home: join(directory, 'state') })
+  const cwd = (await landerLog(f)).cwd!
+  expect(await readFile(join(cwd, 'base.txt'), 'utf8')).toBe('base\r\n')
+  f.host.projectSettings = async () => ({
+    lander: {
+      checks: [
+        `node -e "process.exit(require('node:fs').readFileSync('base.txt','utf8').includes(String.fromCharCode(13)) ? 1 : 0)"`,
+      ],
+    },
+  })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const workspace = (await f.service.get(id, context))!
+  // The submission introduces `.gitattributes`; the lander's unchanged base.txt is still CRLF after the merge.
+  await writeFile(join(workspace.path, '.gitattributes'), '* text=auto eol=lf\n')
+  await commit(workspace.path)
+  await f.service.submit(id, 'None', context)
+  const [report] = await submitted(f, id)
+  expect(report).toContain('landed as')
+  // Only the lander's own clean checkout is re-materialized; the user's checkout stays as it is.
+  expect(await readFile(join(projectRoot, 'base.txt'), 'utf8')).toBe('base\r\n')
+})
 // FIFO barriers specifically synchronize POSIX lander checks; no Windows runner is assumed here.
 it.concurrent('runs a check group concurrently and records each summary', async () => {
   const f = await fixture()
@@ -2011,6 +2045,37 @@ it.concurrent('fix: a fix that still fails the check is not landed and leaves th
   expect(asked).toBe(1)
   expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
   expect(await readFile(join(f.projectRoot, 'base.txt'), 'utf8')).toBe('target')
+})
+it.concurrent('fix: an environment check failure is reported and changes no product code', async () => {
+  const f = await lander({
+    checks: [`node -e "console.error('CHECK_ENV: spawn /bin/sh ENOENT'); process.exit(1)"`],
+  })
+  await landerDefinition(f, 'fix')
+  let prompt = ''
+  f.answerLander((text) => {
+    prompt = text
+    return fauxAssistantMessage(
+      'CANNOT FIX: the check needs /bin/sh, which this host lacks; the submission is unchanged.',
+    )
+  })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const workspace = (await f.service.get(id, context))!
+  const head = await git(f.projectRoot, 'rev-parse', 'HEAD')
+  await commit(workspace.path)
+  await f.service.submit(id, 'None', context)
+  const [report] = await submitted(f, id)
+  expect(prompt).toContain('Mode: fix')
+  expect(prompt).toContain('An environment or gate failure is not fixed in product code')
+  expect(prompt).toContain('missing shell or POSIX tool')
+  expect(prompt).toContain('CRLF or formatting baseline unrelated to the submission')
+  expect(prompt).toContain('provider limit')
+  expect(report).toContain('was not landed: check failed twice')
+  expect(report).toContain("The lander's fix added no commits.")
+  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
+  expect(await readFile(join(f.projectRoot, 'base.txt'), 'utf8')).toBe('base')
+  const cwd = (await landerLog(f)).cwd!
+  expect(await git(cwd, 'status', '--porcelain')).toBe('')
 })
 it.concurrent('starts an isolated branch of a tally whose first request sees its ready checkout', async () => {
   const f = await fixture()
