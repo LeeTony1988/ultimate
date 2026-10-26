@@ -344,21 +344,23 @@ async function waitInterruptibly(
   }
 }
 
+/**
+ * A definition as the Agents tab shows it: `addTools` only where they name something of their own — a definition that
+ * lists `tools` already carries them there, while one that inherits every tool keeps them as the deferred tools it adds.
+ */
+function withAddedTools(definition: AgentDefinition) {
+  const { addTools, tools, ...result } = runtimeDefinition(definition)
+  return { ...result, ...(tools ? { tools } : {}), ...(addTools && !tools ? { addTools } : {}) }
+}
+
 const browserDefinition = (definition: AgentDefinition & { source: Source }): Definition => {
-  const {
-    instructions: _instructions,
-    addTools: _addTools,
-    ...result
-  } = runtimeDefinition(definition)
+  const { instructions: _instructions, ...result } = withAddedTools(definition)
   return { ...result, source: definition.source }
 }
 
 const browserShownDefinition = (
   definition: AgentDefinition & { source: Source },
-): Shown['definition'] => {
-  const { addTools: _addTools, ...result } = runtimeDefinition(definition)
-  return { ...result, source: definition.source }
-}
+): Shown['definition'] => ({ ...withAddedTools(definition), source: definition.source })
 
 /** Browser actions for the Agents tab. */
 export const actions = {

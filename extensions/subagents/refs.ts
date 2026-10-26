@@ -20,6 +20,8 @@ export type Definition = {
   model?: ModelRef
   thinking?: string
   tools?: string[]
+  /** The deferred tools it adds to a definition that inherits every tool; once it lists `tools`, they are in there. */
+  addTools?: string[]
   denyTools?: string[]
   isolate?: 'none' | 'worktree'
   resident?: boolean
