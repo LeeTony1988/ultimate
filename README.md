@@ -40,11 +40,12 @@ place.
 
 ## Start
 
-By default you get Pi's coding agent in a web UI: read, write, edit, bash, codemode, and browser debugging tools,
+By default you get Pi's coding agent in a web UI: read, write, edit, a shell (bash, or PowerShell on Windows), codemode, and browser debugging tools,
 with the conversation, model and thinking controls, login, and footer, plus every other built-in building block.
 
-Needs Node 26 and pnpm, and a `pi` login (Ultimate shares `~/.pi/agent`: credentials, models, settings; personal skills and
-instructions go in `~/.ultimate/skills/` and `~/.ultimate/AGENTS.md`). The
+Needs Node 26 and pnpm, and a `pi` login (Ultimate shares Pi's agent directory, `PI_CODING_AGENT_DIR` when set and
+`~/.pi/agent` otherwise: credentials, models, settings; personal skills and instructions go in `~/.ultimate/skills/`
+and `~/.ultimate/AGENTS.md`). The
 screenshot and browser tools need a Chromium: `/usr/bin/chromium`, Google Chrome, Playwright's cached Chromium, or
 `ULTIMATE_CHROMIUM=<path>`.
 
@@ -57,7 +58,7 @@ pnpm cli            # emergency terminal agent when the UI, server or database i
 ```
 
 - No `pi` login yet? Open the command palette (`Ctrl+K`, `⌘K` on macOS) → "Log in to a provider". Logins are shared
-  with `pi`, and so is logging out. Log in on each machine; never copy `~/.pi/agent/auth.json` between machines, since
+  with `pi`, and so is logging out. Log in on each machine; never copy `<agent-dir>/auth.json` between machines, since
   a token refresh on one revokes the other's copy.
 - **First start** on a machine shows Get ready: log in to a provider and choose a model. Continue opens @ultimate,
   which offers inline setup cards, reads the project and writes the root's first context.

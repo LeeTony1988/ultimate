@@ -23,7 +23,8 @@ user) runs those models on the priority tier through the `fast` extension, at a 
 agent in a preview (`instance start`) runs on, fast tier included; see `extensions/instance/README.md`.
 `dream.asleepAfter` (a positive integer, project over user, default 5) is how many landed or applied changes make a
 dream that @ultimate's compaction started worth falling asleep into a fresh chapter; see `extensions/dream/README.md`.
-Compaction thresholds come from Pi's settings (`~/.pi/agent/settings.json`, then `<project>/.pi/settings.json`,
+Compaction thresholds come from Pi's settings (`<agent-dir>/settings.json`, `PI_CODING_AGENT_DIR` or `~/.pi/agent`,
+then `<project>/.pi/settings.json`,
 key `compaction`: `enabled`, `reserveTokens`, `keepRecentTokens`) over Pi Durable's defaults (reserve 16k, keep 20k,
 background compaction 32k below the blocking threshold), which suit a ~200k window. `server/harness.ts`
 (`compactionOverrides`) sets per-model values by context window: `openai-codex/gpt-6.1-sol`
