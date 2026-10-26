@@ -1,5 +1,6 @@
-import { join } from 'node:path'
+import { join, posix } from 'node:path'
 import { readdir, readFile } from 'node:fs/promises'
+import { normalizePath } from 'vite-plus'
 import type { Plugin } from 'vite-plus'
 import { discoverExtensions } from './discovery.ts'
 import { discoveryRoots } from './project.ts'
@@ -15,10 +16,13 @@ export function extensionModules(
   userHome: string,
 ): Plugin {
   const roots = discoveryRoots(ultimateRoot, projectRoot, userHome).map((root) =>
-    join(root.path, 'extensions'),
+    normalizePath(join(root.path, 'extensions')),
   )
-  const trustFile = join(userHome, '.ultimate/trust.json')
-  const settingsFiles = [...extensionSettingsFiles(projectRoot, userHome), trustFile]
+  const trustFile = normalizePath(join(userHome, '.ultimate/trust.json'))
+  const settingsFiles = [...extensionSettingsFiles(projectRoot, userHome), trustFile].map(
+    normalizePath,
+  )
+  const stylesId = normalizePath(join(ultimateRoot, 'web/src/index.css'))
   const watchers = new WeakMap<object, () => void>()
   return {
     name: 'ultimate:extension-modules',
@@ -45,10 +49,11 @@ export function extensionModules(
     },
     async resolveId(id, importer, options) {
       if (id === virtual) return resolved
+      const importerFile = importer && normalizePath(importer).split('?')[0]
       if (
-        !importer ||
+        !importerFile ||
         options.ssr ||
-        !roots.slice(1).some((root) => importer.startsWith(root + '/')) ||
+        !roots.slice(1).some((root) => importerFile.startsWith(root + '/')) ||
         id.startsWith('.') ||
         id.startsWith('/') ||
         id.startsWith('\0')
@@ -67,7 +72,7 @@ export function extensionModules(
       return dependency
     },
     async load(id) {
-      if (id.split('?')[0] === join(ultimateRoot, 'web/src/index.css'))
+      if (id.split('?')[0] === stylesId)
         return (
           (await readFile(join(ultimateRoot, 'web/src/index.css'), 'utf8')) +
           '\n' +
@@ -80,36 +85,33 @@ export function extensionModules(
       const facets = (await discoverExtensions(ultimateRoot, projectRoot, userHome)).filter(
         (entry) => entry.enabled && entry.files.includes('web.tsx'),
       )
-      const entries = facets.map(
-        (entry) =>
-          `${JSON.stringify(join(entry.path, 'web.tsx'))}: () => import(${JSON.stringify('/@fs/' + join(entry.path, 'web.tsx'))})`,
-      )
+      const entries = facets.map((entry) => {
+        const file = normalizePath(join(entry.path, 'web.tsx'))
+        return `${JSON.stringify(file)}: () => import(${JSON.stringify(posix.join('/@fs/', file))})`
+      })
       return `export const loaders = {${entries.join(',')}};`
     },
-    hotUpdate({ file, modules, type }) {
+    hotUpdate({ file: eventFile, modules, type }) {
+      const file = normalizePath(eventFile)
       if (
         this.environment.name !== 'client' ||
         type !== 'create' ||
         !roots.some((root) => file.startsWith(root + '/'))
       )
         return undefined
-      const styles = this.environment.moduleGraph.getModuleById(
-        join(ultimateRoot, 'web/src/index.css'),
-      )
+      const styles = this.environment.moduleGraph.getModuleById(stylesId)
       return styles && !modules.includes(styles) ? [...modules, styles] : undefined
     },
     configureServer(server) {
       server.watcher.add([...roots, ...settingsFiles])
-      const structure = (file: string) => {
+      const structure = (eventFile: string) => {
+        const file = normalizePath(eventFile)
         if (
           !settingsFiles.includes(file) &&
           !roots.some((root) => file === root || file.startsWith(root + '/'))
         )
           return
-        for (const id of [
-          resolved,
-          ...(file === trustFile ? [join(ultimateRoot, 'web/src/index.css')] : []),
-        ]) {
+        for (const id of [resolved, ...(file === trustFile ? [stylesId] : [])]) {
           const module = server.moduleGraph.getModuleById(id)
           if (module) {
             server.moduleGraph.invalidateModule(module)
@@ -124,7 +126,8 @@ export function extensionModules(
         structure(root)
       })
       const settingsChanged = (file: string) => {
-        if (settingsFiles.includes(file)) structure(file)
+        const normalized = normalizePath(file)
+        if (settingsFiles.includes(normalized)) structure(normalized)
       }
       server.watcher.on('change', settingsChanged)
       for (const event of ['add', 'unlink', 'addDir', 'unlinkDir'] as const)
