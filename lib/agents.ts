@@ -59,12 +59,17 @@ function portableToolNames(names: string[]) {
   return [...new Set(names.map((name) => (name === 'powershell' ? 'bash' : name)))]
 }
 
-export function runtimeDefinition(definition: AgentDefinition): AgentDefinition {
+export function runtimeDefinition(
+  definition: AgentDefinition,
+  platform: NodeJS.Platform = process.platform,
+): AgentDefinition {
   return {
     ...definition,
-    ...(definition.tools ? { tools: runtimeToolNames(definition.tools) } : {}),
-    ...(definition.addTools ? { addTools: runtimeToolNames(definition.addTools) } : {}),
-    ...(definition.denyTools ? { denyTools: runtimeToolNames(definition.denyTools) } : {}),
+    ...(definition.tools ? { tools: runtimeToolNames(definition.tools, platform) } : {}),
+    ...(definition.addTools ? { addTools: runtimeToolNames(definition.addTools, platform) } : {}),
+    ...(definition.denyTools
+      ? { denyTools: runtimeToolNames(definition.denyTools, platform) }
+      : {}),
   }
 }
 

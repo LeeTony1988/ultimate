@@ -16,7 +16,7 @@ describe('portable shell tools', () => {
     ])
   })
 
-  it('maps definition tool fields for the current host without changing the source shape', () => {
+  it('maps definition tool fields for a host without changing the source shape', () => {
     const definition = {
       name: 'reviewer',
       description: 'Reviews changes',
@@ -26,10 +26,15 @@ describe('portable shell tools', () => {
       addTools: ['debug'],
       denyTools: ['powershell'],
     }
-    expect(runtimeDefinition(definition)).toMatchObject({
+    expect(runtimeDefinition(definition, 'win32')).toMatchObject({
       tools: ['read', 'powershell'],
       addTools: ['debug'],
       denyTools: ['powershell'],
+    })
+    expect(runtimeDefinition(definition, 'linux')).toMatchObject({
+      tools: ['read', 'bash'],
+      addTools: ['debug'],
+      denyTools: ['bash'],
     })
     expect(definition.tools).toEqual(['read', 'bash'])
   })
