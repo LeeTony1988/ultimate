@@ -17,11 +17,16 @@ for (const key of Object.keys(process.env))
 // Test servers, and the previews they start, must never publish on this machine's tailnet: they find no Tailscale CLI.
 process.env.TAILSCALE_COMMAND = join(testTmpdir, 'no-tailscale')
 // Instance startup sweeps must never inspect the machine's real preview homes during tests.
-const previousTmpdir = process.env.TMPDIR
+const previousTmpdir = Object.fromEntries(
+  ['TMPDIR', 'TMP', 'TEMP'].map((name) => [name, process.env[name]]),
+)
 process.env.TMPDIR = testTmpdir
+process.env.TMP = testTmpdir
+process.env.TEMP = testTmpdir
 
 afterAll(() => {
-  if (previousTmpdir === undefined) delete process.env.TMPDIR
-  else process.env.TMPDIR = previousTmpdir
+  for (const [name, value] of Object.entries(previousTmpdir))
+    if (value === undefined) delete process.env[name]
+    else process.env[name] = value
   rmSync(testTmpdir, { recursive: true, force: true })
 })

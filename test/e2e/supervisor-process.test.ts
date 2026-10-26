@@ -10,7 +10,7 @@ import { children, homes, copies, launch, fixture, attach } from './supervisor-h
 it('starts past stale lock sidecars without killing an unrelated live pid', async () => {
   const home = await temp('ultimate-stale-supervisor-')
   homes.push(home)
-  const unrelated = spawn('sleep', ['60'])
+  const unrelated = spawn(process.execPath, ['-e', 'setInterval(() => {}, 60_000)'])
   children.push(unrelated)
   await writeFile(join(home, 'ultimate.lock'), JSON.stringify({ pid: 2147483647 }))
   await writeFile(join(home, 'storage.lock'), JSON.stringify({ pid: unrelated.pid }))

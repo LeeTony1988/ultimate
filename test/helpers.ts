@@ -1,6 +1,17 @@
 import { existsSync } from 'node:fs'
-import { cp, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import {
+  cp,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { pathToFileURL } from 'node:url'
 import { setImmediate as yieldIO } from 'node:timers/promises'
 import { join, resolve, sep } from 'node:path'
 import { applyImmutable } from '@earendil-works/chord/delta'
@@ -79,11 +90,16 @@ export function eventHost(harness: () => Harness, name: string) {
   }
 }
 
+/** A path as a valid ESM specifier on every platform; generated fixture sources import through it. */
+export const moduleURL = (path: string) => pathToFileURL(resolve(path)).href
 export function cleanEnv(extra: NodeJS.ProcessEnv = {}) {
+  const isolatedTemp = process.env.TMPDIR
   return {
     ...Object.fromEntries(
       Object.entries(process.env).filter(([key]) => !key.startsWith('ULTIMATE_')),
     ),
+    // On Windows Node uses TMP/TEMP for os.tmpdir(); preserve the worker's isolated TMPDIR in children too.
+    ...(isolatedTemp ? { TMPDIR: isolatedTemp, TMP: isolatedTemp, TEMP: isolatedTemp } : {}),
     ...extra,
   }
 }
@@ -112,12 +128,21 @@ export async function temp(prefix = 'ultimate-test-', parent = tmpdir()) {
   temps.add(path)
   return path
 }
+/** Link a directory into a fixture; Windows junctions need no symlink privilege. */
+export async function linkDirectory(target: string, path: string) {
+  if (!(await stat(target)).isDirectory()) throw new Error(`Not a directory: ${target}`)
+  await symlink(target, path, process.platform === 'win32' ? 'junction' : 'dir')
+}
 export async function linkDependencies(root: string) {
   const target = join(root, 'node_modules')
   await mkdir(target)
   for (const name of await readdir(resolve('node_modules'))) {
     if (name.startsWith('.vite')) continue
-    await symlink(resolve('node_modules', name), join(target, name))
+    const source = resolve('node_modules', name)
+    // Junctions represent directories only; pnpm's metadata files are not fixture dependencies.
+    if (process.platform === 'win32' && !(await stat(source)).isDirectory()) continue
+    if (process.platform === 'win32') await linkDirectory(source, join(target, name))
+    else await symlink(source, join(target, name))
   }
 }
 /**

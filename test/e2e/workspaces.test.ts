@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
@@ -10,7 +10,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import workspaceExtension from '../../extensions/workspaces/server.ts'
 import { workspaces } from '../../extensions/workspaces/workspaces.ts'
 import { git } from '../../lib/git.ts'
-import { temp, until } from '../helpers.ts'
+import { linkDirectory, temp, until } from '../helpers.ts'
 
 const cleanup: (() => Promise<void>)[] = []
 afterEach(async () => {
@@ -62,13 +62,16 @@ async function reopen(paths: Awaited<ReturnType<typeof repository>>, commands: s
   })
   return workspaces(host)
 }
-it.each(['symlinked home mid-setup', 'branch creation before registration'])(
+// These crash scenarios require POSIX shell loops, /usr/bin/git shims and signal behavior.
+it
+  .skipIf(process.platform === 'win32')
+  .each(['symlinked home mid-setup', 'branch creation before registration'])(
   'resumes preparation after a process crash: %s',
   async (scenario) => {
     const paths = await repository()
     const physicalHome = join(paths.directory, 'physical-state')
     await mkdir(physicalHome)
-    await symlink(physicalHome, paths.home)
+    await linkDirectory(physicalHome, paths.home)
     const started = join(paths.directory, 'started')
     const gate = join(paths.directory, 'gate')
     const idFile = join(paths.directory, 'id')

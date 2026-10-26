@@ -9,7 +9,7 @@ import { removeTemp, temp } from '../helpers.ts'
 it('drops a stale sidecar without signalling an unrelated live process', async () => {
   const directory = await temp('ultimate-lock-')
   const file = join(directory, 'storage.lock')
-  const child = spawn('sleep', ['60'])
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 60_000)'])
   try {
     await writeFile(file, JSON.stringify({ pid: child.pid }))
     await retireStorageOwner(file)

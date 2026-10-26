@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { acquireLock } from '../server/lock.ts'
 import { cleanPreview, sweepPreviews } from '../extensions/instance/cleanup.ts'
 import { git } from '../lib/git.ts'
+import { linkDirectory } from './helpers.ts'
 
 const roots: string[] = []
 afterEach(async () => {
@@ -44,7 +45,7 @@ it('sweeps dead homes, their nested worktrees and branches but preserves neighbo
   const neighbour = join(root, 'tmp.neighbour')
   await git(source, 'worktree', 'add', '-b', 'neighbour', neighbour)
   // Not a home: never follow a symlink, even one with the preview prefix.
-  await symlink(project, join(root, 'ultimate-instance-link'))
+  await linkDirectory(project, join(root, 'ultimate-instance-link'))
   const notices: string[] = []
   await sweepPreviews(root, (message) => notices.push(message))
   expect(notices).toEqual([])

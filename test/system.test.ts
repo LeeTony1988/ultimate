@@ -1,4 +1,4 @@
-import { mkdir, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { afterAll, afterEach, expect, it, vi } from 'vitest'
 import type { JsonValue } from '@earendil-works/chord'
@@ -9,7 +9,7 @@ import type { ExtensionHost } from '../server/extensions.ts'
 import { callTrace } from '../server/trace.ts'
 import type { EventRecord } from '../shared/events.ts'
 import type { ConversationSummary } from '../shared/protocol.ts'
-import { fauxServer, linkDependencies, temp } from './helpers.ts'
+import { fauxServer, linkDependencies, linkDirectory, moduleURL, temp } from './helpers.ts'
 
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
 afterAll(async () => {
@@ -530,11 +530,11 @@ it('returns a trace tree with its events on a running server', async () => {
     "export default { root: 'web', optimizeDeps: { noDiscovery: true } }",
   )
   await mkdir(join(root, 'extensions/alpha'), { recursive: true })
-  await symlink(resolve('extensions/system'), join(root, 'extensions/system'))
+  await linkDirectory(resolve('extensions/system'), join(root, 'extensions/system'))
   await writeFile(
     join(root, 'extensions/alpha/server.ts'),
     `import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { defineEvent } from '${resolve('shared/events.ts')}'
+import { defineEvent } from '${moduleURL('shared/events.ts')}'
 const Pinged = defineEvent('alpha.pinged')
 export default { name: 'alpha' }
 export const actions = {
