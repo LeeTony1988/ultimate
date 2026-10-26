@@ -117,7 +117,7 @@ is busy, but reset, newer input or a superseding summary request invalidates the
 An accepted spawn refresh appends `conversations.summarized` `{ summary, model?, at }`, also when the title stays.
 The request reads the original request (kept even when compaction removed it from context), recent
 user/assistant text and the previous summary, not tools, images or thinking.
-It times out after 60 seconds. Activity, title and summary are checked and shortened for display.
+It gets a minute for a short request and up to ten minutes for a long transcript. Activity, title and summary are checked and shortened for display.
 New work or a reset can make a result stale; only a reset ends an exchange.
 Subagents get activity only; history forks are excluded.
 The summary model can name an untitled conversation or update its own last generated title.

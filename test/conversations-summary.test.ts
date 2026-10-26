@@ -27,6 +27,7 @@ import {
   exchangeMessages,
   generateSummary,
   summaryInput,
+  summaryRequestTimeout,
   Summaries,
   summaryBehavior,
   type SummaryHost,
@@ -760,6 +761,35 @@ it('isolates provider errors', async () => {
   expect(fixture.generated).toHaveBeenCalledTimes(4)
 })
 
+it('records a timed-out summary request with the budget it used', async () => {
+  const fixture = await launch()
+  const timeout = vi
+    .spyOn(AbortSignal, 'timeout')
+    .mockReturnValue(
+      AbortSignal.abort(
+        new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
+      ),
+    )
+  try {
+    fixture.generated.mockImplementationOnce(async (_models, _input, signal) => {
+      signal.throwIfAborted()
+      throw new Error('Unreachable')
+    })
+    await fixture.exchange()
+    const input = fixture.generated.mock.calls[0][1]
+    expect(timeout).toHaveBeenCalledWith(summaryRequestTimeout(input))
+    const discarded = (await fixture.entries()).filter((entry) => SummaryDiscarded.is(entry))
+    expect(discarded[0]?.data).toEqual({
+      reason: 'error',
+      cause: `Summary request timed out after ${Math.round(summaryRequestTimeout(input) / 1000)} s`,
+      model: 'openai-codex/gpt-6-luna',
+      at: expect.any(Number),
+    })
+  } finally {
+    timeout.mockRestore()
+  }
+})
+
 it('assesses owned children without renaming them, summarizes ownerless forks, and does not backfill', async () => {
   const fixture = await launch()
   const root = fixture.server.root
@@ -1059,6 +1089,12 @@ it('leaves a Play note out of what names and summarizes a conversation', () => {
   const input = summaryInput(exchangeMessages({ entries, contributions }))
   expect(input).toContain('user: phases demo')
   expect(input).not.toContain('Paused for')
+})
+
+it('gives the summary model a longer, bounded budget for a long transcript', () => {
+  expect(summaryRequestTimeout('Short input.')).toBe(60_000)
+  expect(summaryRequestTimeout('x'.repeat(12_000))).toBe(360_000)
+  expect(summaryRequestTimeout('x'.repeat(50_000))).toBe(600_000)
 })
 
 it('includes the previous feature next to the previous summary in model input', () => {
