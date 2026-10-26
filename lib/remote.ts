@@ -3,9 +3,8 @@
  * tailnet address its machine registered with the cloud elsewhere. Codemode reads through it and Messages’
  * Ultimate-to-Ultimate messages travel it. Nothing falls back to a copy.
  */
-import { hostname } from 'node:os'
 import type { JsonValue } from '@earendil-works/chord'
-import { cloudConfig, fetchRegister, satelliteAddress } from './cloud.ts'
+import { cloudConfig, fetchRegister, machineName, satelliteAddress } from './cloud.ts'
 import type { Register } from './cloud.ts'
 import { projectIdentity } from './project-identity.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
@@ -68,11 +67,6 @@ export function resolveProject(
   throw new Error(
     `Unknown project ${project}${machine && !machine.here ? ` on ${machine.name}` : ''}${register ? '' : ' on this machine (cloud backups are off, so other machines are not listed)'}. Known: ${known.join(', ') || 'none'}`,
   )
-}
-
-/** This machine's name: the cloud's `machine` setting, else the host name. */
-async function machineName(host: Pick<ExtensionHost, 'userHome' | 'notice'>) {
-  return (await cloudConfig(host))?.machine ?? hostname()
 }
 
 /** This instance as another one names it: its project's name and this machine's name. */

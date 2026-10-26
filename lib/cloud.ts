@@ -34,10 +34,23 @@ export async function cloudConfig(
     host.notice('Missing ULTIMATE_CLOUD_TOKEN. Add it in the Secrets panel (⌘K → Secrets).')
     return undefined
   }
-  const machine =
-    env.ULTIMATE_CLOUD_MACHINE ?? (typeof config.machine === 'string' ? config.machine : hostname())
+  const machine = await machineName(host, env)
   // A satellite runs the project beside the machine that backs it up; it must never replace that machine's backups.
   return { url, token, machine, satellite: config.satellite === true }
+}
+
+/**
+ * This machine's name as another instance addresses it: `ULTIMATE_CLOUD_MACHINE`, the user's `cloud.machine`, else the
+ * host name. Naming needs no backups: a satellite that never backs up still answers to the name the user gave it, and
+ * `cloud.satellites` addresses it by that name.
+ */
+export async function machineName(
+  host: Pick<ExtensionHost, 'userHome'>,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  if (env.ULTIMATE_CLOUD_MACHINE) return env.ULTIMATE_CLOUD_MACHINE
+  const { machine } = await userCloudSettings(host)
+  return typeof machine === 'string' ? machine : hostname()
 }
 
 /**
