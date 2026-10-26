@@ -53,6 +53,15 @@ Exa brings durable execution to agents: it persists sessions and recovers from f
 2. Exa: web search API
    https://exa.ai/
 ${guidance}`
+/** A provider that returned sources without a summary: the server then writes no `**Sources:**` marker. */
+const jinaSourcesOnly = `**Provider:** jina
+
+1. Jina AI
+   https://jina.ai/
+
+2. Durable Extension | Microsoft Learn
+   https://learn.microsoft.com/en-us/agent-framework/hosting/durable-extension
+${guidance}`
 
 /** One call the fake MCP server answered, with the options the bridge gave it. */
 interface Recorded {
@@ -87,13 +96,18 @@ it('falls back from Jina to keyless Exa and says why', async () => {
   const { host, calls, answer } = await fixture()
   const outcome = await search(
     host,
-    { query: 'durable agent extension' },
+    { query: 'durable agent extension', maxResults: 3 },
     answer((provider) =>
       provider === 'jina' ? { isError: true, text: jinaMissingKey } : { text: exaResults },
     ),
   )
   expect(calls.map((call) => call.args.provider)).toEqual(['jina', 'exa'])
   expect(calls.every((call) => call.tool === 'web_search')).toBe(true)
+  expect(calls[0].args).toEqual({
+    query: 'durable agent extension',
+    provider: 'jina',
+    numResults: 3,
+  })
   expect(outcome).toMatchObject({
     status: 'success',
     provider: 'exa',
@@ -130,6 +144,49 @@ it('falls back when the default provider answers without results', async () => {
     status: 'success',
     provider: 'exa',
     fallback: { from: 'jina', reason: 'No results returned.' },
+  })
+})
+
+it('accepts a reply that carries sources without a summary', async () => {
+  const { host, answer } = await fixture()
+  const outcome = await search(
+    host,
+    { query: 'durable agent extension' },
+    answer(() => ({ text: jinaSourcesOnly })),
+  )
+  expect(outcome).toMatchObject({
+    status: 'success',
+    provider: 'jina',
+    fallback: null,
+    answer: '',
+    results: [
+      { title: 'Jina AI', url: 'https://jina.ai/' },
+      {
+        title: 'Durable Extension | Microsoft Learn',
+        url: 'https://learn.microsoft.com/en-us/agent-framework/hosting/durable-extension',
+      },
+    ],
+  })
+})
+
+it('falls back when a provider throws, not only when it answers an error', async () => {
+  const { host } = await fixture()
+  const outcome = await search(
+    host,
+    { query: 'durable agent extension' },
+    async (_argv, _tool, args) => {
+      if (args.provider === 'jina')
+        throw new Error('The web search server did not answer within 20000 ms.')
+      return { isError: false, text: exaResults }
+    },
+  )
+  expect(outcome).toMatchObject({
+    status: 'success',
+    provider: 'exa',
+    fallback: {
+      from: 'jina',
+      reason: 'The web search server did not answer within 20000 ms.',
+    },
   })
 })
 
@@ -253,6 +310,17 @@ it('maps the provider text to its summary, sources and error', () => {
       { title: 'Exa: web search API', url: 'https://exa.ai/' },
     ],
     error: '',
+  })
+  expect(parseSearchText(jinaSourcesOnly)).toMatchObject({
+    provider: 'jina',
+    answer: '',
+    results: [
+      { title: 'Jina AI', url: 'https://jina.ai/' },
+      {
+        title: 'Durable Extension | Microsoft Learn',
+        url: 'https://learn.microsoft.com/en-us/agent-framework/hosting/durable-extension',
+      },
+    ],
   })
   expect(parseSearchText(jinaMissingKey)).toMatchObject({
     provider: 'jina',

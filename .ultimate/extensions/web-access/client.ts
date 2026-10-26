@@ -130,7 +130,7 @@ async function secretKeys(userHome: string) {
   return { JINA_API_KEY: jina, EXA_API_KEY: exa }
 }
 
-/** Creates the empty config directory under `home` and returns its path. */
+/** Creates the config directory under `home` if it is missing and returns its path; this bridge never writes in it. */
 async function configDirectory(home: string) {
   const path = join(home, CONFIG_DIR)
   await mkdir(path, { recursive: true })
@@ -235,9 +235,18 @@ function resultText(
 
 /** Jina's own message points at Pi's config file; this bridge takes its key from Ultimate's secrets. */
 function describe(provider: string, error: string) {
-  return provider === 'jina' && /Jina Search API key not found/i.test(error)
-    ? 'Jina needs a key: add JINA_API_KEY in the Secrets panel (⌘K → Secrets).'
-    : firstLine(error)
+  if (provider === 'jina' && /Jina Search API key not found/i.test(error))
+    return 'Jina needs a key: add JINA_API_KEY in the Secrets panel (⌘K → Secrets).'
+  // Any other message naming the package's own config file has the same answer: the key belongs in Ultimate.
+  if (/web-search\.json/i.test(error))
+    return `${provider} needs a key: add one in the Secrets panel (⌘K → Secrets).`
+  return compact(error)
+}
+
+/** One readable line: a validation error spans several lines and its reason comes after the first. */
+function compact(error: string) {
+  const text = error.trim().replace(/\s+/g, ' ')
+  return text.length > 300 ? `${text.slice(0, 300).trimEnd()}…` : text
 }
 
 function firstLine(text: string) {
@@ -266,7 +275,7 @@ export interface ParsedSearch {
   error: string
 }
 
-/** Maps the MCP server's search text to the provider's summary, its `**Sources:**` list, or its error. */
+/** Maps the MCP server's search text to the provider's summary, its sources, or its error. */
 export function parseSearchText(text: string): ParsedSearch {
   // The server appends how to page through stored results with `get_search_content`, a tool this bridge does not offer.
   const body = text
@@ -276,14 +285,26 @@ export function parseSearchText(text: string): ParsedSearch {
   const rest = provider ? body.slice(body.indexOf('\n') + 1).trim() : body
   const failure = /^Error:\s*([\s\S]*)$/.exec(rest)
   if (failure) return { provider, answer: '', results: [], error: failure[1].trim() }
-  const marker = rest.indexOf('**Sources:**')
-  const answer = (marker >= 0 ? rest.slice(0, marker) : rest).replace(/\n+-{3,}\s*$/, '').trim()
-  return {
-    provider,
-    answer,
-    results: marker >= 0 ? sourcesFrom(rest.slice(marker)) : [],
-    error: '',
-  }
+  const [answer, results] = summaryAndSources(rest)
+  return { provider, answer, results, error: '' }
+}
+
+/**
+ * The summary and the ranked sources of a search reply. The server writes the `**Sources:**` marker only when a
+ * provider also sent a summary, so a source-only reply is a numbered list on its own.
+ */
+function summaryAndSources(text: string): [string, Source[]] {
+  const marker = text.indexOf('**Sources:**')
+  if (marker >= 0) return [clean(text.slice(0, marker)), sourcesFrom(text.slice(marker))]
+  const results = sourcesFrom(text)
+  if (!results.length) return [clean(text), []]
+  const start = text.search(/^\s*\d+\.\s+/m)
+  return [start > 0 ? clean(text.slice(0, start)) : '', results]
+}
+
+/** An answer without its trailing separator. */
+function clean(text: string) {
+  return text.replace(/\n+-{3,}\s*$/, '').trim()
 }
 
 /** The numbered title/URL pairs of a `**Sources:**` block; `No sources returned.` has none. */
@@ -359,7 +380,13 @@ function spawnMcp(argv: string[], env: NodeJS.ProcessEnv): ChildProcessWithoutNu
   const [program, ...args] = argv
   const options = { env, stdio: 'pipe' as const, windowsHide: true }
   // Windows starts a `.cmd` shim such as npx only through cmd.exe; Node refuses to run one directly (EINVAL).
-  if (process.platform === 'win32' && !/[\\/]/.test(program))
+  if (process.platform === 'win32' && !/[\\/]/.test(program)) {
+    // cmd.exe expands `%VAR%` even inside quotes and cannot carry a quote itself: refuse instead of expanding.
+    const unsafe = argv.find((part) => /[%"]/.test(part))
+    if (unsafe)
+      throw new Error(
+        `webAccess.mcpCommand cannot pass "${unsafe}" through cmd.exe; name an executable path instead.`,
+      )
     return spawn(
       process.env.ComSpec ?? 'cmd.exe',
       ['/d', '/s', '/c', `"${argv.map(quote).join(' ')}"`],
@@ -369,6 +396,7 @@ function spawnMcp(argv: string[], env: NodeJS.ProcessEnv): ChildProcessWithoutNu
         windowsVerbatimArguments: true,
       },
     )
+  }
   return spawn(program, args, options)
 }
 
@@ -434,8 +462,10 @@ class Session {
   }
 
   close() {
-    // No request is in flight here; the process is only kept for this one call.
+    // No request is in flight here; the process is only kept for this one call. Ending stdin makes an MCP server
+    // shut down on its own, also the grandchild behind cmd.exe, which the signal below does not reach.
     this.pending.clear()
+    this.child.stdin.end()
     if (this.child.exitCode === null) this.child.kill()
   }
 
