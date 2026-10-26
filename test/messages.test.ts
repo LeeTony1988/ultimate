@@ -1762,9 +1762,17 @@ const servers: Server[] = []
 afterEach(() => {
   for (const server of servers.splice(0)) server.close()
 })
-/** A fixture whose @ultimate is conversation 1 and whose machine also runs `poe2-rust` at `url`. */
+/**
+ * A fixture whose @ultimate is conversation 1 and whose machine also runs `poe2-rust` at `url`. Its machine is named
+ * `rog`, as the other Ultimate addresses it, which naming reads from the user's settings, not the host's name.
+ */
 async function remoteFixture(url?: string) {
   const f = await fixture()
+  await mkdir(join(f.host.userHome, '.ultimate'), { recursive: true })
+  await writeFile(
+    join(f.host.userHome, '.ultimate/settings.json'),
+    JSON.stringify({ cloud: { machine: 'rog' } }),
+  )
   f.provided.set('subagents', {
     residents: async () => [{ name: 'ultimate', description: 'Ultimate' }],
     standing: async () => ROOT_CONVERSATION_ID,
