@@ -1,8 +1,9 @@
 import { request } from 'node:http'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, posix } from 'node:path'
 import { defineExtension } from '@earendil-works/pi-durable'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { normalizePath } from 'vite-plus'
 import { prepareFauxServer as prepareServer, until, post, attach } from './helpers.ts'
 import { context } from '../server/harness.ts'
 import type { ServerEvents } from '../shared/protocol.ts'
@@ -180,6 +181,50 @@ describe('server reload', () => {
     expect(await section.render({} as Parameters<typeof section.render>[0], context)).toBe(
       'after restart',
     )
+  })
+  it('uses Vite file ids while live-reloading a project extension', async () => {
+    const { server } = await fixture(true)
+    const root = server.host.ultimateRoot
+    const loaders = async () =>
+      (await server.vite.ssrLoadModule('virtual:ultimate/web-facets')).loaders as Record<
+        string,
+        () => Promise<unknown>
+      >
+    const builtIn = normalizePath(join(root, 'extensions/web-only/web.tsx'))
+    const url = (file: string) => posix.join('/@fs/', file)
+    const initial = await loaders()
+
+    const css = join(root, 'web/src/index.css')
+    await mkdir(join(root, 'web/src'), { recursive: true })
+    const client = server.vite.environments.client
+    // Installed before the write: the stylesheet's own update may arrive with it, not after the extension folder.
+    const sent = vi.spyOn(client.hot, 'send')
+    await writeFile(css, 'body {}')
+    const styles = await client.transformRequest(normalizePath(css))
+    expect(styles?.code).toContain('@source')
+    expect(styles?.code).toContain(normalizePath(join(root, 'extensions')))
+
+    const folder = join(root, '.ultimate/extensions/live')
+    const web = join(folder, 'web.tsx')
+    await mkdir(folder, { recursive: true })
+    await writeFile(
+      web,
+      "import { createElement } from 'react'; export default () => createElement('live')",
+    )
+    await writeFile(join(folder, 'server.ts'), orderedSource('live'))
+    await until(
+      () =>
+        !!server.extensions.info().find((extension) => extension.name === 'live')?.server?.loadedAt,
+    )
+    expect(Object.keys(initial)).toContain(builtIn)
+    expect(String(initial[builtIn])).toContain(url(builtIn))
+    const webId = normalizePath(web)
+    await until(async () => webId in (await loaders()))
+    const transformed = await client.transformRequest(url(webId))
+    expect(transformed?.code).toContain('createElement')
+    const [module] = client.moduleGraph.getModulesByFile(webId) ?? []
+    expect(module?.file).toBe(webId)
+    await until(() => sent.mock.calls.some((call) => JSON.stringify(call).includes('/index.css')))
   })
   it('does not uninstall an extension installed outside the folder loader', async () => {
     const { server } = await fixture(true)
