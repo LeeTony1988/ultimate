@@ -190,6 +190,11 @@ export function exchangeMessages(view: Pick<ContextView, 'entries' | 'contributi
   )
 }
 
+/** The summary model's request budget: a minute for a short input, 50 ms more per character past 6,000, capped at ten minutes. */
+export function summaryRequestTimeout(input: string) {
+  return Math.min(600_000, 60_000 + Math.max(0, input.length - 6_000) * 50)
+}
+
 /** Only visible user/assistant text, capped per message and across the whole request. */
 export function summaryInput(messages: readonly Message[], previous?: string, feature?: string) {
   return [
@@ -661,12 +666,14 @@ export function summaryBehavior(host: SummaryHost, generate = generateSummary) {
           }
           model = await runtime.memo('model', chosen, context)
         }
+        const budget = summaryRequestTimeout(checkpoint.input)
+        const timeout = AbortSignal.timeout(budget)
         try {
           if (!result && model) {
             result = await generate(
               runtime.models,
               checkpoint.input,
-              AbortSignal.any([runtime.signal, AbortSignal.timeout(60_000)]),
+              AbortSignal.any([runtime.signal, timeout]),
               checkpoint.summary,
               {
                 model,
@@ -685,7 +692,11 @@ export function summaryBehavior(host: SummaryHost, generate = generateSummary) {
         } catch (error) {
           if (runtime.signal.aborted) throw error
           // Provider errors are local: never turn the main answer into a failed run.
-          failure = error instanceof Error ? error.message : String(error)
+          failure = timeout.aborted
+            ? `Summary request timed out after ${Math.round(budget / 1000)} s`
+            : error instanceof Error
+              ? error.message
+              : String(error)
         }
         const completed = submissionsForAnswer(
           await Promise.all(

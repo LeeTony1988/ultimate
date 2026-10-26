@@ -16,6 +16,13 @@ it('titles a long Markdown prompt by its first meaningful line, cut short', () =
   expect(shortTitle('fork task')).toBe('fork task')
 })
 
+it('skips a leading conversation identity line when titling a child', () => {
+  expect(shortTitle('You are conversation #4654.\nReview the sidebar changes.')).toBe(
+    'Review the sidebar changes.',
+  )
+  expect(shortTitle('You are conversation #4654.')).toBe('')
+})
+
 it('reads a missing JSON file as the fallback and rejects unreadable JSON', async () => {
   const dir = await temp('ultimate-lib-')
   expect(await readJson(join(dir, 'missing.json'), { ports: {} })).toEqual({ ports: {} })
