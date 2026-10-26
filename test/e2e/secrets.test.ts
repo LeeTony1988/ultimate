@@ -16,21 +16,28 @@ async function home() {
   homes.push(value)
   return value
 }
-it('stores atomically under concurrent sets with private modes, refuses unsafe files, and deletes', async () => {
+it('stores atomically under concurrent sets, reads back, and deletes on every platform', async () => {
   const root = await home()
   await Promise.all(
     Array.from({ length: 12 }, (_, i) => writeSecret(root, `KEY_${i}`, `value-${i}`)),
   )
-  expect((await stat(join(root, '.ultimate'))).mode & 0o777).toBe(0o700)
-  expect((await stat(join(root, '.ultimate/secrets.json'))).mode & 0o777).toBe(0o600)
   expect(await secretMetadata(root)).toHaveLength(12)
   expect(await readSecret(root, 'KEY_1')).toBe('value-1')
   await writeSecret(root, 'KEY_1')
   expect(await readSecret(root, 'KEY_1')).toBeUndefined()
-  await chmod(join(root, '.ultimate/secrets.json'), 0o644)
-  await expect(readSecret(root, 'KEY_0')).rejects.toThrow('chmod 600')
-  await expect(writeSecret(root, 'KEY_0', 'new')).rejects.toThrow('chmod 600')
 })
+it.skipIf(process.platform === 'win32')(
+  'writes the store with private POSIX modes and refuses unsafe files',
+  async () => {
+    const root = await home()
+    await writeSecret(root, 'KEY_0', 'value-0')
+    expect((await stat(join(root, '.ultimate'))).mode & 0o777).toBe(0o700)
+    expect((await stat(join(root, '.ultimate/secrets.json'))).mode & 0o777).toBe(0o600)
+    await chmod(join(root, '.ultimate/secrets.json'), 0o644)
+    await expect(readSecret(root, 'KEY_0')).rejects.toThrow('chmod 600')
+    await expect(writeSecret(root, 'KEY_0', 'new')).rejects.toThrow('chmod 600')
+  },
+)
 it('validates values without echoing them', () => {
   for (const value of ['', 'x\n', 'x\r', 'x\0', 'ü'.repeat(8193)])
     expect(() => validateValue(value)).toThrow('Secret value')
