@@ -110,8 +110,7 @@ describe('review diffs', () => {
 })
 
 // These create real file symlinks (including dangling and multi-line targets), not directory fixture links.
-// Multibyte assertions intentionally share this POSIX-only fixture and stay covered here on POSIX.
-describe.skipIf(process.platform === 'win32')('review diffs of symlinks and multibyte text', () => {
+describe.skipIf(process.platform === 'win32')('review diffs of symlinks', () => {
   let dir: string
   const at = (spec: string) => reviewDiff(dir, spec, options)
   beforeAll(async () => {
