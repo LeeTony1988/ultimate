@@ -80,9 +80,9 @@ Worker reports and submissions state divergence from the task as given (agreemen
   check warns about it.
 - **Lander:** checks and push are per project, in `<project>/.ultimate/settings.json` (read once the project is
   chosen): `"lander": { "checks": [...], "push": "origin" }` lists the project's own check commands in order (an array
-  runs as a concurrent group) and the remote to push to; push only with the owner's consent. Checks run in a process
-  group, so they are POSIX-only: on a Windows host every check fails with that reason, and the project needs a host that
-  can run them. The lander's checkout
+  runs as a concurrent group) and the remote to push to; push only with the owner's consent. Checks run in the host's
+  shell and are stopped with their whole process tree: POSIX process groups on macOS/Linux, a Job Object on Windows. The
+  lander's checkout
   runs the worktree setup below first. To let the lander's model resolve
   conflicts and failing checks instead of only diagnosing them, add a `lander` definition with `onFailure: fix` and the
   tools it needs (`.ultimate/agents/lander.md`), per project or in `~/.ultimate/agents/`. Details:

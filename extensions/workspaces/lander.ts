@@ -262,7 +262,7 @@ export async function runLanderCheck(
       const { program, args } = shell.argv(command)
       exitCode = await runGroup(program, args, {
         cwd: path,
-        env: { ...process.env, TMPDIR: tmp },
+        env: { ...process.env, TMPDIR: tmp, TEMP: tmp, TMP: tmp },
         pidFile: join(pids, `${process.pid}-${randomUUID()}.pid`),
         signal,
         grace: 2000,

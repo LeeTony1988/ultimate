@@ -84,9 +84,11 @@ const powershell: Shell = {
       return { program: config.shell, args: [...words, path] }
     }
     if (name === 'pwsh' || name === 'powershell') {
+      const config = getPowerShellConfig()
       return {
-        program: getPowerShellConfig().shell,
+        program: config.shell,
         args: [
+          ...config.args.slice(0, -1),
           ...words,
           '-Command',
           `& ([ScriptBlock]::Create([IO.File]::ReadAllText('${path.replaceAll("'", "''")}')))`,

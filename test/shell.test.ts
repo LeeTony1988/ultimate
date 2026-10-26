@@ -17,11 +17,21 @@ it('resolves a Windows shebang to its installed interpreter and arguments', asyn
     await writeFile(path, '#!/usr/bin/env -S node --no-warnings\n')
     const script = shellFor('win32').script(path)
     expect(script.args).toEqual(['--no-warnings', path])
-    expect(
-      process.platform === 'win32'
-        ? script.program.toLowerCase().endsWith('node.exe')
-        : script.program,
-    ).toBe(process.platform === 'win32' ? true : 'node')
+    expect(script.program).toMatch(process.platform === 'win32' ? /node\.exe$/i : 'node')
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+it.skipIf(process.platform !== 'win32')('runs a pwsh shebang without a profile', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'ultimate-shell-script-'))
+  const path = join(directory, 'run')
+  try {
+    await writeFile(path, '#!/usr/bin/env pwsh\n')
+    const script = shellFor('win32').script(path)
+    expect(script.args).toContain('-NoProfile')
+    expect(script.args).toContain('-NonInteractive')
+    expect(script.args.slice(-2)).toEqual(['-Command', expect.stringContaining(path)])
   } finally {
     await rm(directory, { recursive: true, force: true })
   }

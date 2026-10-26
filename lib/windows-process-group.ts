@@ -255,6 +255,7 @@ function windowsLauncher(
   jobName: string,
   grace: number,
 ) {
+  // The encoded command line is ~27k characters; CreateProcess allows 32,767, so the embedded C# has little room left.
   const payload = Buffer.from(JSON.stringify({ program, args, cwd, jobName, grace })).toString(
     'base64',
   )

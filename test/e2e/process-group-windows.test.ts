@@ -245,6 +245,34 @@ it.skipIf(process.platform !== 'win32')(
 )
 
 it.skipIf(process.platform !== 'win32')(
+  'refuses a tampered job record without stopping the verified owner',
+  async () => {
+    const root = await directory()
+    const childFile = join(root, 'child.pid')
+    const pidFile = join(root, 'run.pid')
+    const group = spawnGroup(process.execPath, ['-e', targetWithChild(childFile)], {
+      cwd: root,
+      pidFile,
+    })
+    let output = ''
+    group.child.stdout.setEncoding('utf8').on('data', (chunk: string) => (output += chunk))
+    await until(() => output.includes('ready'))
+    const descendant = Number(await readFile(childFile, 'utf8'))
+    await writeFile(`${pidFile}.job`, "Local\\UltimateProcessGroup-x'); calc #\n")
+    try {
+      await expect(stopGroup(group.child.pid!, { pidFile })).rejects.toThrow(
+        'valid Windows job record',
+      )
+      expect(alive(group.child.pid!)).toBe(true)
+      expect(alive(descendant)).toBe(true)
+    } finally {
+      group.child.stdin.end()
+      await group.closed
+    }
+  },
+)
+
+it.skipIf(process.platform !== 'win32')(
   'stops a verified pid-file owner when the in-memory group handle is unavailable',
   async () => {
     const root = await directory()
