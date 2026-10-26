@@ -109,7 +109,8 @@ describe('review diffs', () => {
   })
 })
 
-describe('review diffs of symlinks and multibyte text', () => {
+// These create real file symlinks (including dangling and multi-line targets), not directory fixture links.
+describe.skipIf(process.platform === 'win32')('review diffs of symlinks', () => {
   let dir: string
   const at = (spec: string) => reviewDiff(dir, spec, options)
   beforeAll(async () => {
@@ -171,32 +172,40 @@ describe('review diffs of symlinks and multibyte text', () => {
     ])
     expect(parsePatchFiles(result.patch)[0].files.map((file) => file.name)).toEqual(['target.txt'])
   })
+})
 
-  it('caps each file and the whole diff by bytes, not characters', async () => {
-    // '€' is three bytes: every file here is far under the caps in characters.
-    const line = `${'€'.repeat(99)}\n`
-    await writeFile(join(dir, 'euro.txt'), line.repeat(Math.ceil(FILE_CAP / 3 / line.length) + 10))
-    await writeFile(join(dir, 'small.txt'), `${'é'.repeat(10)}\n`)
+// Uses only files and its own ordinary repository, so byte-cap behavior remains tested on Windows too.
+it('caps each file and the whole diff by bytes, not characters', async () => {
+  const dir = await temp('ultimate-review-caps-')
+  await git(dir, 'init', '-q', '-b', 'main')
+  await git(dir, 'config', 'user.email', 'test@example.com')
+  await git(dir, 'config', 'user.name', 'Test')
+  const save = async (message: string) => {
     await git(dir, 'add', '-A')
-    await git(dir, 'commit', '-q', '-m', 'one file over the cap in bytes')
-    const one = await at('HEAD')
-    expect(one.files.map((file) => [file.path, file.tooLarge ?? false])).toEqual([
-      ['euro.txt', true],
-      ['small.txt', false],
-    ])
-    expect(parsePatchFiles(one.patch)[0].files.map((file) => file.name)).toEqual(['small.txt'])
-    expect(one.truncated).toBeUndefined()
+    await git(dir, 'commit', '-q', '-m', message)
+  }
+  const at = () => reviewDiff(dir, 'HEAD', options)
+  // '€' is three bytes: every file here is far under the caps in characters.
+  const line = `${'€'.repeat(99)}\n`
+  await writeFile(join(dir, 'euro.txt'), line.repeat(Math.ceil(FILE_CAP / 3 / line.length) + 10))
+  await writeFile(join(dir, 'small.txt'), `${'é'.repeat(10)}\n`)
+  await save('one file over the cap in bytes')
+  const one = await at()
+  expect(one.files.map((file) => [file.path, file.tooLarge ?? false])).toEqual([
+    ['euro.txt', true],
+    ['small.txt', false],
+  ])
+  expect(parsePatchFiles(one.patch)[0].files.map((file) => file.name)).toEqual(['small.txt'])
+  expect(one.truncated).toBeUndefined()
 
-    // 22 files of about 386 KB each: under the file cap, over the total cap in bytes (not in characters).
-    for (let index = 10; index < 32; index++)
-      await writeFile(join(dir, `part-${index}.txt`), line.repeat(1290))
-    await git(dir, 'add', '-A')
-    await git(dir, 'commit', '-q', '-m', 'many files over the total cap in bytes')
-    const many = await at('HEAD')
-    expect(many.truncated).toBe(true)
-    const kept = many.files.filter((file) => !file.tooLarge).length
-    expect(kept).toBe(21)
-    expect(many.files.at(-1)).toMatchObject({ path: 'part-31.txt', tooLarge: true })
-    expect(Buffer.byteLength(many.patch)).toBeLessThanOrEqual(8 * 1024 * 1024)
-  })
+  // 22 files of about 386 KB each: under the file cap, over the total cap in bytes (not in characters).
+  for (let index = 10; index < 32; index++)
+    await writeFile(join(dir, `part-${index}.txt`), line.repeat(1290))
+  await save('many files over the total cap in bytes')
+  const many = await at()
+  expect(many.truncated).toBe(true)
+  const kept = many.files.filter((file) => !file.tooLarge).length
+  expect(kept).toBe(21)
+  expect(many.files.at(-1)).toMatchObject({ path: 'part-31.txt', tooLarge: true })
+  expect(Buffer.byteLength(many.patch)).toBeLessThanOrEqual(8 * 1024 * 1024)
 })

@@ -38,7 +38,12 @@ import type { ActionContext } from '../server/actions.ts'
 import codemode from '../extensions/codemode/server.ts'
 import { Metadata } from '../server/metadata.ts'
 import { UiState } from '../server/ui-state.ts'
-import { discoverAgents, parseDefinition, serializeDefinition } from '../lib/agents.ts'
+import {
+  discoverAgents,
+  parseDefinition,
+  runtimeToolNames,
+  serializeDefinition,
+} from '../lib/agents.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 
 const directories: string[] = []
@@ -1942,7 +1947,7 @@ describe('subagents', () => {
     expect(await actions.definition({ name: 'scout' }, ctx)).toMatchObject({
       source: 'builtin',
       definition: {
-        tools: ['read', 'bash', 'write', 'edit'],
+        tools: runtimeToolNames(['read', 'bash', 'write', 'edit']),
         model: { provider: 'faux', modelId: 'faux-1' },
         instructions: 'Original instructions\n\n## User additions\n\nMore.\nEven more.',
         overlays: [overlay],

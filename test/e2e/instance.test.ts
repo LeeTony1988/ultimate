@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { cp, readFile, stat, symlink, writeFile } from 'node:fs/promises'
+import { cp, readFile, stat, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import {
   fauxAssistantMessage,
@@ -24,7 +24,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ConversationsService } from '../../extensions/conversations/api.ts'
 import { setAutomaticSummaries } from '../../extensions/conversations/summary.ts'
 import { setStanding } from '../../extensions/conversations/server.ts'
-import { apis, attach, temp, removeTemp, until } from '../helpers.ts'
+import { apis, attach, linkDirectory, temp, removeTemp, until } from '../helpers.ts'
 
 type Preview = { id: string; url: string; home: string; pid: number }
 async function assertProject(
@@ -49,6 +49,8 @@ async function fixture({ foreign = false } = {}) {
   const root = await temp('ultimate-preview-')
   // Child hosts must sweep only this fixture, never the machine's real temporary directory.
   vi.stubEnv('TMPDIR', root)
+  vi.stubEnv('TMP', root)
+  vi.stubEnv('TEMP', root)
   const checkout = resolve('.')
   const source = join(root, 'source')
   await git(root, 'clone', '--no-hardlinks', checkout, source)
@@ -56,11 +58,19 @@ async function fixture({ foreign = false } = {}) {
   await cp(join(checkout, 'extensions/instance'), join(source, 'extensions/instance'), {
     recursive: true,
   })
-  await symlink(join(checkout, 'node_modules'), join(source, 'node_modules'))
+  await linkDirectory(join(checkout, 'node_modules'), join(source, 'node_modules'))
   await writeFile(
     join(source, '.ultimate/settings.json'),
     JSON.stringify({
-      isolates: { worktree: { setup: [`ln -s '${join(checkout, 'node_modules')}' node_modules`] } },
+      isolates: {
+        worktree: {
+          setup: [
+            process.platform === 'win32'
+              ? `node -e "require('node:fs').symlinkSync(process.env.ULTIMATE_SOURCE + '/node_modules', 'node_modules', 'junction')"`
+              : `ln -s '${join(checkout, 'node_modules')}' node_modules`,
+          ],
+        },
+      },
     }),
   )
   await writeFile(

@@ -1,5 +1,13 @@
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
-import { eventHost, temp, removeTemp, until, fauxServer, linkDependencies } from './helpers.ts'
+import {
+  eventHost,
+  temp,
+  removeTemp,
+  until,
+  fauxServer,
+  linkDependencies,
+  moduleURL,
+} from './helpers.ts'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
@@ -941,19 +949,19 @@ async function codemodeFixture() {
   await linkDependencies(home)
   await writeFile(
     join(home, 'extensions/messages/server.ts'),
-    `export { default, actions, docs } from ${JSON.stringify(resolve('extensions/messages/server.ts'))}`,
+    `export { default, actions, docs } from ${JSON.stringify(moduleURL('extensions/messages/server.ts'))}`,
   )
   await writeFile(
     join(home, 'extensions/codemode/server.ts'),
-    `export { default, docs } from ${JSON.stringify(resolve('extensions/codemode/server.ts'))}`,
+    `export { default, docs } from ${JSON.stringify(moduleURL('extensions/codemode/server.ts'))}`,
   )
   // Messages needs the core's subagents and workspaces; stand-ins with no standing agents and no worktrees.
   await mkdir(join(home, 'extensions/core-stand-ins'), { recursive: true })
   await writeFile(
     join(home, 'extensions/core-stand-ins/server.ts'),
-    `import { SubagentsApi } from ${JSON.stringify(resolve('extensions/subagents/api.ts'))}
-import { WorkspacesApi } from ${JSON.stringify(resolve('extensions/workspaces/api.ts'))}
-import { Workspaces } from ${JSON.stringify(resolve('extensions/workspaces/workspaces.ts'))}
+    `import { SubagentsApi } from ${JSON.stringify(moduleURL('extensions/subagents/api.ts'))}
+import { WorkspacesApi } from ${JSON.stringify(moduleURL('extensions/workspaces/api.ts'))}
+import { Workspaces } from ${JSON.stringify(moduleURL('extensions/workspaces/workspaces.ts'))}
 export default (host) => {
   host.implement(SubagentsApi, { residents: async () => [] })
   host.implement(WorkspacesApi, { doc: Workspaces })
