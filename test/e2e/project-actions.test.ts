@@ -131,31 +131,32 @@ it('discovers late project and user roots and follows linked extension directori
   )
 })
 
-it.skipIf(process.platform === 'win32')(
-  'reports a dangling extension directory symlink',
-  async () => {
-    const projectRoot = await temp()
-    const userHome = await temp()
-    const external = await temp()
-    await mkdir(join(projectRoot, '.ultimate/extensions'), { recursive: true })
-    await symlink(join(external, 'missing'), join(projectRoot, '.ultimate/extensions/broken-link'))
-    const server = await createServer({
-      ultimateRoot: resolve('.'),
-      projectRoot,
-      userHome,
-      home: join(userHome, 'state'),
-      faux: fauxProvider(),
-      port: 0,
-    })
-    servers.push(server)
-    await until(
-      () => !!server.extensions.info().find((entry) => entry.name === 'broken-link')?.server?.error,
-    )
-    expect(
-      server.extensions.info().find((entry) => entry.name === 'broken-link')?.server?.error,
-    ).toBeTruthy()
-  },
-)
+it('reports a dangling extension directory link', async () => {
+  const projectRoot = await temp()
+  const userHome = await temp()
+  const external = await temp()
+  await mkdir(join(projectRoot, '.ultimate/extensions'), { recursive: true })
+  await symlink(
+    join(external, 'missing'),
+    join(projectRoot, '.ultimate/extensions/broken-link'),
+    process.platform === 'win32' ? 'junction' : 'dir',
+  )
+  const server = await createServer({
+    ultimateRoot: resolve('.'),
+    projectRoot,
+    userHome,
+    home: join(userHome, 'state'),
+    faux: fauxProvider(),
+    port: 0,
+  })
+  servers.push(server)
+  await until(
+    () => !!server.extensions.info().find((entry) => entry.name === 'broken-link')?.server?.error,
+  )
+  expect(
+    server.extensions.info().find((entry) => entry.name === 'broken-link')?.server?.error,
+  ).toBeTruthy()
+})
 
 it('loads external project facets over user and built-in names, actions and transitive reloads', async () => {
   const projectRoot = await temp()
