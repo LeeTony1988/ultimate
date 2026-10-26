@@ -44,7 +44,7 @@ import { UserInputEvent } from '../shared/events.ts'
 import type { MessagesService } from '../extensions/messages/api.ts'
 import { BranchReceipts, Tally, rootOf, startBranch } from '../extensions/lineage/server.ts'
 import type { BranchInput } from '../extensions/lineage/server.ts'
-import { Branch, Roots } from '../extensions/lineage/api.ts'
+import { Branch, Branched, Roots } from '../extensions/lineage/api.ts'
 import { Standing, Subagents } from '../extensions/subagents/api.ts'
 import { Workspaces } from '../extensions/workspaces/workspaces.ts'
 
@@ -1336,6 +1336,82 @@ async function branched(f: Awaited<ReturnType<typeof fixture>>) {
   await settled()
   return { id, branch, from, later, settled }
 }
+it('rejects invalid branch image references before creating a branch', async () => {
+  const pause = {
+    gate: gate(),
+    afterMemo: true,
+    entered: false,
+    taskId: undefined as TaskId | undefined,
+  }
+  const f = await fixture(undefined, pause)
+  const tool = (await f.opened.root.agent(context)).deferred.find(
+    (candidate) => candidate.name === 'branch',
+  )!
+  await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots = [1]
+    await configure(tx, f.opened.root.id, { modelTools: { add: [tool] } })
+  }, context)
+  const submission = await f.opened.root.submit(
+    {
+      type: 'input',
+      content:
+        'BRANCH ' + JSON.stringify({ prompt: 'No branch', isolated: false, images: 'latest' }),
+    },
+    context,
+  )
+  try {
+    await until(async () => {
+      if (pause.entered) return true
+      const view = await f.opened.root.viewState(context)
+      try {
+        return view.value.entries.some((entry) => entry.kind === 'pi.tool-result')
+      } finally {
+        view.dispose()
+      }
+    })
+    expect(pause.entered).toBe(false)
+  } finally {
+    pause.gate.release()
+  }
+  await submission.wait(context)
+
+  const view = await f.opened.root.viewState(context)
+  try {
+    const toolResult = view.value.entries.findLast((entry) => entry.kind === 'pi.tool-result')!
+    expect(toolResult.model?.[0]).toMatchObject({ isError: true })
+    expect(JSON.stringify(toolResult.model)).toContain('found no entry with images')
+    expect(view.value.entries.some((entry) => entry.kind === 'lineage.branched')).toBe(false)
+  } finally {
+    view.dispose()
+  }
+  expect((await f.log())?.messages ?? []).toHaveLength(0)
+
+  const conversations = await f.opened.harness.commit(
+    (tx) => tx.scanConversations({}, 100),
+    context,
+  )
+  const branchIds = []
+  for (const conversation of conversations.items)
+    if ((await f.opened.harness.snapshot(Branch, conversation.id, context))?.branch)
+      branchIds.push(conversation.id)
+  expect(branchIds).toEqual([])
+
+  const toolTasks = await f.opened.harness.commit(
+    (tx) => tx.scanTasks({ conversationId: ROOT_CONVERSATION_ID, kind: 'pi.tool' }, 100),
+    context,
+  )
+  expect(toolTasks.items).toHaveLength(1)
+  expect(
+    await Promise.all(
+      toolTasks.items.map((task) =>
+        f.opened.harness.snapshot(BranchReceipts, task.id as TaskId, context),
+      ),
+    ),
+  ).toEqual([undefined])
+  expect(
+    await eventHost(() => f.opened.harness, 'test').eventLog.recent({ events: [Branched] }),
+  ).toHaveLength(0)
+})
 it('forwards images into a new branch with its prompt', async () => {
   const f = await fixture()
   const tool = (await f.opened.root.agent(context)).deferred.find((t) => t.name === 'branch')!
