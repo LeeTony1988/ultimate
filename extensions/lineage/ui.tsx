@@ -1,6 +1,6 @@
 /**
  * Lineage for other extensions' browser code: the project's roots, a root's tally, landing links and compaction, the
- * branch and root events, and the Memory panel's header point.
+ * branch and root events, and the Memory surface with its header point.
  */
 import type { ReactNode } from 'react'
 import { definePoint, getState, useDocOf, useUiState, useUltimate } from '@/sdk'
@@ -17,18 +17,18 @@ export {
 } from './refs.ts'
 export type { MemoryItem } from './refs.ts'
 
-/** The id of lineage's Memory panel: every root's project memory, grouped by kind. */
-export const MEMORY_PANEL = 'memory'
-/** The UI state key of the memory the Memory panel shows unfolded and scrolled into view. */
+/** The id of lineage's Memory surface: every root's project memory, grouped by kind, in a reading column. */
+export const MEMORY_SURFACE = 'memory'
+/** The UI state key of the memory the Memory surface shows unfolded and scrolled into view. */
 export const MEMORY_FOCUS = 'ext.lineage.memoryFocus'
 
-/** A function that opens the Memory panel on memory `slug`, unfolded. */
+/** A function that opens the Memory surface, on memory `slug` unfolded when given. */
 export function useOpenMemory() {
-  const { openPanel } = useUltimate()
+  const { showSurface } = useUltimate()
   const [, setFocus] = useUiState<string | null>(MEMORY_FOCUS, null)
-  return (slug: string) => {
-    setFocus(slug)
-    openPanel(MEMORY_PANEL)
+  return (slug?: string) => {
+    if (slug) setFocus(slug)
+    showSurface(MEMORY_SURFACE)
   }
 }
 
@@ -36,7 +36,7 @@ export function useOpenMemory() {
 export const column = (dock?: boolean) =>
   dock ? 'w-full px-4' : 'mx-auto w-full max-w-[46rem] px-3 sm:px-6'
 
-/** What the Memory panel shows above the memories (`dream` provides its Dream button). */
+/** What the Memory surface shows above the memories (`dream` provides its Dream button). */
 export const MemoryHeader = definePoint<null, ReactNode>('lineage.memory-header')
 
 /** Conversation 1 keeps the `lineage.roots` document. */

@@ -1,4 +1,4 @@
-import { ChevronRightIcon, FolderIcon } from 'lucide-react'
+import { BrainIcon, ChevronRightIcon, FolderIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
@@ -9,6 +9,7 @@ import {
   cn,
   errorMessage,
   formatAgo,
+  formatTokens,
   ParkedRuns,
   projectTitle,
   AllProvided,
@@ -20,7 +21,6 @@ import {
   useStore,
   useSystem,
   useTasks,
-  useUltimate,
 } from '@/sdk'
 import {
   ConcludeAction,
@@ -42,29 +42,109 @@ import {
   stateTone,
   stateWord,
 } from '../messages/ui.tsx'
-import { InFlight, inFlight, MemoryRow, stillOpen } from './root.tsx'
+import { InFlight, inFlight, MemoryRow, stillOpen, useMemorySummary } from './root.tsx'
 import type { Flight } from './root.tsx'
 import { Landed, useLandings } from './landed.tsx'
-import { useRoots } from '../lineage/ui.tsx'
+import { MEMORY_SURFACE, useOpenMemory, useRoots } from '../lineage/ui.tsx'
 import { StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
 import type { KeptWork } from '../conversations/types.ts'
 import { LanderState } from './lander.tsx'
 import { StandingPhase, WaitingOnUser } from './ultimate.tsx'
-import { useSidebarState } from './state.tsx'
+import { useShell, useSidebarState } from './state.tsx'
 import { topLevelRows } from './listed.ts'
 import { UnderUltimate, Unlisted } from './ui.tsx'
 
-/** What the conversations below start in: the project's path from home, or `<project> #<worktree>`; the full path on hover. */
-function ProjectPath() {
+/**
+ * The project: its path from home (or `<project> #<worktree>`) heading its root's Memory row. Clicking the path opens
+ * the root's History, the project's read-only tally; its chevron folds the Memory row away (folded by default, kept in
+ * `ext.conversations.projectOpen`), and folded, a quiet brain count on the path row still opens Memory.
+ */
+function Project({
+  root,
+  shown,
+  children,
+}: {
+  root?: number
+  shown: boolean
+  children?: ReactNode
+}) {
   const system = useSystem()
+  const actions = useShell()
+  const title = projectTitle(system)
+  const [open, setOpen] = useSidebarState('projectOpen', false)
   return (
-    <div
-      className="mb-1 flex h-10 shrink-0 items-center gap-2 border-b border-border/70 px-4 text-[13px] font-medium text-foreground/90"
-      title={system?.project.root}
-    >
-      <FolderIcon className="size-3.5 shrink-0 text-muted-foreground" />
-      <span className="truncate">{projectTitle(system)}</span>
+    <div aria-label="Project" className="mb-1 border-b border-border/70 pb-1" role="group">
+      {root === undefined ? (
+        <div
+          className="flex h-10 shrink-0 items-center gap-2 px-4 text-[13px] font-medium text-foreground/90"
+          title={system?.project.root}
+        >
+          <FolderIcon className="size-3.5 shrink-0 text-muted-foreground" />
+          <span className="truncate">{title}</span>
+        </div>
+      ) : (
+        <div
+          className={cn(
+            'group/project mx-2 mt-1 flex h-8 min-w-0 items-center rounded-md text-[13px] font-medium text-foreground/90 has-[[data-root-context]:hover]:bg-sidebar-accent/50',
+            shown && 'bg-sidebar-accent has-[[data-root-context]:hover]:bg-sidebar-accent',
+          )}
+        >
+          <button
+            aria-expanded={open}
+            aria-label={open ? 'Hide the project memory' : 'Show the project memory'}
+            className="flex h-full w-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground/70 outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
+            data-project-toggle
+            onClick={() => setOpen(!open)}
+            title={open ? 'Hide Memory' : 'Show Memory'}
+            type="button"
+          >
+            <ChevronRightIcon
+              className={cn('size-3.5 transition-transform', open && 'rotate-90')}
+            />
+          </button>
+          <button
+            aria-current={shown ? 'true' : undefined}
+            className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md pr-2 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
+            data-root-context={root}
+            onClick={() => actions.switchConversation(root)}
+            title={`${system?.project.root ?? title} · open the project's History: every branch, abstract and landing`}
+            type="button"
+          >
+            <FolderIcon className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate">{title}</span>
+            <span className="ml-auto shrink-0 font-mono text-[10px] font-normal text-muted-foreground/50 group-hover/project:text-muted-foreground">
+              History #{root}
+            </span>
+          </button>
+          {!open && <MemoryHint root={root} />}
+        </div>
+      )}
+      {(open || root === undefined) && children}
     </div>
+  )
+}
+
+/** The folded project block's trace of its memory: a brain and the count, opening the Memory surface. */
+function MemoryHint({ root }: { root: number }) {
+  const openMemory = useOpenMemory()
+  const shown = useShell().surface === MEMORY_SURFACE
+  const { total, tokens, counts } = useMemorySummary(root)
+  return (
+    <button
+      aria-current={shown ? 'page' : undefined}
+      aria-label="Open the project memory"
+      className={cn(
+        'mr-0.5 flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 font-mono text-[10px] font-normal text-muted-foreground/50 outline-none hover:bg-sidebar-accent/50 hover:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring',
+        shown && 'bg-sidebar-accent text-foreground hover:bg-sidebar-accent hover:text-foreground',
+      )}
+      data-memory-hint={root}
+      onClick={() => openMemory()}
+      title={`Memory · ${counts}${tokens === undefined ? '' : ` · ${formatTokens(tokens)} tokens every new branch starts from`}`}
+      type="button"
+    >
+      <BrainIcon className="size-3" />
+      {total > 0 && total}
+    </button>
   )
 }
 
@@ -152,11 +232,13 @@ function Tree({
       !parked.has(conversation.id) &&
       (foreground.has(conversation.id) || overview[conversation.id]?.runState === 'working'),
   }))
-  const actions = useUltimate()
+  const actions = useShell()
   const workspacesEnabled = useSystem()?.extensions.some(
     (extension) => extension.name === 'workspaces' && extension.enabled,
   )
-  const shownId = useShownId()
+  // Beside another surface (Memory) no conversation shows, so no row is highlighted.
+  const conversationShown = useShownId()
+  const shownId = actions.surface === 'agent' ? conversationShown : undefined
   const now = useNow(60_000)
   const [concludedIds] = useSidebarState<number[]>('concluded', [])
   const [seen] = useSidebarState<Record<string, number>>('seen', {})
@@ -331,7 +413,6 @@ function Tree({
         <MemoryRow
           conversation={conversation}
           key={conversation.id}
-          shown={shown}
           working={working.get(conversation.id)}
         />
       )
@@ -518,7 +599,12 @@ function Tree({
           </div>
         </DialogContent>
       </Dialog>
-      <ProjectPath />
+      <Project
+        root={rootRows[0]?.id}
+        shown={rootRows[0] !== undefined && rootRows[0].id === shownTop?.id}
+      >
+        {rootRows.map((root) => tree(root))}
+      </Project>
       <nav aria-label="Conversations" className="flex flex-col gap-px">
         <div className="mb-1 border-b border-border/60 pb-1">
           {ultimate ? tree(ultimate) : standingRow(undefined)}
@@ -542,15 +628,6 @@ function Tree({
                 tree(conversation)
               ),
             )}
-          </div>
-        )}
-        {rootRows.length > 0 && (
-          <div
-            aria-label="Memory"
-            className="mb-1 flex flex-col gap-px border-b border-border/60 pb-1"
-            role="group"
-          >
-            {rootRows.map((root) => tree(root))}
           </div>
         )}
         {/* What watches or runs in the background, from optional extensions; each section brings its own rule. */}

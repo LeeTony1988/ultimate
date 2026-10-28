@@ -82,7 +82,7 @@ function TimeToDream() {
 }
 
 /**
- * The Memory panel's header: which chapter this memory belongs to (a way to the others), and the Dream button, since
+ * The Memory surface's header: which chapter this memory belongs to (a way to the others), and the Dream button, since
  * dreaming distils this memory, among other things.
  */
 function useDreamButton() {

@@ -6,6 +6,7 @@ import {
   GitBranchIcon,
   GitForkIcon,
   ScrollTextIcon,
+  SearchIcon,
   StickyNoteIcon,
   SunriseIcon,
   Trash2Icon,
@@ -30,6 +31,10 @@ import {
   formatAgo,
   formatKeys,
   formatTime,
+  formatTokens,
+  Header,
+  Sidebar,
+  StatusLine,
   useConversation,
   useDocOf,
   useNow,
@@ -42,9 +47,9 @@ import { store } from '@/sdk/client'
 import { ConversationRef, Unsummarized } from '../conversations/ui.tsx'
 import { talkToUltimate } from '../subagents/ui.tsx'
 import { Open } from '../workspaces/ui.tsx'
-import { ForgetAction, MemoryDoc } from './refs.ts'
+import { ForgetAction, MemoryDoc, TallyDoc } from './refs.ts'
 import type { MemoryItem } from './refs.ts'
-import { column, MEMORY_FOCUS, MEMORY_PANEL, MemoryHeader, useRoots } from './ui.tsx'
+import { column, MEMORY_FOCUS, MEMORY_SURFACE, MemoryHeader, useRoots } from './ui.tsx'
 import { GoBackAction, Rewound, RewoundDependent } from './rewind.tsx'
 
 function userText(entry: EntryRecord) {
@@ -479,17 +484,17 @@ function MemoryRow({
     setFocus(null)
   }, [focus, slug, setFocus])
   return (
-    <li className="group/memory min-w-0 rounded-sm hover:bg-muted/40" data-memory={slug} ref={row}>
+    <li className="group/memory min-w-0 rounded-md hover:bg-muted/40" data-memory={slug} ref={row}>
       <div className="flex min-w-0 items-start">
         <button
           aria-expanded={open}
-          className="flex min-w-0 flex-1 cursor-pointer flex-col gap-0.5 px-1.5 py-1 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          className="flex min-w-0 flex-1 cursor-pointer flex-col gap-0.5 rounded-md px-2 py-1.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring"
           onClick={() => setOpen((current) => !current)}
           title={open ? 'Show less' : 'Show the memory'}
           type="button"
         >
-          <span className="flex w-full min-w-0 items-center gap-1.5 font-mono text-[10px] leading-4 text-muted-foreground">
-            <span className="min-w-0 truncate text-foreground/80">{slug}</span>
+          <span className="flex w-full min-w-0 items-center gap-1.5 font-mono text-[10.5px] leading-4 text-muted-foreground">
+            <span className="min-w-0 truncate">{slug}</span>
             <span
               className="ml-auto shrink-0 pl-1 text-muted-foreground/60"
               title={new Date(item.updated).toLocaleString()}
@@ -499,8 +504,8 @@ function MemoryRow({
           </span>
           <span
             className={cn(
-              'block text-[12px] leading-snug break-words text-foreground/85',
-              !open && 'truncate',
+              'block text-[13px] leading-snug break-words text-foreground/90',
+              !open && 'line-clamp-2',
             )}
           >
             {item.line}
@@ -510,7 +515,7 @@ function MemoryRow({
           <TooltipTrigger asChild>
             <button
               aria-label={`Forget ${slug}`}
-              className="invisible mt-0.5 mr-0.5 flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground/70 outline-none group-focus-within/memory:visible group-hover/memory:visible pointer-coarse:visible hover:bg-muted hover:text-error focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+              className="invisible mt-1.5 mr-1 flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground/70 outline-none group-focus-within/memory:visible group-hover/memory:visible pointer-coarse:visible hover:bg-muted hover:text-error focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
               disabled={forgetting}
               onClick={() => {
                 setForgetting(true)
@@ -523,7 +528,7 @@ function MemoryRow({
               }}
               type="button"
             >
-              <Trash2Icon className="size-3" />
+              <Trash2Icon className="size-3.5" />
             </button>
           </TooltipTrigger>
           <TooltipContent className="font-mono text-[11px]" side="left">
@@ -532,8 +537,8 @@ function MemoryRow({
         </Tooltip>
       </div>
       {open && (
-        <div className="min-w-0 px-1.5 pb-2">
-          <div className="min-w-0 text-[12.5px] leading-relaxed text-muted-foreground">
+        <div className="min-w-0 px-2 pb-3">
+          <div className="min-w-0 text-[13px] leading-relaxed text-muted-foreground">
             <MessageResponse>{item.body}</MessageResponse>
           </div>
           {item.source && <MemorySource source={item.source} />}
@@ -550,55 +555,133 @@ const kindSections = [
 ] as const
 
 /**
- * The Memory panel: each root's project memory, what every new branch starts from, grouped into decisions, facts and
- * lessons, newest first. A row unfolds its body and source; @ultimate maintains it.
+ * The Memory surface: each root's project memory, what every new branch starts from, in a reading column beside the
+ * sidebar, grouped into decisions, facts and lessons, newest first. A row unfolds its body and source; @ultimate
+ * maintains it. The filter narrows every group to the memories whose slug, line or body contain its text.
  */
-function MemoryPanel() {
+function MemorySurface() {
   const roots = useRoots() ?? []
+  const [filter, setFilter] = useState('')
   return (
-    <div className="flex flex-col pb-4" data-lineage-memory-panel>
-      <Provided input={null} point={MemoryHeader}>
-        {(header) => header}
-      </Provided>
-      {roots.map((root) => (
-        <RootMemory key={root} label={roots.length > 1} root={root} />
-      ))}
-    </div>
+    <>
+      <div className="flex min-h-0 flex-1">
+        <Sidebar />
+        <main className="flex min-w-0 flex-1 flex-col">
+          <Header>
+            <span className="flex shrink-0 items-center gap-2 text-[13px] font-medium">
+              <BrainIcon className="size-4 text-muted-foreground" />
+              Memory
+            </span>
+          </Header>
+          <div className="min-h-0 flex-1 overflow-y-auto" data-lineage-memory-surface>
+            <div className={cn(column(), 'pt-4 pb-10')}>
+              {/* The header pads itself for a panel; in the column it aligns with the rows' edges. */}
+              <div className="[&>*]:px-0">
+                <Provided input={null} point={MemoryHeader}>
+                  {(header) => header}
+                </Provided>
+              </div>
+              {roots.map((root) => (
+                <RootMemory
+                  filter={filter}
+                  key={root}
+                  label={roots.length > 1}
+                  root={root}
+                  setFilter={root === roots[0] ? setFilter : undefined}
+                />
+              ))}
+            </div>
+          </div>
+        </main>
+      </div>
+      <StatusLine />
+    </>
   )
 }
 
-function RootMemory({ root, label }: { root: number; label: boolean }) {
+function RootMemory({
+  root,
+  label,
+  filter,
+  setFilter,
+}: {
+  root: number
+  label: boolean
+  filter: string
+  /** The filter box shows above the first root's memories only, and filters every root. */
+  setFilter?: (text: string) => void
+}) {
+  const needle = filter.trim().toLowerCase()
   const memories = useDocOf(root, MemoryDoc)?.memories ?? {}
+  const tally = useDocOf(root, TallyDoc)
   const now = useNow(60_000)
   const slugs = Object.keys(memories).toSorted(
     (a, b) => memories[b].updated - memories[a].updated || a.localeCompare(b),
   )
+  const matches = slugs.filter(
+    (slug) =>
+      !needle ||
+      [slug, memories[slug].line, memories[slug].body].some((text) =>
+        text.toLowerCase().includes(needle),
+      ),
+  )
   return (
-    <section className="px-3" data-lineage-memory={root}>
-      {label && <p className="pt-3 font-mono text-[11px] text-foreground">#{root}</p>}
+    <section data-lineage-memory={root}>
+      {label && <p className="pt-4 font-mono text-[11px] text-foreground">#{root}</p>}
       {slugs.length === 0 ? (
-        <p className="py-6 text-xs text-muted-foreground">
+        <p className="py-8 text-[12.5px] text-muted-foreground">
           No memories yet. @ultimate keeps decisions, facts and lessons here as branches land.
         </p>
       ) : (
-        kindSections.map(([kind, title]) => {
-          const shown = slugs.filter((slug) => memories[slug].kind === kind)
-          if (!shown.length) return null
-          return (
-            <div className="mt-3" data-memory-kind={kind} key={kind}>
-              <h3 className="flex items-center gap-1.5 pb-1 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase">
-                <span className={cn('size-1.5 rounded-full', kindDots[kind])} />
-                {title}
-                <span className="text-muted-foreground/60">{shown.length}</span>
-              </h3>
-              <ul className="-mx-1.5 flex flex-col">
-                {shown.map((slug) => (
-                  <MemoryRow item={memories[slug]} key={slug} now={now} root={root} slug={slug} />
-                ))}
-              </ul>
-            </div>
-          )
-        })
+        <>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 pt-3">
+            <p className="min-w-0 font-mono text-[10.5px] text-muted-foreground">
+              {needle ? `${matches.length} of ${slugs.length}` : slugs.length} memories
+              {tally?.briefTokens !== undefined && (
+                <span title="Tokens every new branch starts from">
+                  {' · '}
+                  {formatTokens(tally.briefTokens)} tokens
+                </span>
+              )}
+            </p>
+            {setFilter && (
+              <label className="ml-auto flex h-7 min-w-0 items-center gap-1.5 rounded-md border border-border/70 px-2 focus-within:border-ring max-sm:w-full sm:w-56">
+                <SearchIcon className="size-3 shrink-0 text-muted-foreground" />
+                <input
+                  aria-label="Filter memories"
+                  className="min-w-0 flex-1 bg-transparent font-mono text-[11px] outline-none placeholder:text-muted-foreground/60"
+                  onChange={(event) => setFilter(event.target.value)}
+                  onKeyDown={(event) => event.key === 'Escape' && setFilter('')}
+                  placeholder="filter"
+                  value={filter}
+                />
+              </label>
+            )}
+          </div>
+          {matches.length === 0 && (
+            <p className="py-8 font-mono text-[11.5px] text-muted-foreground/70">
+              No memory mentions “{filter.trim()}”.
+            </p>
+          )}
+          {kindSections.map(([kind, title]) => {
+            const shown = matches.filter((slug) => memories[slug].kind === kind)
+            if (!shown.length) return null
+            return (
+              <div className="mt-6" data-memory-kind={kind} key={kind}>
+                <h3 className="flex items-center gap-1.5 border-b border-border/60 pb-1.5 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase">
+                  <span className={cn('size-1.5 rounded-full', kindDots[kind])} />
+                  {title}
+                  <span className="text-muted-foreground/60">{shown.length}</span>
+                </h3>
+                <ul className="-mx-2 flex flex-col pt-1">
+                  {shown.map((slug) => (
+                    <MemoryRow item={memories[slug]} key={slug} now={now} root={root} slug={slug} />
+                  ))}
+                </ul>
+              </div>
+            )
+          })}
+        </>
       )}
     </section>
   )
@@ -630,8 +713,16 @@ export default defineWebExtension({
   },
   messageActions: [GoBackAction],
   composer: RootComposer,
-  panels: [
-    { id: MEMORY_PANEL, title: 'Memory', icon: BrainIcon, component: MemoryPanel, order: 6 },
+  // After Review, so the switcher's existing mod+1…9 keys stay put.
+  surfaces: [
+    {
+      id: MEMORY_SURFACE,
+      title: 'Memory',
+      icon: BrainIcon,
+      description: 'What every new branch starts from: decisions, facts and lessons',
+      order: 70,
+      component: MemorySurface,
+    },
   ],
   slots: { overlay: [Roots] },
   // A root runs no turns and gets no summaries: its tally speaks for it.

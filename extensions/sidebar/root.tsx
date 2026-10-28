@@ -1,17 +1,7 @@
-import { ScrollTextIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
-import {
-  cn,
-  formatAgo,
-  formatTokens,
-  Provided,
-  useAction,
-  useDocOf,
-  useEvents,
-  useUltimate,
-} from '@/sdk'
-import { MEMORY_PANEL, MemoryDoc, TallyDoc } from '../lineage/ui.tsx'
+import { cn, formatAgo, formatTokens, Provided, useAction, useDocOf, useEvents } from '@/sdk'
+import { MEMORY_SURFACE, MemoryDoc, TallyDoc, useOpenMemory } from '../lineage/ui.tsx'
 import { Committed } from '../coding-tools/ui.tsx'
 import { MessagesDoc, conversationState, emptyMessages } from '../messages/ui.tsx'
 import { StandingDoc } from '../subagents/ui.tsx'
@@ -22,6 +12,7 @@ import type { Landing } from './landings.ts'
 import { RowMenu, saveTitle } from './rows.tsx'
 import { Section } from './section.tsx'
 import { SummaryHistory } from './summaries.tsx'
+import { useShell } from './state.tsx'
 import { workOf } from './work.ts'
 import type { Work } from './work.ts'
 
@@ -144,7 +135,7 @@ function PhasedFlightRow({
   onConclude,
   phase,
 }: FlightProps & { phase?: { word: string; waiting: boolean } }) {
-  const actions = useUltimate()
+  const actions = useShell()
   const [editing, setEditing] = useState(false)
   const cancelled = useRef(false)
   const feature = useOverview()[conversation.id]?.feature
@@ -362,20 +353,10 @@ const kinds = [
 
 /**
  * A root's project memory as one row: what every new branch starts from, counted by kind, with the brief's size; a
- * click opens the Memory panel. Its tally, the browsable history behind it, is a quiet History link under it, whose
- * footer compacts it. A root without memories yet shows its context's size, and the panel says it has none yet.
+ * click opens the Memory surface, and the row shows selected while it does. Its tally, the browsable history behind
+ * it, opens from the project header above it. A root without memories yet shows its context's size.
  */
-export function MemoryRow({
-  conversation,
-  shown,
-  working,
-}: {
-  conversation: ConversationSummary
-  shown: boolean
-  working?: 'self' | 'subagents'
-}) {
-  const actions = useUltimate()
-  const id = conversation.id
+export function useMemorySummary(id: number) {
   const tally = useDocOf(id, TallyDoc)
   const memories = Object.values(useDocOf(id, MemoryDoc)?.memories ?? {})
   const counts = kinds
@@ -383,17 +364,41 @@ export function MemoryRow({
       ([kind, plural]) => [memories.filter((item) => item.kind === kind).length, plural] as const,
     )
     .filter(([count]) => count > 0)
-  const tokens = tally?.since === undefined ? undefined : (tally.briefTokens ?? tally.tokens)
-  const openContext = () => {
-    actions.showSurface('agent')
-    actions.switchConversation(id)
+  return {
+    total: memories.length,
+    tokens: tally?.since === undefined ? undefined : (tally.briefTokens ?? tally.tokens),
+    counts: counts.length
+      ? counts
+          .map(([count, plural]) => `${count} ${count === 1 ? plural.slice(0, -1) : plural}`)
+          .join(' · ')
+      : 'none yet',
   }
+}
+
+/**
+ * A root's project memory as one row in the project block, opening the Memory surface (see `useMemorySummary`).
+ */
+export function MemoryRow({
+  conversation,
+  working,
+}: {
+  conversation: ConversationSummary
+  working?: 'self' | 'subagents'
+}) {
+  const shown = useShell().surface === MEMORY_SURFACE
+  const openMemory = useOpenMemory()
+  const id = conversation.id
+  const { tokens, counts } = useMemorySummary(id)
   return (
     <div data-conversation={id} data-root-row={id}>
       <button
+        aria-current={shown ? 'page' : undefined}
         aria-label={`Project memory of #${id}`}
-        className="mx-2 flex h-11 w-[calc(100%-1rem)] min-w-0 cursor-pointer items-center gap-2.5 rounded-md pr-2 pl-2 text-left outline-none hover:bg-sidebar-accent/50 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
-        onClick={() => actions.openPanel(MEMORY_PANEL)}
+        className={cn(
+          'mx-2 flex h-11 w-[calc(100%-1rem)] min-w-0 cursor-pointer items-center gap-2.5 rounded-md pr-2 pl-2 text-left outline-none hover:bg-sidebar-accent/50 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset',
+          shown && 'bg-sidebar-accent hover:bg-sidebar-accent',
+        )}
+        onClick={() => openMemory()}
         title="What every new branch starts from · open Memory"
         type="button"
       >
@@ -413,30 +418,9 @@ export function MemoryRow({
             )}
           </span>
           <span className="truncate font-mono text-[10px] leading-4 text-muted-foreground">
-            {counts.length
-              ? counts
-                  .map(
-                    ([count, plural]) => `${count} ${count === 1 ? plural.slice(0, -1) : plural}`,
-                  )
-                  .join(' · ')
-              : 'none yet'}
+            {counts}
           </span>
         </span>
-      </button>
-      <button
-        aria-current={shown ? 'true' : undefined}
-        className={cn(
-          'mx-2 flex h-6 w-[calc(100%-1rem)] min-w-0 cursor-pointer items-center gap-1.5 rounded-md pr-2 pl-[42px] text-left font-mono text-[10px] text-muted-foreground/70 outline-none hover:bg-sidebar-accent/50 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset',
-          shown && 'bg-sidebar-accent text-foreground',
-        )}
-        data-root-context={id}
-        onClick={openContext}
-        title="Every branch, abstract and landing, with breadcrumbs"
-        type="button"
-      >
-        <ScrollTextIcon className="size-3 shrink-0" />
-        <span className="truncate">History</span>
-        <span className="shrink-0 text-muted-foreground/50">#{id}</span>
       </button>
     </div>
   )

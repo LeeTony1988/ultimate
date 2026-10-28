@@ -10,7 +10,7 @@ import { passLabels } from './moon.tsx'
 import { busyElsewhere, PASSES } from './types.ts'
 import type { PassName } from './types.ts'
 
-/** The dialog id the "Dream…" command, the Memory panel's button and the status-line hint open. */
+/** The dialog id the "Dream…" command, the Memory surface's button and the status-line hint open. */
 export const dreamDialog = 'dream.start'
 
 const passWhat: Record<PassName, string> = {

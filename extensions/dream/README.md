@@ -3,7 +3,7 @@ for @ultimate and the dream branch, is in [DREAM.md](DREAM.md); this file is the
 
 ## Flow
 
-1. The user presses **Dream** (Memory panel header or ⌘K "Dream…"). The modal shows what blocks a start, live from the
+1. The user presses **Dream** (Memory surface header or ⌘K "Dream…"). The modal shows what blocks a start, live from the
    conversation list and `dream.sessions`: conversations at work besides @ultimate, or a session still open. The
    session's started card has End session until its journal is filed, so a dream that stopped early never blocks the
    next one.

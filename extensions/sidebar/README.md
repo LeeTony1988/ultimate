@@ -13,7 +13,17 @@ a bot for any other resident — with a presence dot in its corner (pulsing whil
 waits on you). Then a fixed display name (`Ultimate`, `Lander`, else the name capitalised) with
 `@name` small and muted. The same mark sits in the title bar's button and before standing senders in chat bubbles.
 
-@ultimate has its own section at the very top: its row shows `working`, `idle` or an amber
+The **project** heads the sidebar: its path from home (or `<project> #<worktree>`, the full path on hover) with a quiet
+`History #id` on the right, and its root's **Memory** row under it, as one block. Clicking the path opens the root's
+History, the project's read-only tally. A chevron before the path folds the block to that one row (folded by default,
+kept in `ext.conversations.projectOpen`); folded, a quiet brain and memory count on the right of the path row opens
+Memory instead.
+
+The sidebar also stands beside lineage's Memory surface, so rows open conversations through `useShell` (`state.tsx`),
+which brings the Agent surface back; beside Memory no conversation row is highlighted, the Memory row (or the folded
+block's brain) is.
+
+@ultimate has its own section below the project: its row shows `working`, `idle` or an amber
 `N waiting on you` (reply-enabled messages to you still waiting on your answer, plus one for its current final
 answer when that asks you questions), and the age of its latest
 message. Clicking it opens @ultimate on the Agent surface through `subagents.standing {name: 'ultimate'}`, also before
@@ -32,6 +42,7 @@ Every section of the sidebar folds the same way (`Section`, `section.tsx`): a qu
 a count bubble, open by default, its fold state kept per section in `ext.conversations.closedSections`; the Scheduled
 section of the `sidebar.top` slot draws the same heading. Top to bottom:
 
+- **Project**: the chevron, the path, opening History, and the Memory row (or, folded, its brain count).
 - **@ultimate**, then the **Agents** group: the lander first, with its **Landed · N** section right under its row,
   aligned with the other sections, then other standing agents.
 - **Landed**: the latest landings of every root (lineage's `recent {id, types: ['landed'], limit: 20}`), newest
@@ -44,10 +55,9 @@ section of the `sidebar.top` slot draws the same heading. Top to bottom:
   entry does.
 - **Memory**: one row per root (`MemoryRow`, `root.tsx`) with a brain mark, the brief's size (what every new branch
   starts from; the whole context's while it has no memories) and its memories counted by kind (`4 decisions · 5 facts
-  · 3 lessons`). Clicking it opens lineage's **Memory** panel, grouped into decisions, facts and lessons (empty until
-  @ultimate remembers something). Below it, a quiet **History #id** line opens the root's tally, the
-  browsable history (every branch, abstract and landing), whose footer offers Compact (lineage `compact {id}`) and
-  Talk to @ultimate. The row has no menu; a root is never renamed, cleared or concluded here.
+  · 3 lessons`). Clicking it opens lineage's **Memory** surface, grouped into decisions, facts and lessons (empty
+  until @ultimate remembers something), and the row shows selected while it is open. The project path above it opens the root's tally, the browsable history (every
+  branch, abstract and landing). The row has no menu; a root is never renamed, cleared or concluded here.
 - The `sidebar.top` slot: background work that optional extensions contribute without the sidebar importing them,
   automations' **Scheduled**, up to five compact rows with `+N more`, and its own
   bottom rule. Each hides while it has nothing active.

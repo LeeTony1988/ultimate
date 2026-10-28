@@ -12,7 +12,7 @@ A `recall.memories` entry right after the input: one user-role message with the 
 
 ## What the user sees
 
-While a message is checked, a band of light runs around its bubble's border (`userBubble` contribution), then fades. Recalled memories fly in under the bubble as chips; a chip opens the Memory panel on that memory. Nothing shows when no memory applies.
+While a message is checked, a band of light runs around its bubble's border (`userBubble` contribution), then fades. Recalled memories fly in under the bubble as chips; a chip opens the Memory surface on that memory. Nothing shows when no memory applies.
 
 ## Tuning
 

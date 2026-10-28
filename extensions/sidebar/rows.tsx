@@ -18,7 +18,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { api, cn, errorMessage, formatAgo, Provided, useDocOf, useUltimate } from '@/sdk'
+import { api, cn, errorMessage, formatAgo, Provided, useDocOf } from '@/sdk'
+import { useShell } from './state.tsx'
 import { store } from '@/sdk/client'
 import { MessagesDoc, conversationState, emptyMessages } from '../messages/ui.tsx'
 import {
@@ -142,7 +143,7 @@ function PhasedRow({
   const hasActivity = !!(displayPhase || activity)
   // One indicator per row: the phase line's pulsing dot, else the leading mark's while no phase is known yet.
   const markWorking = displayPhase ? undefined : working
-  const actions = useUltimate()
+  const actions = useShell()
   const [editing, setEditing] = useState(false)
   const cancelled = useRef(false)
   /** Whether the row button takes focus back once the field closes: after Enter or Escape, not a click elsewhere. */
@@ -285,7 +286,7 @@ export function RowMenu({
   onRename: () => void
   onConclude: (conclude: boolean) => void
 }) {
-  const actions = useUltimate()
+  const actions = useShell()
   /** What a menu item does once the menu has closed, so focus lands where it should. */
   const afterMenu = useRef<() => void>(undefined)
   return (
@@ -476,7 +477,7 @@ function TaskedSubagentLine({
   depth,
   task,
 }: ChildRowProps & { depth: number; task?: { chip: ReactNode; title: string } }) {
-  const actions = useUltimate()
+  const actions = useShell()
   const log = useDocOf(1, MessagesDoc) ?? emptyMessages
   const state = conversationState(
     {
@@ -545,7 +546,7 @@ function TaskedChildRow({
   parked,
   task,
 }: ChildRowProps & { task?: { chip: ReactNode; title: string } }) {
-  const actions = useUltimate()
+  const actions = useShell()
   const log = useDocOf(1, MessagesDoc) ?? emptyMessages
   const state = conversationState(
     {

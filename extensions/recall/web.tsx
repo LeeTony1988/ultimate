@@ -9,7 +9,7 @@ import type { Recalled } from './types.ts'
 
 /**
  * On the user's bubble: while recall checks the message, a band of light runs around its border and fades; recalled
- * memories then fly in as chips hanging on its bottom edge, each opening the Memory panel. Nothing when none applies.
+ * memories then fly in as chips hanging on its bottom edge, each opening the Memory surface. Nothing when none applies.
  */
 function RecallBubble({ entry }: { entry: EntryRecord }) {
   const pending = useDoc(RecallDoc)?.pending === entry.id

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, events, formatAgo, useStore, useUltimate } from '@/sdk'
+import { api, events, formatAgo, useStore } from '@/sdk'
 import { store } from '@/sdk/client'
 import { RecentAction, TallyDoc } from '../lineage/ui.tsx'
 import { groupLandings, groupRange } from './landings.ts'
@@ -7,7 +7,7 @@ import type { Landing, LandingGroup } from './landings.ts'
 import { CommitCount } from '../workspaces/ui.tsx'
 import { FeatureTag } from '../conversations/ui.tsx'
 import { More, Section } from './section.tsx'
-import { useSidebarState } from './state.tsx'
+import { useShell, useSidebarState } from './state.tsx'
 
 /**
  * The latest landings of every root (up to 20 each), newest first. Read again whenever a root's token count changes,
@@ -77,7 +77,7 @@ export function Landed({ landings, now }: { landings: readonly Landing[]; now: n
 }
 
 function LandedRow({ group, now }: { group: LandingGroup; now: number }) {
-  const actions = useUltimate()
+  const actions = useShell()
   const latest = group.landings[0]
   const commits = group.landings.reduce((sum, landing) => sum + landing.commits, 0)
   const single = group.landings.length === 1
