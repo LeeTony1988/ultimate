@@ -1,7 +1,7 @@
 import { cn } from 'cn'
 import { XIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import type { ClipboardEvent } from 'react'
+import type { ClipboardEvent, DragEvent } from 'react'
 import { ToolImage } from '@/components/ai/tool'
 import { imageMimeTypes, maxImageBytes, maxImages } from '../../../shared/protocol.ts'
 import { errorMessage } from '../sdk/format.ts'
@@ -41,6 +41,18 @@ export function useImagePaste({
       })
     if (!files.length) return
     event.preventDefault()
+    await add(files)
+  }
+
+  /** Attach the images dropped on the editor; the page itself never navigates to a dropped file (`main.tsx`). */
+  async function drop(event: DragEvent<HTMLTextAreaElement>) {
+    const files = Array.from(event.dataTransfer.files).filter((file) =>
+      file.type.startsWith('image/'),
+    )
+    if (files.length) await add(files)
+  }
+
+  async function add(files: readonly File[]) {
     if (pending.current || disabled()) return
     if (
       images.length + files.length > maxImages ||
@@ -79,7 +91,7 @@ export function useImagePaste({
     }
   }
 
-  return { paste, reading, pending }
+  return { paste, drop, reading, pending }
 }
 
 export function ImagePreviews({

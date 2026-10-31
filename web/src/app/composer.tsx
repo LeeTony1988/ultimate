@@ -257,7 +257,7 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
   const setError = (message: string | undefined) => draft.set({ error: message })
   const setImages = (change: (images: Draft['images']) => Draft['images']) =>
     draft.set({ images: change(draft.get().images), revision: draft.get().revision + 1 })
-  const { paste, reading, pending } = useImagePaste({
+  const { paste, drop, reading, pending } = useImagePaste({
     images,
     setImages,
     setError,
@@ -370,6 +370,7 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
           autoFocus={!touchKeyboard()}
           readOnly={loading || sending}
           onPaste={(event) => void paste(event)}
+          onDrop={(event) => void drop(event)}
           id={scoped === undefined ? 'composer-input' : `composer-input-${scoped}`}
           data-conversation={id}
           onChange={(event) => update(event.target.value)}
