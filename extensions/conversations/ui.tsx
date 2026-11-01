@@ -33,4 +33,5 @@ export {
   OverviewDoc,
   RenameAction,
   ResumeAction,
+  SummariesAction,
 } from './refs.ts'
