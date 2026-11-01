@@ -167,9 +167,17 @@ export function createStore(options: StoreOptions = {}) {
         if (!state.models || restarted) void refreshModels()
         break
       }
-      case 'conversations':
-        set({ conversations: data as ServerEvents['conversations'] })
+      case 'conversations': {
+        // The server resends the whole list when one row changes: unchanged rows keep their object, so readers of one
+        // row (`useConversationSummary`) skip the re-render.
+        const previous = new Map(state.conversations.map((summary) => [summary.id, summary]))
+        const conversations = (data as ServerEvents['conversations']).map((summary) => {
+          const kept = previous.get(summary.id)
+          return kept && JSON.stringify(kept) === JSON.stringify(summary) ? kept : summary
+        })
+        set({ conversations })
         break
+      }
       case 'ops':
         if (state.view) {
           const view = applyImmutable(state.view, data as ServerEvents['ops'])
@@ -314,9 +322,11 @@ export function createStore(options: StoreOptions = {}) {
       const list = [...kinds.keys()].toSorted().join(',')
       if (docStreams.get(conversation)?.kinds !== list) openDocs(conversation, list)
       // Kinds nobody watches anymore go; the rest keep their value until the new stream's snapshot replaces it.
-      docsOf[conversation] = Object.fromEntries(
-        Object.entries(state.docsOf[conversation] ?? {}).filter(([kind]) => kinds.has(kind)),
-      )
+      // Unchanged documents stay the same object, so watching another conversation re-renders none of their readers.
+      const current = state.docsOf[conversation] ?? {}
+      docsOf[conversation] = Object.keys(current).every((kind) => kinds.has(kind))
+        ? current
+        : Object.fromEntries(Object.entries(current).filter(([kind]) => kinds.has(kind)))
     }
     const viewsOf = Object.fromEntries(
       Object.entries(state.viewsOf).filter(([id]) => watchedViews.has(Number(id))),

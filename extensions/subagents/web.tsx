@@ -24,6 +24,7 @@ import {
   defineWebExtension,
   Provided,
   useConversation,
+  useConversationSummary,
   useDocOf,
   useStore,
   useToolDuration,
@@ -32,7 +33,7 @@ import {
 } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
 import { ConversationTask } from '../conversations/ui.tsx'
-import { stateLabel, useWorkspaceConversations as useConversations } from '../workspaces/ui.tsx'
+import { stateLabel, useWorkspaces } from '../workspaces/ui.tsx'
 import type { Workspace as Isolate, LandResult } from '../workspaces/types.ts'
 import { DefinitionDialog, Definitions } from './definitions.tsx'
 import { Tag } from './parts.tsx'
@@ -67,7 +68,7 @@ function StateTag({ isolate }: { isolate: Isolate }) {
 
 /** The call card's compact workspace: branch and state from the child's summary. */
 function IsolateBadge({ childId }: { childId: number }) {
-  const isolate = useConversations().find((conversation) => conversation.id === childId)?.workspace
+  const isolate = useWorkspaces()[String(childId)]
   if (!isolate) return null
   return (
     <span
@@ -85,15 +86,14 @@ function SubagentCall({ call }: { call: ToolCallView }) {
   const duration = useToolDuration(call)
   const { switchConversation } = useUltimate()
   const id = useConversation((conversation) => conversation.id)
-  const conversations = useConversations()
   const action = text(call.args.action) || 'start'
   const details = call.details as
     | { conversationId?: number; background?: boolean; yielded?: boolean; answerId?: number }
     | undefined
   const childId =
     details?.conversationId ?? (typeof call.args.id === 'number' ? call.args.id : undefined)
-  const child = conversations.find((conversation) => conversation.id === childId)
-  const agent = text(call.args.agent) || child?.label
+  const child = useConversationSummary(childId)
+  const agent = child?.label || text(call.args.label) || text(call.args.agent)
   const background = call.args.background === true || details?.background === true
   const instruction = action === 'start' ? text(call.args.task) : text(call.args.text)
   const finished = call.status === 'done' || call.status === 'error'
