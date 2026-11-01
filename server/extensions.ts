@@ -555,7 +555,12 @@ export async function loadExtensions(
             )
           )
             throw new Error('pollActions must contain registered action names')
-          const secrets = validateSecrets(module.secrets ?? [])
+          // A function derives them from the facet's config; it runs again on each reload.
+          const secrets = validateSecrets(
+            typeof module.secrets === 'function'
+              ? await module.secrets(facetHost)
+              : (module.secrets ?? []),
+          )
           host.registry.install(trace.tools(extension))
           const previousHost = facetHosts.get(name)
           facetHosts.set(name, facetHost)
