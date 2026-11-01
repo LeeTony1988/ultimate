@@ -23,7 +23,7 @@ import type { ConversationSummary, ExtensionInfo, SystemInfo } from '../shared/p
 import type { PreparedHost } from './harness.ts'
 import { Metadata } from './metadata.ts'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { AgentDoc } from '@earendil-works/pi-durable'
+import { AgentDoc, LiveDoc } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import type { Access } from './request-security.ts'
 import { EventFeed, eventLog } from './events.ts'
@@ -262,6 +262,8 @@ export async function loadExtensions(
   const findDoc = (kind: string) =>
     [
       EventFeed as never as ConversationDocToken<JsonObject>,
+      // A conversation's live round without its transcript, for watchers of many conversations (the sound of agents).
+      LiveDoc as never as ConversationDocToken<JsonObject>,
       ...[...documents.values()].flat(),
     ].find((doc) => doc.definition.kind === kind)
   const openers = new Set<() => Promise<void>>()
