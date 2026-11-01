@@ -19,6 +19,7 @@ export async function setup(
   for (const command of commands) {
     signal.throwIfAborted()
     try {
+      // exec closes the command's input, so one that reads it gets EOF.
       const { program, args } = shell.argv(command, ['ULTIMATE_SOURCE'])
       await exec(program, args, {
         cwd: path,
@@ -37,3 +38,4 @@ export async function setup(
     }
   }
 }
+
