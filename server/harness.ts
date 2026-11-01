@@ -35,6 +35,7 @@ import type {
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import { createBuild } from './build.ts'
+import { spawn } from '../lib/spawn.ts'
 import { applyHttpProxySettings, configureHttpDispatcher } from './http.ts'
 import type { Notice } from '../shared/protocol.ts'
 
@@ -141,7 +142,8 @@ export async function prepareHarness(options: HostOptions) {
   const env = ({ cwd = projectRoot }: EnvTarget) => {
     let found = envs.get(cwd)
     if (!found) {
-      found = new NodeExecutionEnv({ cwd })
+      // Agents' commands start from the process helper (the patched spawn option), never by forking this process.
+      found = new NodeExecutionEnv({ cwd, spawn })
       envs.set(cwd, found)
     }
     return found

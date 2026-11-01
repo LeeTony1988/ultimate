@@ -20,7 +20,7 @@ export async function setup(
     signal.throwIfAborted()
     try {
       const { program, args } = shell.argv(command, ['ULTIMATE_SOURCE'])
-      const pending = exec(program, args, {
+      await exec(program, args, {
         cwd: path,
         env: { ...process.env, ULTIMATE_SOURCE: source },
         signal,
@@ -28,8 +28,6 @@ export async function setup(
         killSignal: 'SIGKILL',
         maxBuffer: 1024 * 1024,
       })
-      pending.child.stdin?.end()
-      await pending
     } catch (error) {
       const output = error as Error & { stdout?: string; stderr?: string }
       throw new Error(
