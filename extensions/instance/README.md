@@ -2,6 +2,8 @@ Run an on-demand second Ultimate to test core changes before restarting the shar
 
 `instance` supports start, stop, logs and list. An isolated caller previews its ready workspace; `start {subagent: <child id>}` selects an owned child's workspace. A shared caller previews the host source and project. When the project is Ultimate itself, a workspace preview runs the workspace's own source and requires `server/main.ts` and `node_modules`; run `pnpm install` first. In any other project the host's Ultimate runs with the workspace as its project, and the prompt says the preview is not the project's own app. Previews do not prevent landing or removal.
 
+A preview of a git project lands on its own branch, `ultimate/<hash>-preview` (the hash of its home, like its workspace branches), created at the project's tip, and never pushes, whatever `lander.push` says: its workspaces target that branch (`ULTIMATE_PREVIEW_BRANCH`). Its git processes also include `<home>/preview.gitconfig` in the previewed repository only (`includeIf gitdir:`): every push there is rewritten to a transport that does not exist, and a reference-transaction hook refuses changes to any branch or tag outside the preview's own `ultimate/<hash>-` branches. Stop and the sweep delete those branches with the home.
+
 `api.ts` exposes optional `InstanceApi`: `start({ home })` uses the same startup and three-instance limit as the tool,
 but always runs `host.projectRoot` with the host's Ultimate source, without a conversation workspace. It returns
 `{ id, url }`; `stop(id)` stops it. These service instances are not conversation previews and do not appear in the
