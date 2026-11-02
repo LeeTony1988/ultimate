@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { JsonValue } from '@earendil-works/chord'
-import { Type } from '@earendil-works/pi-ai'
+import { Type } from 'typebox'
 import {
   AgentDoc,
   defineDoc,
@@ -775,7 +775,7 @@ export default function automations(host: ExtensionHost) {
           model: Type.Optional(Type.Object({ provider: Type.String(), modelId: Type.String() })),
           thinking: Type.Optional(
             Type.Union(
-              ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map((v) =>
+              (['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const).map((v) =>
                 Type.Literal(v),
               ),
             ),

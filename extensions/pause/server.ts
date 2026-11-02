@@ -1,4 +1,5 @@
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
+import { onCommit } from '../../lib/commits.ts'
 import { defineDoc, LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId, Cursor, SubmissionId } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -467,7 +468,7 @@ export default function pauseExtension(host: Host) {
       await card(host, doc)
     })
     // Every model answer Pi records lands in a commit; the first rate-limited one pauses.
-    unsubscribe = host.harness().subscribeCommits((publication) => {
+    unsubscribe = onCommit(host.harness(), (publication) => {
       for (const change of publication.changes) {
         const message = change.type === 'entry' ? change.value.model?.[0] : undefined
         // A host already paused stays paused: requests in flight that hit the limit park the same way, and only the

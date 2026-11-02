@@ -212,7 +212,7 @@ export default function prompt(host: ExtensionHost) {
   return defineExtension({
     name: 'prompt',
     hooks: [
-      // Pi upstream: @earendil-works/pi-durable@1.4.0 — patched transactional beforeInput hook.
+      // Pi upstream: @earendil-works/pi-durable@1.5.0 — patched transactional beforeInput hook.
       // The build is a note on the input that starts a run, not a system-prompt section: every hot reload changed that
       // section, and a changed system prompt rewrites the whole prompt cache. A conversation's first run records it.
       hook(GenerationTask, {
@@ -303,7 +303,7 @@ export default function prompt(host: ExtensionHost) {
             : []),
         ].join('\n')
       }),
-      // Pi upstream: @earendil-works/pi-coding-agent@1.4.0 src/core/system-prompt.ts and src/core/tools/*.ts — copied tool guidance adapted from unexported prompt contributions. Drop when Pi exports buildSystemPromptSections and the per-tool system prompt contributions.
+      // Pi upstream: @earendil-works/pi-coding-agent@1.5.0 src/core/system-prompt.ts and src/core/tools/*.ts — copied tool guidance adapted from unexported prompt contributions. Drop when Pi exports buildSystemPromptSections and the per-tool system prompt contributions.
       section('tools', (input) => {
         const names = new Set((input.agent.tools ?? []).map((tool) => tool.name))
         /** The shell this host runs, when the agent has it: PowerShell on Windows, Bash elsewhere (`lib/shell.ts`). */

@@ -1,6 +1,6 @@
 // `web-access`: a free web search tool over the `pi-web-access` package's stdio MCP server. Jina answers first and
 // Exa without a key; see README.md for the settings and secrets it reads.
-import { Type } from '@earendil-works/pi-ai'
+import { Type } from 'typebox'
 import type { JsonValue } from '@earendil-works/chord'
 import { defineExtension, defineTool, section } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../../server/extensions.ts'

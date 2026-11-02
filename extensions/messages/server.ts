@@ -1,5 +1,5 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { Type } from '@earendil-works/pi-ai'
+import { Type } from 'typebox'
 import {
   defineExtension,
   defineTool,
@@ -147,7 +147,7 @@ export default function messages(host: ExtensionHost) {
     tasks: [delivery(host), route(host)],
     hooks: [
       hook(GenerationTask, {
-        // Pi upstream: @earendil-works/pi-durable@1.4.0 — patched transactional beforeInput hook.
+        // Pi upstream: @earendil-works/pi-durable@1.5.0 — patched transactional beforeInput hook.
         beforeInput: (_input, api) => openQuestionsNote(api.tx, api.conversationId, Date.now()),
         onYield: async (_answer, api, ctx) => {
           const by = (await api.snapshot(Started, api.conversationId, ctx))?.by

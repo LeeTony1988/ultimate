@@ -6,6 +6,7 @@ import type {
   EntryId,
   JsonObject,
   SubmissionId,
+  TaskGraph,
 } from '@earendil-works/pi-durable'
 import type { ServerEvents, ConversationSummary, ConfigureRequest } from '../shared/protocol.ts'
 import { UI_REVISION, imageMimeTypes, maxImageBytes, maxImages } from '../shared/protocol.ts'
@@ -25,7 +26,7 @@ import { UserInputEvent } from '../shared/events.ts'
 import { admit, deviceOf } from './request-security.ts'
 import type { Access } from './request-security.ts'
 import { conversationIndex } from './project.ts'
-import { windowOps, windowView } from './view-window.ts'
+import { onCommit } from '../lib/commits.ts'
 
 class HttpError extends Error {
   status: number
@@ -154,7 +155,23 @@ export async function createApi(
 ) {
   const { harness, root } = opened
   const streams = new Set<() => Promise<void>>()
-  const graph = await harness.taskGraph(context)
+  // The live task graph, kept current synchronously as commits are adopted; its changes are sent at most every 100 ms.
+  let onGraph = () => {}
+  // A change can arrive before the observation resolves; it is newer than the observation's value.
+  const latest: { tasks?: TaskGraph } = {}
+  const graph = await harness.observeTaskGraph(
+    {
+      advance: (call) => {
+        if (call.kind !== 'value') return
+        latest.tasks = call.value
+        onGraph()
+      },
+      end: () => {},
+    },
+    context,
+  )
+  latest.tasks ??= graph.value
+  const tasks = () => latest.tasks!
   let timer: ReturnType<typeof setTimeout> | undefined
   let closed = false
   let summaries: ConversationSummary[] = []
@@ -205,7 +222,7 @@ export async function createApi(
     for (const fresh of refreshed) {
       const summary = {
         ...fresh,
-        busy: Object.values(graph.value.tasks).some(
+        busy: Object.values(tasks().tasks).some(
           (task) => task.conversationId === fresh.id && !task.background,
         ),
       }
@@ -220,18 +237,18 @@ export async function createApi(
   }
   await refreshConversations()
   projectIndex.update(summaries)
-  let lastGraph = JSON.stringify(graph.value)
-  const unsubscribeGraph = graph.subscribe(() => {
+  let lastGraph = JSON.stringify(tasks())
+  onGraph = () => {
     if (closed || timer) return
     timer = setTimeout(() => {
       timer = undefined
-      const current = JSON.stringify(graph.value)
-      if (current !== lastGraph) {
-        lastGraph = current
-        events.emit('tasks', graph.value)
+      const graphJson = JSON.stringify(tasks())
+      if (graphJson !== lastGraph) {
+        lastGraph = graphJson
+        events.emit('tasks', tasks())
         const next = summaries.map((summary) => ({
           ...summary,
-          busy: Object.values(graph.value.tasks).some(
+          busy: Object.values(tasks().tasks).some(
             (task) => task.conversationId === summary.id && !task.background,
           ),
         }))
@@ -241,8 +258,8 @@ export async function createApi(
         }
       }
     }, 100)
-  })
-  const unsubscribe = harness.subscribeCommits((publication) => {
+  }
+  const unsubscribe = onCommit(harness, (publication) => {
     if (closed) return
     const ids = new Set<ConversationId>()
     for (const change of publication.changes) {
@@ -252,7 +269,8 @@ export async function createApi(
         change.conversationId &&
         (change.record.kind === 'ultimate.metadata' ||
           (change.record.kind === 'pi.agent' &&
-            change.ops.some((op) => op[0] === 'r' || op[1][0] === 'cwd')))
+            (change.kind === 'retire' ||
+              change.ops.some((op) => op[0] === 'r' || op[1][0] === 'cwd'))))
       )
         ids.add(change.conversationId)
     }
@@ -292,36 +310,30 @@ export async function createApi(
       }
       const ui = await harness.watchDoc(UiState, root.id, context)
       if (ui) watches.push(ui)
-      const watch = await conversation.watch(context)
+      // Pi's window: the newest 150 entries, growing to 300 before its oldest leave; `/history` pages the rest.
+      const watch = await conversation.watch(context, { min: 150 })
       watches.push(watch)
       const sse = eventStream(response)
       const { send } = sse
       send('system', system.current())
       send('conversations', summaries)
-      let { view, trimmed } = windowView(watch.value)
-      send('view', view)
-      send('ui', { value: ui!.value! })
-      ui!.start(async (_value, ops) => {
-        send('uiOps', { ops })
+      send('view', watch.value)
+      send('ui', { value: ui!.value })
+      ui!.start(async (call) => {
+        if (call.kind === 'value') send('uiOps', { ops: call.ops })
       })
-      send('tasks', graph.value)
+      send('tasks', tasks())
       for (const kind of unknown)
         send('notice', { level: 'warning', message: `Unknown extension document: ${kind}` })
       for (const doc of docs) {
         send('doc', { kind: doc.kind, value: doc.watch.value })
-        doc.watch.start(async (_value, ops) => {
-          send('docOps', { kind: doc.kind, ops })
+        doc.watch.start(async (call) => {
+          if (call.kind === 'value') send('docOps', { kind: doc.kind, ops: call.ops })
         })
       }
       events.listeners.add(send)
-      watch.start(async (value, ops) => {
-        const rebased = windowOps(ops, trimmed)
-        if (rebased) send('ops', rebased)
-        else {
-          // A head marker or a replaced view starts the window afresh; the client resyncs on every `view`.
-          ;({ view, trimmed } = windowView(value))
-          send('view', view)
-        }
+      watch.start(async (call) => {
+        if (call.kind === 'value') send('ops', call.ops)
       })
       let stopped = false
       const stop = async () => {
@@ -656,13 +668,12 @@ export async function createApi(
     async close() {
       closed = true
       unsubscribe()
-      unsubscribeGraph()
+      graph.detach()
       clearTimeout(timer)
       await Promise.all([...streams].map((stop) => stop()))
       await refreshing
       events.listeners.delete(indexListener)
       await projectIndex.flush()
-      graph.dispose()
     },
   }
 }

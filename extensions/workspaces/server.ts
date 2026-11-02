@@ -1,8 +1,9 @@
 import { existsSync, watch } from 'node:fs'
 import type { FSWatcher } from 'node:fs'
 import type { JsonValue } from '@earendil-works/chord'
+import { onCommit } from '../../lib/commits.ts'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import { Type } from '@earendil-works/pi-ai'
+import { Type } from 'typebox'
 import {
   configure,
   defineExtension,
@@ -204,7 +205,7 @@ export default function workspaceExtension(host: ExtensionHost) {
       })
     unsubscribe?.()
     // Not a reactor: a lander task's fault is a Pi task record, not a domain event.
-    unsubscribe = host.harness().subscribeCommits((publication) => {
+    unsubscribe = onCommit(host.harness(), (publication) => {
       for (const change of publication.changes) {
         if (
           change.type !== 'task' ||
