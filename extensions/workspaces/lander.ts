@@ -377,7 +377,8 @@ export const landerSettings = async (
   }
   return {
     checks: checks as Settings['checks'],
-    ...(lander?.push ? { push: lander.push } : {}),
+    // A preview never pushes; its git hooks refuse it too (extensions/instance).
+    ...(lander?.push && !process.env.ULTIMATE_PREVIEW_BRANCH ? { push: lander.push } : {}),
     ...(deploy ? { deploy } : {}),
   }
 }

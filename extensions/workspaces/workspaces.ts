@@ -940,7 +940,7 @@ export function workspaces(host: Host) {
       index.items[String(id)] = {
         path: join(parent, String(id)),
         branch: `ultimate/${createHash('sha256').update(host.home).digest('hex').slice(0, 6)}-${id}`,
-        base: await git(source, 'rev-parse', 'HEAD'),
+        base: await git(source, 'rev-parse', `refs/heads/${target}`),
         source,
         target,
         state: 'preparing',

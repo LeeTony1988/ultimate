@@ -89,6 +89,17 @@ export async function cleanPreview(home: string) {
           await git(common, '--git-dir', common, 'branch', '-D', '--', branch)
       }
       await git(common, '--git-dir', common, 'worktree', 'prune')
+      // The branch it landed on, and workspace branches whose checkouts are gone.
+      const left = await git(
+        common,
+        '--git-dir',
+        common,
+        'for-each-ref',
+        '--format=%(refname:short)',
+        `refs/heads/${branchPrefix}*`,
+      )
+      for (const branch of left.split('\n').filter(Boolean))
+        await git(common, '--git-dir', common, 'branch', '-D', '--', branch)
     }
     // Everything the locks guarded is gone. Release them before the unlink, then let the sidecars decide once more.
     release()

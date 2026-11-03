@@ -91,8 +91,17 @@ Server factories receive exactly these `ExtensionHost` fields (import its type o
 - `models()`: model descriptors, including availability.
 - `skills(cwd)`: merged clone, user and project skills for a working directory, each with its `scope` and `overrides`.
 - `restart(approved)`: request a verified core swap; the async callback records the approved generation before activation.
+- `scanSubmissions(query, limit, cursor, caller)`: a page of committed submission records; it exists until Pi Durable exposes submission scans publicly.
+- `chapter`: the active chapter: its name, number, the newest chapter's name and its files.
 - `build()`, `system()`, `extensions()`: current build, system and extension inspection.
 - `conversations()`: every conversation's summary, as `useConversations()` gives the web; empty until the harness is open.
+- `projects()`: the user's central project homes read from their JSON manifests, never another project's SQLite; includes this home and live supervisor URLs.
+- `projectSetup()`: whether the project has `.ultimate/` setup, the decision of its root (a linked worktree's main checkout) and its capped README.
+- `projectSettings()`: the project's parsed settings, only after a local decision; otherwise empty.
+- `projectExtensions()`: a read-only inventory of the project's extension folders, including replacements of active extensions.
+- `setProjectDecision(local)`: remember the local/global choice and apply it through the live settings reload.
+- `reloadExtensions()`: apply settings writes to the registry, browser facets and styles before returning.
+- `invoke(name, action, args, signal, conversationId?)`: call an installed extension action on behalf of a conversation; rejects user-only actions.
 - `harness()`, `uiState(context)`, `doc(kind)`: durable harness, root UI snapshot and exported conversation document token.
 - `provide(name, value)`, `use<T>(name)`: publish and look up typed process-local behaviour. Import the provider's contract with `import type`, never its implementation. Registrations are staged until installation succeeds, replaced on reload, and removed when the facet is disabled, removed or closed; a missing provider returns `undefined`. Look up at call time rather than retaining a provider across reloads. A failed replacement keeps the old provider. For example, workspaces provides `WorkspaceService` under `workspaces`; lineage provides `LineageService` under `lineage`. Shared branches and landings work without the other extension; isolated branches require workspaces.
 - `implement(api, value)`, `need(api)`, `want(api)`, `catalogue()`: the typed successors of `provide`/`use`; see [Extension APIs](#extension-apis).
