@@ -46,6 +46,9 @@ it('attaches an image picked with the paperclip and sends it', async () => {
   cleanup.push(() => browser.close())
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
   await page.goto(server.url)
+  // Vite's dependency optimizer can still reload the page once it discovers a facet's dependencies, which would drop
+  // the picker's choice with the replaced document; the page settles first.
+  await page.waitForLoadState('networkidle')
   const editor = page.locator('[data-ui="composer"] textarea')
   await editor.waitFor()
   await page
