@@ -122,6 +122,41 @@ it('leaves an explicitly preserved home alone even with the automatic preview pr
   expect((await stat(home)).isDirectory()).toBe(true)
 })
 
+it('removes a stale home whose lock databases still exist, as every crashed preview leaves them', async () => {
+  // Regression: cleanup used to unlink the home while its two lock databases were still open, which Windows refuses
+  // with EBUSY, so the home survived every sweep with its 0-byte *.lock.db files. The databases are created here
+  // exactly as a crashed preview leaves them: no sidecar, so nothing owns the home.
+  const { root, home } = await fixture()
+  for (const name of ['ultimate.lock', 'storage.lock']) {
+    const database = new DatabaseSync(join(home, name + '.db'))
+    database.exec('PRAGMA journal_mode = DELETE; CREATE TABLE probe (id INTEGER PRIMARY KEY)')
+    database.close()
+  }
+  const notices: string[] = []
+  await sweepPreviews(root, (message) => notices.push(message))
+  expect(notices).toEqual([])
+  expect(await stat(home).catch(() => undefined)).toBeUndefined()
+  // The sweep's own lock lives in the swept directory, not in the home, so it is still there to guard the next sweep.
+  expect(
+    await stat(join(root, 'ultimate-preview-sweep.lock.db')).then((entry) => entry.isFile()),
+  ).toBe(true)
+})
+
+it('refuses a home whose sidecar names a live process, even with its lock databases present', async () => {
+  // Cleanup releases the lock databases before unlinking, so from then on only the PID sidecar protects a preview
+  // that starts in that window. A sidecar naming a live process must keep the home, lock files and all.
+  const { home } = await fixture()
+  for (const name of ['ultimate.lock', 'storage.lock']) {
+    const database = new DatabaseSync(join(home, name + '.db'))
+    database.exec('PRAGMA journal_mode = DELETE')
+    database.close()
+  }
+  await writeFile(join(home, 'ultimate.lock'), JSON.stringify({ pid: process.pid }))
+  expect(await cleanPreview(home)).toBe(false)
+  expect((await stat(home)).isDirectory()).toBe(true)
+  expect((await stat(join(home, 'ultimate.lock.db'))).isFile()).toBe(true)
+})
+
 it.each([true, false])(
   'cleans a home after its project checkout was deleted (checkouts: %s)',
   async (checkouts) => {
