@@ -1,5 +1,6 @@
-import { join, posix } from 'node:path'
-import { readdir, readFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { dirname, join, posix, relative } from 'node:path'
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { normalizePath } from 'vite-plus'
 import type { Plugin } from 'vite-plus'
 import { discoverExtensions } from './discovery.ts'
@@ -22,10 +23,14 @@ export function extensionModules(
   const settingsFiles = [...extensionSettingsFiles(projectRoot, userHome), trustFile].map(
     normalizePath,
   )
-  const stylesId = normalizePath(join(ultimateRoot, 'web/src/index.css'))
+  const stylesFile = normalizePath(join(ultimateRoot, 'web/src/index.css'))
   const watchers = new WeakMap<object, () => void>()
+  let sourcesFile = ''
   return {
     name: 'ultimate:extension-modules',
+    configResolved(config) {
+      sourcesFile = normalizePath(join(config.cacheDir, 'extension-sources.css'))
+    },
     closeBundle() {
       watchers.get(this.environment)?.()
       watchers.delete(this.environment)
@@ -72,22 +77,45 @@ export function extensionModules(
       return dependency
     },
     async load(id) {
-      if (id.split('?')[0] === stylesId)
+      if (id.split('?')[0] === stylesFile) {
+        // Tailwind skips a git-ignored symlinked extension inside a root, so its target is a source of its own.
+        const linked = (await discoverExtensions(ultimateRoot, projectRoot, userHome))
+          .filter(
+            (entry) => entry.source !== 'builtin' && !entry.error && entry.target !== entry.path,
+          )
+          .map((entry) => normalizePath(entry.target))
+        const sources = [
+          ...roots.filter(
+            (root, index) =>
+              existsSync(root) && (index !== 2 || useProjectSetup(projectRoot, userHome)),
+          ),
+          ...linked,
+        ]
+          .map((root) => `@source ${JSON.stringify(root)};\n`)
+          .join('')
+        // Tailwind keeps its compiler, and so its sources, until an imported file's mtime changes: the sources live in
+        // their own file, rewritten when a root appears, a link is added or the project's trust changes. A scanner
+        // never picks up a source folder that was missing when it started, so only existing roots are listed.
+        const current = await readFile(sourcesFile, 'utf8').catch(() => undefined) // Missing until the first write.
+        if (current !== sources) {
+          await mkdir(dirname(sourcesFile), { recursive: true })
+          await writeFile(sourcesFile, sources)
+        }
         return (
-          (await readFile(join(ultimateRoot, 'web/src/index.css'), 'utf8')) +
-          '\n' +
-          roots
-            .filter((_, index) => index !== 2 || useProjectSetup(projectRoot, userHome))
-            .map((root) => `@source ${JSON.stringify(root)};`)
-            .join('\n')
+          `@import ${JSON.stringify(sourcesPath())};\n` +
+          (await readFile(stylesFile, 'utf8')) +
+          '\n'
         )
+      }
       if (id !== resolved) return undefined
       const facets = (await discoverExtensions(ultimateRoot, projectRoot, userHome)).filter(
         (entry) => entry.enabled && entry.files.includes('web.tsx'),
       )
       const entries = facets.map((entry) => {
+        // By target, as the server facet loads: Vite keeps a URL bound to the file it first resolved to.
         const file = normalizePath(join(entry.path, 'web.tsx'))
-        return `${JSON.stringify(file)}: () => import(${JSON.stringify(posix.join('/@fs/', file))})`
+        const target = normalizePath(join(entry.target, 'web.tsx'))
+        return `${JSON.stringify(file)}: () => import(${JSON.stringify(posix.join('/@fs/', target))})`
       })
       return `export const loaders = {${entries.join(',')}};`
     },
@@ -99,7 +127,7 @@ export function extensionModules(
         !roots.some((root) => file.startsWith(root + '/'))
       )
         return undefined
-      const styles = this.environment.moduleGraph.getModuleById(stylesId)
+      const styles = this.environment.moduleGraph.getModuleById(stylesFile)
       return styles && !modules.includes(styles) ? [...modules, styles] : undefined
     },
     configureServer(server) {
@@ -111,7 +139,7 @@ export function extensionModules(
           !roots.some((root) => file === root || file.startsWith(root + '/'))
         )
           return
-        for (const id of [resolved, ...(file === trustFile ? [stylesId] : [])]) {
+        for (const id of [resolved, stylesFile]) {
           const module = server.moduleGraph.getModuleById(id)
           if (module) {
             server.moduleGraph.invalidateModule(module)
@@ -142,5 +170,13 @@ export function extensionModules(
       watchers.set(server.environments.client, stopWatching)
       server.httpServer?.once('close', stopWatching)
     },
+  }
+  /** The generated sources file as index.css imports it: relative, with forward slashes, because Lightning CSS and
+   * Tailwind's resolver expect them. */
+  function sourcesPath() {
+    const path = normalizePath(relative(dirname(stylesFile), sourcesFile))
+    // Another Windows drive has no relative form, and CSS reads its drive letter as a URL scheme: `/@fs/` resolves
+    // across drives, as it does for web facets.
+    return path.startsWith('.') ? path : posix.join('/@fs/', sourcesFile)
   }
 }

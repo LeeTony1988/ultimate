@@ -1,4 +1,4 @@
-import { readdir, readFile, stat } from 'node:fs/promises'
+import { readdir, readFile, realpath, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { discoveryRoots } from './project.ts'
 import type { Source } from './project.ts'
@@ -28,7 +28,16 @@ export async function discoverExtensions(
 ) {
   const winners = new Map<
     string,
-    { name: string; path: string; source: Source; files: string[]; core?: true; error?: string }
+    {
+      name: string
+      path: string
+      /** `path` with symlinks resolved, read anew on each discovery: modules load from here, so a repointed link loads its new target. */
+      target: string
+      source: Source
+      files: string[]
+      core?: true
+      error?: string
+    }
   >()
   const builtinCore = new Set<string>()
   for (const root of discoveryRoots(ultimateRoot, projectRoot, userHome)) {
@@ -56,6 +65,7 @@ export async function discoverExtensions(
         winners.set(entry.name, {
           name: entry.name,
           path,
+          target: await realpath(path),
           source: root.source,
           files,
           ...(core ? { core } : {}),
@@ -64,6 +74,7 @@ export async function discoverExtensions(
         winners.set(entry.name, {
           name: entry.name,
           path,
+          target: path,
           source: root.source,
           files: [],
           error: String(error),

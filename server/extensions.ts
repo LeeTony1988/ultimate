@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, realpath } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { compareExtensions, discoverExtensions } from './discovery.ts'
 import { decisionRoot, projectSetup, projectSettings, projectDiagnostics } from './project-setup.ts'
@@ -258,6 +258,8 @@ export async function loadExtensions(
   const pollActions = new Map<string, string[]>()
   const settingsReloads = new Set<string>()
   const records = new Map<string, ExtensionInfo>()
+  /** Each loaded extension's folder with symlinks resolved, where Vite keys its modules; normalized like Vite's ids. */
+  const targets = new Map<string, string>()
   const documents = new Map<string, ConversationDocToken<JsonObject>[]>()
   const findDoc = (kind: string) =>
     [
@@ -502,7 +504,18 @@ export async function loadExtensions(
       for (const message of diagnostics) notice(message)
       previousSettings = signature
     }
-    for (const { name, path, source, enabled, files, core, error: discoveryError } of winners) {
+    for (const {
+      name,
+      path,
+      target: discovered,
+      source,
+      enabled,
+      files,
+      core,
+      error: discoveryError,
+    } of winners) {
+      // Vite's watcher, module ids and hot messages use forward slashes on Windows.
+      const target = normalizePath(discovered)
       const previous = records.get(name)
       host.extensionSources.set(name, source)
       const layer = settings.layers.get(name) ?? (source === 'builtin' ? 'default' : 'folder')
@@ -528,7 +541,8 @@ export async function loadExtensions(
       if (enabled && record.facets.server && (!servers || servers.has(name))) {
         const facetHost = scope(name)
         try {
-          const module = await vite.ssrLoadModule(join(path, 'server.ts'))
+          // Vite keeps a URL bound to the file it first resolved to, so a repointed link loads by its target.
+          const module = await vite.ssrLoadModule(normalizePath(join(target, 'server.ts')))
           const extension: Extension =
             typeof module.default === 'function' ? await module.default(facetHost) : module.default
           if (!extension || extension.name !== name)
@@ -605,11 +619,13 @@ export async function loadExtensions(
       if (enabled && !record.server?.error) host.builds.extension(name, path)
       if (!enabled) host.builds.remove(name)
       records.set(name, record)
+      targets.set(name, target)
     }
     for (const name of records.keys()) {
       if (!folders.includes(name)) {
         await unload(name)
         records.delete(name)
+        targets.delete(name)
         host.extensionSources.delete(name)
         host.builds.remove(name)
       }
@@ -631,6 +647,7 @@ export async function loadExtensions(
               !previous ||
               previous.enabled !== entry.enabled ||
               previous.path !== entry.path ||
+              targets.get(entry.name) !== normalizePath(entry.target) ||
               settingsReloads.has(entry.name)
             )
           })
@@ -669,13 +686,17 @@ export async function loadExtensions(
     enqueue(async () => {
       try {
         const selected = new Set<string>()
-        const modules = vite.moduleGraph.getModulesByFile(file)
+        // Vite keys its graph by real path, while the watcher reports a symlinked extension's files through the
+        // link. A file removed since the event has no real path; its link path then misses the graph, as before.
+        const modules = vite.moduleGraph.getModulesByFile(
+          normalizePath(await realpath(file).catch(() => file)),
+        )
         const visited = new Set<import('vite-plus').ModuleNode>()
         const visit = (module: import('vite-plus').ModuleNode) => {
           if (visited.has(module)) return
           visited.add(module)
           for (const name of records.keys())
-            if (module.file === normalizePath(join(records.get(name)!.path, 'server.ts')))
+            if (module.file === normalizePath(join(targets.get(name)!, 'server.ts')))
               selected.add(name)
           for (const importer of module.importers) visit(importer)
         }
