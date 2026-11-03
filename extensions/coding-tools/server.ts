@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import type { Context } from '@earendil-works/chord'
 import { BACKGROUND_CONTEXT, withCancel } from '@earendil-works/chord/context'
-import { Type } from 'typebox'
+import { bool, num, obj, opt, str } from '@earendil-works/pi-schema'
 import {
   type ConversationId,
   defineDoc,
@@ -287,18 +287,18 @@ export default function codingTools(host: Pick<ExtensionHost, 'emit'>) {
   const tool = shell.create()
   // Pi's own shell schema is closed over `command`/`timeout`; a tool schema is any JSON Schema object, so ours states
   // the same two fields with the tripwire's wording and adds `interruptible`.
-  const parameters = Type.Object({
-    command: Type.String({
+  const parameters = obj({
+    command: str({
       description: `${shell.name === 'powershell' ? 'PowerShell' : 'Bash'} command to execute`,
     }),
-    timeout: Type.Optional(
-      Type.Number({
+    timeout: opt(
+      num({
         description:
           'Timeout in seconds (optional; without it a default tripwire, 600 s unless configured, stops the command)',
       }),
     ),
-    interruptible: Type.Optional(
-      Type.Boolean({
+    interruptible: opt(
+      bool({
         description:
           'Only for commands that just wait or poll (CI checks, deploys, a file appearing): a steering message ends the command early. Never combine with commands that change things.',
       }),

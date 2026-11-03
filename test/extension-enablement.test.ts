@@ -48,10 +48,10 @@ it.concurrent('orders facets by source so a project bash tool and renderer win r
     await writeFile(
       join(folder, 'server.ts'),
       `
-      import { Type } from 'typebox'
+      import { obj } from '@earendil-works/pi-schema'
       import { defineExtension, defineTool } from '@earendil-works/pi-durable'
       export default defineExtension({ name: '${name}', tools: [defineTool({
-        name: 'bash', description: '${name}', parameters: Type.Object({}),
+        name: 'bash', description: '${name}', parameters: obj({}),
         execute: async () => ({})
       })] })
     `,

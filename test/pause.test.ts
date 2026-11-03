@@ -1,5 +1,5 @@
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import { Type } from 'typebox'
+import { obj } from '@earendil-works/pi-schema'
 import {
   fauxAssistantMessage,
   fauxText,
@@ -82,7 +82,7 @@ async function fixture(home?: string) {
         defineTool({
           name: 'work',
           description: 'Work until released',
-          parameters: Type.Object({}),
+          parameters: obj({}),
           execute: async () => {
             await new Promise<void>((resolve) => {
               finish = resolve

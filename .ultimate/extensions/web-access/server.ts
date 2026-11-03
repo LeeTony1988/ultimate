@@ -1,6 +1,6 @@
 // `web-access`: a free web search tool over the `pi-web-access` package's stdio MCP server. Jina answers first and
 // Exa without a key; see README.md for the settings and secrets it reads.
-import { Type } from 'typebox'
+import { int, obj, opt, str } from '@earendil-works/pi-schema'
 import type { JsonValue } from '@earendil-works/chord'
 import { defineExtension, defineTool, section } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../../server/extensions.ts'
@@ -57,15 +57,15 @@ export default function webAccess(host: Host) {
         replay: 'safe',
         description:
           "Search the public web through the local pi-web-access MCP server and return ranked sources with titles, URLs and the provider's summary. Jina answers first; Exa, which needs no API key, answers when Jina has no key, fails or returns nothing. Use it to discover sources or find current information; for a known page, fetch it with curl or the browser tool.",
-        parameters: Type.Object({
-          query: Type.String({
+        parameters: obj({
+          query: str({
             minLength: 1,
             maxLength: 5000,
             description:
               'A self-contained description of what to find on the web, with the key facts and any source or freshness preferences.',
           }),
-          maxResults: Type.Optional(
-            Type.Integer({
+          maxResults: opt(
+            int({
               minimum: 1,
               maximum: 20,
               description:
