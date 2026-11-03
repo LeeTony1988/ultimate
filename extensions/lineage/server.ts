@@ -1,6 +1,7 @@
 import type { Context, JsonValue } from '@earendil-works/chord'
+import { onCommit } from '../../lib/commits.ts'
 import { awaitWithContext, BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import { Type } from '@earendil-works/pi-ai'
+import { arr, bool, int, lit, obj, opt, str, union } from '@earendil-works/pi-schema'
 import type { Message, Models, ModelThinkingLevel } from '@earendil-works/pi-ai'
 import { estimateMessageTokens, estimateTextTokens } from '@earendil-works/pi-ai/utils/estimate'
 import {
@@ -371,10 +372,12 @@ function watchTally(host: ExtensionHost, ctx: Context) {
   host.onOpen(async () => {
     roots = new Set(await rootsOf(host, ctx))
     // Not a reactor: any entry a root gets (Pi's own resets and compactions too) changes its count, no domain event.
-    unsubscribe = host.harness().subscribeCommits((publication) => {
+    unsubscribe = onCommit(host.harness(), (publication) => {
       for (const change of publication.changes)
         if (change.type === 'document' && change.record.kind === Roots.definition.kind)
-          roots = new Set((change.value as { roots?: number[] } | null)?.roots ?? [])
+          roots = new Set(
+            change.kind === 'change' ? ((change.value as { roots?: number[] }).roots ?? []) : [],
+          )
       const before = dirty.size
       for (const change of publication.changes)
         if (change.type === 'entry' && roots.has(change.value.conversationId))
@@ -444,7 +447,7 @@ function lineage(host: ExtensionHost) {
           // Subscribed before reading, so an entry the target writes after the read still ends the wait below.
           const written = Promise.withResolvers<void>()
           // Not a reactor: a short wait inside this task for any entry of the target, a Pi record.
-          const unsubscribe = host.harness().subscribeCommits((publication) => {
+          const unsubscribe = onCommit(host.harness(), (publication) => {
             if (
               publication.changes.some(
                 (change) => change.type === 'entry' && change.value.conversationId === target,
@@ -597,7 +600,7 @@ function lineage(host: ExtensionHost) {
           // Subscribed before reading, so the report's settlement after the read still ends the wait.
           const changed = Promise.withResolvers<void>()
           // Not a reactor: a short wait inside this task for the report's submission record, a Pi record.
-          const unsubscribe = host.harness().subscribeCommits((publication) => {
+          const unsubscribe = onCommit(host.harness(), (publication) => {
             if (
               publication.changes.some(
                 (change) => change.type === 'submission' && change.value.conversationId === id,
@@ -1588,9 +1591,9 @@ export default function lineageExtension(host: ExtensionHost) {
         name: 'note',
         description:
           'Leave a note in another conversation (an id, or "root" for the root of your tree) without waking it; its agent reads it with its next input. Use it when your work affects that conversation.',
-        parameters: Type.Object({
-          to: Type.Union([Type.Integer({ minimum: 1 }), Type.Literal('root')]),
-          text: Type.String({ minLength: 1 }),
+        parameters: obj({
+          to: union([int({ minimum: 1 }), lit('root')]),
+          text: str({ minLength: 1 }),
         }),
         async execute({ to, text }, api, ctx) {
           const from = await actingAs(host, api.conversationId, ctx)
@@ -1602,9 +1605,9 @@ export default function lineageExtension(host: ExtensionHost) {
         name: 'notify',
         description:
           'Get told when conversation `id` finishes: once it and its subagents are idle (at once if it already is), you receive "#id finished" with its title and last answer. An answer you already received is not sent again: you are told when it next finishes. `wake` (default true) starts your next run with it; `wake: false` leaves it as a note you read with your next input. Calling it again for the same id replaces the earlier request.',
-        parameters: Type.Object({
-          id: Type.Integer({ minimum: 1 }),
-          wake: Type.Optional(Type.Boolean()),
+        parameters: obj({
+          id: int({ minimum: 1 }),
+          wake: opt(bool()),
         }),
         // The transactional receipt reuses the task; cancellations and the request-id note tolerate replay.
         replay: 'safe',
@@ -1667,7 +1670,7 @@ export default function lineageExtension(host: ExtensionHost) {
         deferred: true,
         description:
           'Compact your own context: older turns become a summary, recent ones stay verbatim, full history stays in storage. Use instructions to guide the summary. It runs after this turn; end the turn, and you are woken once it is done.',
-        parameters: Type.Object({ instructions: Type.Optional(Type.String()) }),
+        parameters: obj({ instructions: opt(str()) }),
         async execute({ instructions }, api, ctx) {
           const id = api.conversationId
           // The compaction and its wake-up commit together, so no crash leaves one without the other. @ultimate's own
@@ -1698,9 +1701,9 @@ export default function lineageExtension(host: ExtensionHost) {
         name: 'memory',
         description:
           "Read your project's memory, kept in your tree's root: without `read`, the index (one line per memory); with `read: slug`, that memory in full with its source. Outside a tree it reads the project's only root; `root` reads another root's.",
-        parameters: Type.Object({
-          read: Type.Optional(Type.String({ minLength: 1 })),
-          root: Type.Optional(Type.Integer({ minimum: 1 })),
+        parameters: obj({
+          read: opt(str({ minLength: 1 })),
+          root: opt(int({ minimum: 1 })),
         }),
         async execute({ read, root }, api, ctx) {
           const id = await memoryRoot(api.conversationId, root, ctx)
@@ -1730,9 +1733,9 @@ export default function lineageExtension(host: ExtensionHost) {
         deferred: true,
         description:
           "Change a root's project memory in one atomic batch: ops are {op:'add', slug, kind: 'decision'|'fact'|'lesson', line, body, source?}, {op:'update', slug, kind?, line?, body?, source?} and {op:'delete', slug}. Slugs are kebab-case, lines one line of at most 120 characters, bodies at most 2000, source `#<conversation>/<entry>`; at most 150 memories. Any invalid op refuses the whole batch. `root` defaults to your tree's root, or outside a tree to the project's only root.",
-        parameters: Type.Object({
-          root: Type.Optional(Type.Integer({ minimum: 1 })),
-          ops: Type.Array(Type.Object({}, { additionalProperties: true }), { minItems: 1 }),
+        parameters: obj({
+          root: opt(int({ minimum: 1 })),
+          ops: arr(obj({}, { open: true }), { minItems: 1 }),
         }),
         // Not replay-safe (the default): an interrupted call is never rerun, so a batch commits at most once.
         async execute({ root, ops }, api, ctx) {

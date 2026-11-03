@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto'
 import { setTimeout as sleep } from 'node:timers/promises'
 import type { Context } from '@earendil-works/chord'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { Type } from '@earendil-works/pi-ai'
+import { int, obj, oneOf, opt, str } from '@earendil-works/pi-schema'
 import type { ConversationId, ToolExecutionApi } from '@earendil-works/pi-durable'
 import { defineExtension, defineTool, section } from '@earendil-works/pi-durable'
 import type { ExtensionAction } from '../../server/actions.ts'
@@ -487,13 +487,11 @@ export default function instanceExtension(
         name: 'instance',
         description:
           'Start, inspect logs, list or stop isolated standalone Ultimate test servers (maximum three). Defaults to the calling workspace; set subagent to preview an owned child worktree. Instances run every agent on `instance.model` (default openai-codex/gpt-6.1-sol, fast).',
-        parameters: Type.Object({
-          action: Type.Union(
-            ['start', 'stop', 'logs', 'list'].map((action) => Type.Literal(action)),
-          ),
-          id: Type.Optional(Type.String()),
-          home: Type.Optional(Type.String()),
-          subagent: Type.Optional(Type.Integer({ minimum: 1 })),
+        parameters: obj({
+          action: oneOf(['start', 'stop', 'logs', 'list']),
+          id: opt(str()),
+          home: opt(str()),
+          subagent: opt(int({ minimum: 1 })),
         }),
         async execute(args, api, context) {
           try {

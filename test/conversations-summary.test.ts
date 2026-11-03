@@ -4,7 +4,7 @@ import { mkdir, readdir, writeFile } from 'node:fs/promises'
 import { awaitWithContext } from '@earendil-works/chord/context'
 import { Subagents } from '../extensions/subagents/api.ts'
 import { join } from 'node:path'
-import { Type } from '@earendil-works/pi-ai'
+import { obj } from '@earendil-works/pi-schema'
 import type { Models, JsonObject } from '@earendil-works/pi-ai'
 import type { ConversationId, EntryId, TaskId, ToolRegistration } from '@earendil-works/pi-durable'
 import { AssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream'
@@ -368,7 +368,7 @@ it.each([false, true])(
           defineTool({
             name: 'summary_hold',
             description: 'Hold work until released',
-            parameters: Type.Object({}),
+            parameters: obj({}),
             execute: async (_args, api, toolContext) => {
               holding.add(api.conversationId)
               await awaitWithContext(gate, toolContext)
@@ -575,7 +575,7 @@ it('summarizes the first, fourth and seventh completed exchanges, not tools, str
         defineTool({
           name: 'summary_probe',
           description: 'Probe',
-          parameters: Type.Object({}),
+          parameters: obj({}),
           execute: async () => ({ output: [{ type: 'text', text: 'SECRET_TOOL_OUTPUT' }] }),
         }),
       ],
@@ -1274,7 +1274,7 @@ it('publishes initial intent while the main model request is blocked, once acros
         defineTool({
           name: 'intent_probe',
           description: 'Probe another model round',
-          parameters: Type.Object({}),
+          parameters: obj({}),
           execute: async () => ({ output: [{ type: 'text', text: 'Continue' }] }),
         }),
       ],
@@ -1415,7 +1415,7 @@ it('keeps an exchange answered across a mid-run compaction and reopen; only a re
         defineTool({
           name: 'compaction_hold',
           description: 'Hold work until released',
-          parameters: Type.Object({}),
+          parameters: obj({}),
           execute: async (_args, _api, toolContext) => {
             holding = true
             await awaitWithContext(gate, toolContext)
@@ -1508,7 +1508,7 @@ it('derives the same overview rows live and from a fresh open, with no summary m
         defineTool({
           name: 'overview_hold',
           description: 'Hold work until released',
-          parameters: Type.Object({}),
+          parameters: obj({}),
           execute: async (_args, _api, toolContext) => {
             await awaitWithContext(new Promise<void>((done) => (release = done)), toolContext)
             return { output: [{ type: 'text', text: 'Released' }] }
@@ -1676,7 +1676,7 @@ it.each(['answers', 'fails'] as const)(
           defineTool({
             name: 'order_hold',
             description: 'Hold work until released',
-            parameters: Type.Object({}),
+            parameters: obj({}),
             execute: async (_args, _api, toolContext) => {
               holding = true
               await awaitWithContext(new Promise<void>((done) => (release = done)), toolContext)

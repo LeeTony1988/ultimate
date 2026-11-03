@@ -1,4 +1,4 @@
-import { Type } from '@earendil-works/pi-ai'
+import { int, lit, union } from '@earendil-works/pi-schema'
 import type { ConversationId, EntryId, EntryRecord, Tx } from '@earendil-works/pi-durable'
 import { imagesOf } from '../../lib/entries.ts'
 import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.ts'
@@ -49,7 +49,7 @@ export async function resolveImages(tx: Tx, from: ConversationId, ref: ImagesRef
       throw new Error(`images: entry ${entry.id} has an unsupported image or one over 2 MiB`)
   return { entry: entry.id, count: images.length }
 }
-export const imagesParameter = Type.Union([Type.Literal('latest'), Type.Integer({ minimum: 1 })], {
+export const imagesParameter = union([lit('latest'), int({ minimum: 1 })], {
   description:
     'Forward images from your conversation: "latest" for the newest input or tool result (screenshot) with images, or that entry\'s id.',
 })

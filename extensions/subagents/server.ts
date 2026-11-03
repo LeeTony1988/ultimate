@@ -1,10 +1,11 @@
 import { existsSync } from 'node:fs'
+import { onCommit } from '../../lib/commits.ts'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { BACKGROUND_CONTEXT, withCancel } from '@earendil-works/chord/context'
 import type { Context } from '@earendil-works/chord'
 import type { JsonValue } from '@earendil-works/chord'
-import { Type } from '@earendil-works/pi-ai'
+import { bool, int, obj, oneOf, opt, str } from '@earendil-works/pi-schema'
 import type { AssistantMessage } from '@earendil-works/pi-ai'
 import {
   AgentDoc,
@@ -303,8 +304,8 @@ async function waitInterruptibly(
   const inspect = (value: typeof inbox.value) => {
     if (value?.items.some((item) => item.mode === 'steer')) wake()
   }
-  inbox.start(async (value) => {
-    inspect(value)
+  inbox.start(async (call) => {
+    if (call.kind === 'value') inspect(call.value)
   })
   inspect(inbox.value)
   const child = (await api.conversation(id, context))!
@@ -748,7 +749,7 @@ export default function subagents(
     await pruneRetired(BACKGROUND_CONTEXT)
     unsubscribe?.()
     // Not a reactor: subagent answers settle as Pi submission records, not domain events.
-    unsubscribe = host.harness().subscribeCommits((publication) => {
+    unsubscribe = onCommit(host.harness(), (publication) => {
       for (const change of publication.changes) {
         if (change.type !== 'submission') continue
         recovery = recovery
@@ -868,26 +869,16 @@ export default function subagents(
           'Delegate to a named agent. start returns its answer (foreground) or id (background). Foreground start/message and wait yield on queued steering with details.yielded:true; work continues independently. Stop children explicitly; stopping the parent does not stop them; stop lists files left uncommitted in the child worktree. message steers a busy child (steer false queues a follow-up instead); wait returns the latest answer; stop stops current work; list shows your children; land verifies and fast-forwards a finished worktree child; discard removes its worktree but keeps its branch. start accepts isolate none or worktree, and fork true to inherit parent history before this call (more context cost; prompt caching usually covers the shared prefix). Background answers join the current run after its tool round, or wake you when idle.',
         // Call-id receipts deduplicate starts/messages; memoized targets and guards protect stop/workspace replays.
         replay: 'safe',
-        parameters: Type.Object({
-          action: Type.Union([
-            Type.Literal('start'),
-            Type.Literal('message'),
-            Type.Literal('wait'),
-            Type.Literal('stop'),
-            Type.Literal('list'),
-            Type.Literal('land'),
-            Type.Literal('discard'),
-          ]),
-          agent: Type.Optional(
-            Type.String({ description: 'Required for start: an Available definitions name.' }),
-          ),
-          task: Type.Optional(Type.String()),
-          background: Type.Optional(Type.Boolean()),
-          fork: Type.Optional(Type.Boolean()),
-          id: Type.Optional(Type.Integer({ minimum: 1 })),
-          text: Type.Optional(Type.String()),
-          steer: Type.Optional(Type.Boolean()),
-          isolate: Type.Optional(Type.Union([Type.Literal('none'), Type.Literal('worktree')])),
+        parameters: obj({
+          action: oneOf(['start', 'message', 'wait', 'stop', 'list', 'land', 'discard']),
+          agent: opt(str({ description: 'Required for start: an Available definitions name.' })),
+          task: opt(str()),
+          background: opt(bool()),
+          fork: opt(bool()),
+          id: opt(int({ minimum: 1 })),
+          text: opt(str()),
+          steer: opt(bool()),
+          isolate: opt(oneOf(['none', 'worktree'])),
         }),
         execute: async (args, api, context) => {
           const cached = await api.memo<ReturnType<typeof reply>>('result', context)
@@ -961,19 +952,14 @@ export default function subagents(
                 ? '\nWarning: parent has uncommitted changes; they are not in the worktree.'
                 : ''
             const task = await api.getTask(api.taskId, context)
-            // Pi upstream: @earendil-works/pi-durable@1.4.0 src/harness/tool.ts — internal ToolTaskInput.assistant locates the calling assistant. Drop when ToolExecutionApi exposes the calling assistant entry ID.
+            // Pi upstream: @earendil-works/pi-durable@1.5.0 src/harness/tool.ts — internal ToolTaskInput.assistant locates the calling assistant. Drop when ToolExecutionApi exposes the calling assistant entry ID.
             const assistant = (task?.input as { assistant: EntryId } | undefined)?.assistant
             let forkAt: EntryId | undefined
             if (definition && args.fork) {
               const conversation = (await host.harness().conversation(api.conversationId, context))!
-              const view = await conversation.viewState(context)
-              try {
-                const position = view.value.entries.findIndex((entry) => entry.id === assistant)
-                forkAt = view.value.entries[position - 1]?.id
-                if (forkAt === undefined) throw new Error('No parent history before this call')
-              } finally {
-                view.dispose()
-              }
+              const { entries } = await conversation.context(context)
+              forkAt = entries[entries.findIndex((entry) => entry.id === assistant) - 1]?.id
+              if (forkAt === undefined) throw new Error('No parent history before this call')
             }
             const model = definition ? await conversations.summaryModel() : undefined
             const action = await api.commit(async (tx) => {

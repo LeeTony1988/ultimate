@@ -1,8 +1,9 @@
 import { existsSync, watch } from 'node:fs'
 import type { FSWatcher } from 'node:fs'
 import type { JsonValue } from '@earendil-works/chord'
+import { onCommit } from '../../lib/commits.ts'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import { Type } from '@earendil-works/pi-ai'
+import { obj, oneOf, opt, str } from '@earendil-works/pi-schema'
 import {
   configure,
   defineExtension,
@@ -204,7 +205,7 @@ export default function workspaceExtension(host: ExtensionHost) {
       })
     unsubscribe?.()
     // Not a reactor: a lander task's fault is a Pi task record, not a domain event.
-    unsubscribe = host.harness().subscribeCommits((publication) => {
+    unsubscribe = onCommit(host.harness(), (publication) => {
       for (const change of publication.changes) {
         if (
           change.type !== 'task' ||
@@ -261,14 +262,10 @@ export default function workspaceExtension(host: ExtensionHost) {
         name: 'workspace',
         description:
           'Inspect your workspace and source tips; submit your clean, verified tip to the lander, which merges it into the target branch, runs the configured checks, fast-forwards the target, pushes when configured, and reports back (submit requires divergence from the original request); or land it synchronously by fast-forward (never rebases or pushes).',
-        parameters: Type.Object({
-          action: Type.Union([
-            Type.Literal('status'),
-            Type.Literal('submit'),
-            Type.Literal('land'),
-          ]),
-          divergence: Type.Optional(
-            Type.String({
+        parameters: obj({
+          action: oneOf(['status', 'submit', 'land']),
+          divergence: opt(
+            str({
               description:
                 "Required for submit. How the delivered result differs from what was originally asked: new agreements, a different approach or library, changed scope. Say 'None' when it matches.",
             }),

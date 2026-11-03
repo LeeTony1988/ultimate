@@ -1,12 +1,10 @@
-import { GitBranchIcon, ListTreeIcon, MessageSquareIcon, RotateCcwIcon } from 'lucide-react'
+import { GitBranchIcon, ListTreeIcon, MessageSquareIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ToolStatusIcon } from '@/components/ai/tool'
 import {
-  api,
   cn,
   defineWebExtension,
-  errorMessage,
   formatDuration,
   provide,
   RunStart,
@@ -18,12 +16,11 @@ import {
   useUiState,
 } from '@/sdk'
 import type { TaskGraph, TaskGraphNode } from '@/sdk'
-import { store } from '@/sdk/client'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
 import { useWorkspaceConversations as useConversations } from '../workspaces/ui.tsx'
 import { FeatureTag, hiddenConversationIds, useOverview } from '../conversations/ui.tsx'
 import { TaskChip, useTaskOf } from '../plan/ui.tsx'
-import { RetryAction, StartedAction } from './refs.ts'
+import { StartedAction } from './refs.ts'
 
 interface Tree {
   /** Live tasks by owner task id. */
@@ -111,10 +108,7 @@ function status(task: TaskGraphNode): {
   const { state } = task
   if (task.blocked)
     return {
-      text:
-        task.blocked === 'restart_limit'
-          ? 'parked after 5 crashes'
-          : `blocked · ${task.blocked.replaceAll('_', ' ')}`,
+      text: `blocked · ${task.blocked.replaceAll('_', ' ')}`,
       icon: 'interrupted',
       tone: 'text-warning',
     }
@@ -218,7 +212,6 @@ export function TaskRow({ task, tree, ...place }: { task: TaskGraphNode; tree: T
             <span className={cn('truncate', tone)}>{text}</span>
           </span>
         </span>
-        {task.blocked === 'restart_limit' && <RetryButton id={task.id} />}
         {task.background && (
           <span className="shrink-0 rounded-sm border border-border/80 px-1 text-[10px] text-muted-foreground">
             bg
@@ -248,33 +241,6 @@ export function TaskRow({ task, tree, ...place }: { task: TaskGraphNode; tree: T
         <ConversationRow id={id} key={`c${id}`} tree={tree} {...below[children.length + index]} />
       ))}
     </>
-  )
-}
-
-/** Runs a parked task again; the crash-loop guard parks it once more if it keeps crashing the process. */
-export function RetryButton({ id }: { id: number }) {
-  const [busy, setBusy] = useState(false)
-  return (
-    <button
-      className="flex shrink-0 items-center gap-1 rounded-sm border border-border/80 px-1.5 py-0.5 font-sans text-[11px] text-foreground/85 transition-colors hover:bg-accent disabled:opacity-50"
-      data-retry={id}
-      disabled={busy}
-      onClick={async () => {
-        setBusy(true)
-        try {
-          await api.action(RetryAction, { id })
-        } catch (error) {
-          store.notify({ level: 'error', message: errorMessage(error) })
-        } finally {
-          setBusy(false)
-        }
-      }}
-      title="Run this task again"
-      type="button"
-    >
-      <RotateCcwIcon className="size-3" />
-      Retry
-    </button>
   )
 }
 
@@ -360,15 +326,13 @@ function TasksPanel() {
       ),
     ),
   }
-  const running = tasks.filter((task) => task.state.status === 'running' && !task.blocked).length
-  const parked = tasks.filter((task) => task.blocked === 'restart_limit').length
+  const busy = tasks.filter((task) => task.state.status === 'running' && !task.blocked).length
   return (
     <div className="py-2">
       <div className="flex items-center gap-2 px-3 pb-2 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase">
         Task graph
         <span className="ml-auto tracking-normal normal-case text-muted-foreground/70">
-          {tasks.length} live{running > 0 && ` · ${running} running`}
-          {parked > 0 && <span className="text-warning"> · {parked} parked</span>}
+          {tasks.length} live{busy > 0 && ` · ${busy} running`}
         </span>
       </div>
       {top.map((id) => (

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import type { Context } from '@earendil-works/chord'
 import { BACKGROUND_CONTEXT, withCancel } from '@earendil-works/chord/context'
-import { Type } from '@earendil-works/pi-ai'
+import { bool, num, obj, opt, str } from '@earendil-works/pi-schema'
 import {
   type ConversationId,
   defineDoc,
@@ -157,8 +157,12 @@ async function untilStopped(
     if (value?.items.some((item) => item.mode === 'steer'))
       stop('Interrupted by a steering message')
   }
-  cancelled.start(async (value) => inspectCancelled(value))
-  inbox?.start(async (value) => inspectInbox(value))
+  cancelled.start(async (call) => {
+    if (call.kind === 'value') inspectCancelled(call.value)
+  })
+  inbox?.start(async (call) => {
+    if (call.kind === 'value') inspectInbox(call.value)
+  })
   try {
     inspectCancelled(cancelled.value)
     if (inbox) inspectInbox(inbox.value)
@@ -281,15 +285,30 @@ async function madeCommits(path: string, conversation: number) {
 
 export default function codingTools(host: Pick<ExtensionHost, 'emit'>) {
   const tool = shell.create()
-  const parameters = Type.Object({
-    ...tool.parameters.properties,
-    interruptible: Type.Optional(
-      Type.Boolean({
-        description:
-          'Only for commands that just wait or poll (CI checks, deploys, a file appearing): a steering message ends the command early. Never combine with commands that change things.',
+  // Pi's own shell schema is closed over `command`/`timeout`; a tool schema is any JSON Schema object, so ours states
+  // the same two fields with the tripwire's wording and adds `interruptible`.
+  const parameters = obj(
+    {
+      command: str({
+        description: `${shell.name === 'powershell' ? 'PowerShell' : 'Bash'} command to execute`,
       }),
-    ),
-  })
+      timeout: opt(
+        num({
+          description:
+            'Timeout in seconds (optional; without it a default tripwire, 600 s unless configured, stops the command)',
+        }),
+      ),
+      interruptible: opt(
+        bool({
+          description:
+            'Only for commands that just wait or poll (CI checks, deploys, a file appearing): a steering message ends the command early. Never combine with commands that change things.',
+        }),
+      ),
+    },
+    // Open, as Pi's own shell schema is (pi-durable dist/tools/bash.js): a call that carries an extra key, such as the
+    // `cwd` a model sometimes adds, is accepted rather than refused as an unknown field.
+    { open: true },
+  )
   // In the tool itself, not a wrap, so the events carry the call's trace and conversation.
   const shellCall = defineTool({
     ...tool,
