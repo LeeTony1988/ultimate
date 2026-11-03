@@ -1,6 +1,6 @@
 ---
 name: wsl-gate
-description: Land this repository from Windows through a WSL full gate and a Git bundle. Use when a branch is ready to land, when asked to land lxy_dev, or when the Windows lander fails for environment reasons rather than the change itself.
+description: Land this repository from Windows through a WSL full gate and a Git bundle. Use when a branch is ready to land, when asked to land dev/lxy, or when the Windows lander fails for environment reasons rather than the change itself.
 ---
 
 # Land through the WSL gate
@@ -11,7 +11,10 @@ the gate; Windows owns the checkout and pushes. A red gate is never bypassed.
 ## Hard rules
 
 - Never push from WSL: it has no GitHub credentials. Push only from the Windows checkout.
-- Never touch a dirty checkout, in WSL or on Windows. `git status --porcelain` must be empty; otherwise stop and report.
+- Never rebase, never force, never rewrite history. The only ref move is `--ff-only`.
+- The Windows checkout carries the user's own uncommitted work. Never stash it, revert it or switch it away. A landing
+  may proceed beside it only when the landing's changed paths and the dirty paths share nothing, and the dirty state is
+  identical afterwards; otherwise stop and report.
 - Never weaken or skip a check: no deleted tests, no filters, no raised timeouts, no `|| true`. Only the suites' own
   capability skips, each named in the report.
 
@@ -32,7 +35,7 @@ test ! -e landing-1 || { echo "landing-1 exists; choose a new number"; exit 1; }
 git clone /mnt/d/learnspace/git/ultimate landing-1
 cd landing-1
 git config user.name Lee && git config user.email lee@localhost
-git checkout lxy_dev
+git checkout -B dev/lxy refs/remotes/origin/dev/lxy
 git fetch /mnt/d/learnspace/git/ultimate refs/heads/ultimate/d9ec68-27247:refs/heads/landing-branch
 git status --porcelain | grep -E '.' >/dev/null && { echo 'checkout is dirty'; exit 1; }
 git ls-files --eol | grep -E 'i/crlf|w/crlf' >/dev/null && { echo 'checkout is not LF'; exit 1; }
@@ -58,7 +61,7 @@ For each branch, verify its tip, merge it with the lander's message format, and 
 ```bash
 set -euo pipefail
 git rev-parse landing-branch           # compare with the branch report
-git merge --no-ff landing-branch -m "Merge <sha7> from #<conversation> into lxy_dev"
+git merge --no-ff landing-branch -m "Merge <sha7> from #<conversation> into dev/lxy"
 pnpm check && pnpm test && pnpm test:e2e
 ```
 
@@ -72,23 +75,81 @@ At the final head:
 ```bash
 set -euo pipefail
 git status --porcelain | grep -E '.' >/dev/null && { echo 'checkout is dirty'; exit 1; }
-git bundle create /mnt/c/Users/29155/ultimate-landing-1.bundle lxy_dev
+git bundle create /mnt/c/Users/29155/ultimate-landing-1.bundle dev/lxy
 git bundle verify /mnt/c/Users/29155/ultimate-landing-1.bundle
+git bundle list-heads /mnt/c/Users/29155/ultimate-landing-1.bundle
 ```
 
 ## 5. Fast-forward and push on Windows
 
-In `D:\learnspace\git\ultimate`, on `lxy_dev`, with a clean tree:
+In `D:\learnspace\git\ultimate`. Snapshot the user's uncommitted work first, then refuse the landing if it touches
+any of it. Each block reads the snapshot from the file, so it holds in a fresh shell too, and the file is the
+reference for step 6.
 
 ```powershell
-$dirty = git status --porcelain; if ($LASTEXITCODE -or $dirty) { throw 'checkout is dirty or unreadable' }
-git switch lxy_dev; if ($LASTEXITCODE) { throw 'git switch failed' }
-git fetch C:\Users\29155\ultimate-landing-1.bundle lxy_dev:refs/heads/landing-verify; if ($LASTEXITCODE) { throw 'git fetch failed' }
+cd D:\learnspace\git\ultimate
+$before = @(git status --porcelain)
+if ($LASTEXITCODE) { throw 'git status failed' }
+$before | Out-File $env:TEMP\before-status.txt -Encoding utf8
+$hashes = @{}
+foreach ($line in $before) {
+  $path = ($line -replace '^..\s+', '').Trim('"')
+  if (Test-Path $path -PathType Leaf) { $hashes[$path] = (Get-FileHash $path -Algorithm SHA256).Hash }
+}
+$hashes | ConvertTo-Json | Out-File $env:TEMP\before-hashes.json -Encoding utf8
+if ($before | Where-Object { $_ -match '^R' }) { throw 'a staged rename is dirty; inspect it by hand' }
+"$($before.Count) dirty entries, $($hashes.Count) hashed"
+```
+
+Then verify the bundle, fetch it into a throwaway ref, and prove that it neither touches a dirty path nor needs
+anything but a fast-forward:
+
+```powershell
+cd D:\learnspace\git\ultimate
+$before = @(Get-Content $env:TEMP\before-status.txt)
+if (-not $before.Count) { throw 'no snapshot; run the block above first' }
+git bundle verify C:\Users\29155\ultimate-landing-1.bundle; if ($LASTEXITCODE) { throw 'bundle is not complete' }
+git bundle list-heads C:\Users\29155\ultimate-landing-1.bundle
+git fetch C:\Users\29155\ultimate-landing-1.bundle dev/lxy:refs/heads/landing-verify; if ($LASTEXITCODE) { throw 'git fetch failed' }
+$changed = @(git diff --name-only HEAD landing-verify)
+$dirty = @($before | ForEach-Object { ($_ -replace '^..\s+', '').Trim('"') } | Where-Object { $_ })
+if (-not $dirty.Count) { throw 'the snapshot is empty; nothing was read' }
+$overlap = @($dirty | Where-Object {
+  $path = $_
+  if ($path.EndsWith('/')) { $changed | Where-Object { $_.StartsWith($path) } } else { $changed -contains $path }
+})
+if ($overlap) { $overlap | Select-Object -Unique; throw 'the landing touches dirty paths' }
+git merge-base --is-ancestor HEAD landing-verify; if ($LASTEXITCODE) { throw 'not a fast-forward' }
+"changed=$($changed.Count) dirty=$($dirty.Count) overlap=0, fast-forward"
+```
+
+An untracked directory in `git status --porcelain` ends in `/` and stands for every file under it: compare it by
+prefix, not by exact path. Only when that block passes does the landing go ahead:
+
+```powershell
+$branch = git rev-parse --abbrev-ref HEAD
+if ($LASTEXITCODE -or $branch -ne 'dev/lxy') { throw "not on dev/lxy: $branch" }
 git merge --ff-only landing-verify; if ($LASTEXITCODE) { throw 'git merge failed' }
-git push origin lxy_dev; if ($LASTEXITCODE) { throw 'git push failed' }
+git push origin dev/lxy; if ($LASTEXITCODE) { throw 'git push failed' }
 git branch -D landing-verify; if ($LASTEXITCODE) { throw 'temp ref cleanup failed' }
 ```
 
-The fetch writes only a temporary `landing-verify` ref; `--ff-only` refuses anything but a fast-forward, so a moved
-or diverged target stops here. Delete the ref after the push. Report the final head, per-command pass and skip counts,
-the bundle path, and the pushed range.
+## 6. Prove the checkout was not disturbed
+
+```powershell
+cd D:\learnspace\git\ultimate
+$before = @(Get-Content $env:TEMP\before-status.txt)
+if (-not $before.Count) { throw 'no snapshot; nothing to compare against' }
+$after = @(git status --porcelain)
+if (Compare-Object $before $after) { Compare-Object $before $after | Format-Table -AutoSize; throw 'dirty state changed' }
+$beforeHashes = Get-Content $env:TEMP\before-hashes.json -Raw | ConvertFrom-Json
+foreach ($name in $beforeHashes.PSObject.Properties.Name) {
+  if ((Get-FileHash $name -Algorithm SHA256).Hash -ne $beforeHashes.$name) { throw "changed: $name" }
+}
+git rev-parse HEAD
+git rev-parse origin/dev/lxy
+```
+
+`HEAD` and `origin/dev/lxy` must print the same sha; anything else means the push did not carry the landed commit.
+Report the final head, per-command pass and skip counts, the bundle path, the pushed range, and that the dirty
+snapshot was unchanged.
