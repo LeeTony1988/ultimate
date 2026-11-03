@@ -389,6 +389,7 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
     // Only the shown conversation's composer takes typing shortcuts (Escape, Shift+Tab): they act on that conversation.
     <div
       data-composer-target={scoped === undefined ? 'conversation' : 'scope'}
+      data-ui="composer"
       className={cn(column(dock), 'pb-2')}
     >
       <Inbox items={inbox} />
