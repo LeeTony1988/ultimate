@@ -287,23 +287,28 @@ export default function codingTools(host: Pick<ExtensionHost, 'emit'>) {
   const tool = shell.create()
   // Pi's own shell schema is closed over `command`/`timeout`; a tool schema is any JSON Schema object, so ours states
   // the same two fields with the tripwire's wording and adds `interruptible`.
-  const parameters = obj({
-    command: str({
-      description: `${shell.name === 'powershell' ? 'PowerShell' : 'Bash'} command to execute`,
-    }),
-    timeout: opt(
-      num({
-        description:
-          'Timeout in seconds (optional; without it a default tripwire, 600 s unless configured, stops the command)',
+  const parameters = obj(
+    {
+      command: str({
+        description: `${shell.name === 'powershell' ? 'PowerShell' : 'Bash'} command to execute`,
       }),
-    ),
-    interruptible: opt(
-      bool({
-        description:
-          'Only for commands that just wait or poll (CI checks, deploys, a file appearing): a steering message ends the command early. Never combine with commands that change things.',
-      }),
-    ),
-  })
+      timeout: opt(
+        num({
+          description:
+            'Timeout in seconds (optional; without it a default tripwire, 600 s unless configured, stops the command)',
+        }),
+      ),
+      interruptible: opt(
+        bool({
+          description:
+            'Only for commands that just wait or poll (CI checks, deploys, a file appearing): a steering message ends the command early. Never combine with commands that change things.',
+        }),
+      ),
+    },
+    // Open, as Pi's own shell schema is (pi-durable dist/tools/bash.js): a call that carries an extra key, such as the
+    // `cwd` a model sometimes adds, is accepted rather than refused as an unknown field.
+    { open: true },
+  )
   // In the tool itself, not a wrap, so the events carry the call's trace and conversation.
   const shellCall = defineTool({
     ...tool,

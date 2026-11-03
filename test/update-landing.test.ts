@@ -24,7 +24,7 @@ const landing = { base: 'b1', sha: 's2' }
 it('installs after a landing that changes the lockfile or a patch', async () => {
   expect(await landingInstalls(git(['extensions/a.ts', 'pnpm-lock.yaml']), landing)).toBe(true)
   expect(
-    await landingInstalls(git(['patches/@earendil-works__pi-durable@1.4.0.patch']), landing),
+    await landingInstalls(git(['patches/@earendil-works__pi-durable@1.5.0.patch']), landing),
   ).toBe(true)
 })
 

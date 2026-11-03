@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { BACKGROUND_CONTEXT, withCancel } from '@earendil-works/chord/context'
 import type { Context } from '@earendil-works/chord'
 import type { JsonValue } from '@earendil-works/chord'
-import { bool, int, lit, obj, opt, str, union } from '@earendil-works/pi-schema'
+import { bool, int, obj, oneOf, opt, str } from '@earendil-works/pi-schema'
 import type { AssistantMessage } from '@earendil-works/pi-ai'
 import {
   AgentDoc,
@@ -870,15 +870,7 @@ export default function subagents(
         // Call-id receipts deduplicate starts/messages; memoized targets and guards protect stop/workspace replays.
         replay: 'safe',
         parameters: obj({
-          action: union([
-            lit('start'),
-            lit('message'),
-            lit('wait'),
-            lit('stop'),
-            lit('list'),
-            lit('land'),
-            lit('discard'),
-          ]),
+          action: oneOf(['start', 'message', 'wait', 'stop', 'list', 'land', 'discard']),
           agent: opt(str({ description: 'Required for start: an Available definitions name.' })),
           task: opt(str()),
           background: opt(bool()),
@@ -886,7 +878,7 @@ export default function subagents(
           id: opt(int({ minimum: 1 })),
           text: opt(str()),
           steer: opt(bool()),
-          isolate: opt(union([lit('none'), lit('worktree')])),
+          isolate: opt(oneOf(['none', 'worktree'])),
         }),
         execute: async (args, api, context) => {
           const cached = await api.memo<ReturnType<typeof reply>>('result', context)

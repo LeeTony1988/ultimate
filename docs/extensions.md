@@ -57,7 +57,7 @@ and runs for queued inputs too, so record the device from a UI action instead. A
 right after Pi admits them, which has no hook for queued inputs; answers commit with their reply. Something the user must see
 exactly once and that feeds the result the owner reports, like the lander's deploy handoff, stays a call, idempotent by
 request id; when it calls up the layering, it goes through an extension point (below).
-`host.harness().subscribeCommits` remains for watching Pi's own records (entries, tasks, submissions, conversation
+`onCommit` (lib/commits.ts, over Pi's `observeCommits`) remains for watching Pi's own records (entries, tasks, submissions, conversation
 records, usage and live documents), which are no domain events; each such watcher says so in a comment above it. Do
 not invent an event only to replace one.
 
