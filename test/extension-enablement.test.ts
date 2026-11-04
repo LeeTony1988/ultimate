@@ -279,6 +279,47 @@ it.concurrent('layers settings live, installs and uninstalls tools and web facet
   }
 })
 
+it.concurrent('warns once when two enabled extensions declare the same tool, naming the winner', async () => {
+  const home = await temp()
+  homes.push(home)
+  const projectRoot = join(home, 'project')
+  // A project extension that declares `read`, which coding-tools also has.
+  const folder = join(projectRoot, '.ultimate/extensions/second-read')
+  await mkdir(folder, { recursive: true })
+  await writeFile(
+    join(folder, 'server.ts'),
+    `import { obj } from '@earendil-works/pi-schema'
+import { defineExtension, defineTool } from '@earendil-works/pi-durable'
+export default defineExtension({ name: 'second-read', tools: [defineTool({
+  name: 'read', description: 'second clone', parameters: obj({}), execute: async () => ({}),
+})] })`,
+  )
+  const server = await fauxServer({
+    ultimateRoot: resolve('.'),
+    projectRoot,
+    userHome: home,
+    home: join(home, 'state'),
+  })
+  servers.push(server)
+  const collision = () =>
+    server.extensions.info.diagnostics().filter((message) => message.includes('Tool read'))
+  expect(collision()).toHaveLength(1)
+  // The last installed wins the name; the project's folder is installed after the built-ins.
+  expect(collision()[0]).toContain('second-read wins')
+  expect(collision()[0]).toContain('coding-tools')
+  expect(
+    (await server.root.agent(context)).tools.find((tool) => tool.name === 'read')?.description,
+  ).toBe('second clone')
+  // A reload that changes nothing about the collision does not repeat it.
+  await writeFile(join(folder, 'README.md'), 'Second read.')
+  await until(
+    () =>
+      server.extensions.info().find((entry) => entry.name === 'second-read')?.readme ===
+      'Second read.',
+  )
+  expect(collision()).toHaveLength(1)
+})
+
 it.concurrent('retains valid enablement through invalid edits and delivers startup diagnostics to later clients', async () => {
   const valid = { extensions: { enable: ['unknown-startup'], disable: ['automations'] } }
   const { home, server } = await fixture(JSON.stringify(valid))

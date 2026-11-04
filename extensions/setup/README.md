@@ -4,6 +4,7 @@ button (a ⌘K command, or the Secrets panel at the missing secret).
 
 | Area              | Warns when                                                                                                                    | Fix               |
 | ----------------- | ----------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| Node              | the running Node does not satisfy the project's `engines.node` from its `package.json`                                        |                   |
 | Summary model     | the configured model has no login here (the default falls back, see below)                                                    | Summary model…    |
 | Agent models      | a definition pins a model whose provider has no login here                                                                    | Log in            |
 | Agent definitions | a definition file fails to parse, or a user or project file replaces a built-in whole instead of extending it with `addTools` |                   |

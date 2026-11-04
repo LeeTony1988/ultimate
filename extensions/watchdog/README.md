@@ -4,6 +4,8 @@ Provider errors classified as temporary by Pi, the provider's per-user concurren
 
 A root receipt and background task are created atomically for each failed generation; retry/report submissions use stable request IDs. On open, missed failures are scanned above the stored high-water mark, never advancing past unfinished work. Fresh installation marks existing tasks as historical and reports none of them.
 
+A run that ends `completed` with a final answer carrying no text — the model returned nothing, or hit the output ceiling on thinking alone — gets the same card, worded as an empty turn with `final answer` as its step and no retry: nothing failed on the provider side. The check reads the answer entry the generation's outcome names, so a tool round that ends a run (`terminate`) and a Stop are not reported.
+
 The `watchdog.idle` input note is only for @ultimate and only when its set of branch IDs changes. It excludes concluded, running (including owned children), recently active, user-question-waiting and lander-queued branches. A branch counts as idle after 30 minutes, since a coordinator that ended its run with nothing to wake it may have stalled; one with an open reply-expected message to another conversation gets two hours. It lists at most ten, and clears with “No branches are idle.” It never changes the system prompt.
 
 Watchdog keeps the last 20 reported failures (`watchdog.reported` on the root, written with each report, including @ultimate's own) and serves them through `WatchdogApi.failures(since)`, newest first; the `status` extension reports them.

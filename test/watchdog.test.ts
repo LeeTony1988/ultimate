@@ -350,6 +350,56 @@ it('reports a branch failure once, with its title, error and last tool step; rep
   expect(await f.failures(1_000_001)).toEqual([])
 })
 
+it('reports a run that ended well but answered with nothing, as a silent empty turn', async () => {
+  const f = await fixture((transcript) =>
+    inputText(transcript) === 'silent' ? fauxAssistantMessage('') : fauxAssistantMessage('ok'),
+  )
+  const branch = await f.conversation('Quiet branch')
+  await (await f.submit(branch, 'silent')).wait(context)
+  await until(async () => (await f.entries()).length === 1)
+  expect((await f.entries())[0].data).toEqual({
+    conversation: branch,
+    title: 'Quiet branch',
+    error: 'The model answered with no text at all, so the run left an empty turn',
+    step: 'final answer',
+    retried: false,
+  })
+  // It asks for no retry: nothing failed on the provider side.
+  expect(await f.tasks()).toHaveLength(1)
+  // Reported once; reopening adds no second card.
+  await f.reopen()
+  await f.open()
+  await f.harness.waitForIdle(context)
+  expect(await f.entries()).toHaveLength(1)
+})
+
+it('reports an empty answer of an owned child to its parent, and a Stop to nobody', async () => {
+  const f = await fixture((transcript) => {
+    const text = inputText(transcript)
+    if (text === 'silent') return fauxAssistantMessage('')
+    if (text === 'hold')
+      return fauxAssistantMessage([fauxToolCall('hold', {})], { stopReason: 'toolUse' })
+    return fauxAssistantMessage('ok')
+  })
+  const parent = await f.conversation('Coordinator')
+  const child = await f.conversation('Quiet scout', parent)
+  await (await f.submit(child, 'silent')).wait(context)
+  await until(async () => (await f.entries(parent)).length === 1)
+  expect(await f.entries()).toHaveLength(0)
+  // A stopped run has no answer to miss.
+  const branch = await f.conversation('Stopped')
+  const submitted = await f.submit(branch, 'hold')
+  await until(async () => f.held())
+  const run = (await f.harness.snapshot(LiveDoc, branch, context))!.run!
+  await f.harness.abortTask(run.taskId, context)
+  expect(await submitted.wait(context)).toMatchObject({ status: 'unanswered', reason: 'aborted' })
+  f.release()
+  await until(async () => (await f.tasks()).every((task) => task.state.status === 'terminal'))
+  // Only the child's silent answer was reported, to its parent; the Stop added nothing.
+  expect(await f.entries()).toHaveLength(0)
+  expect(await f.tasks()).toHaveLength(1)
+})
+
 it('routes an owned child failure only to its parent', async () => {
   const f = await fixture((transcript) =>
     inputText(transcript) === 'fail' ? error() : fauxAssistantMessage('ok'),

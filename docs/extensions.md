@@ -114,6 +114,11 @@ the dependency instead, since the provider may load later, and the missing provi
 and wants, the missing providers and the dependency cycles (each a sorted group of extensions that depend on each
 other in a cycle).
 
+Tools share one namespace per agent, composed in install order, so two enabled extensions that declare the same tool
+name would silently leave one of them unused. The registry says so instead: one notice and one extension diagnostic
+per collision, naming the tool, both extensions and which one wins (the last installed). Nothing renames or drops a
+tool; the fix is a user or project override with its own tool name.
+
 An **extension point** is how a lower extension calls up without depending on a higher one: it declares the contract
 in its own `api.ts` as `defineApi<Service>()('<folder>.<point>')` (for example `conversations.trees`) and `want`s it;
 the higher extension imports that token and `implement`s it. The catalogue counts every edge toward the contract's
