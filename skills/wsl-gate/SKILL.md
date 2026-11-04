@@ -52,7 +52,19 @@ reuse a clone whose state you did not create.
 Run `pnpm check`, then `pnpm test`, then `pnpm test:e2e`. Zero failures are required before any merge. Record the
 files and tests passed and name every skip: a capability skip is one the suite itself reports for this host (on WSL,
 the Windows-only `test/e2e/process-group-windows.test.ts` cases and the `pwsh` shebang case in `test/shell.test.ts`).
-Anything else stops the run.
+
+A red suite is not automatically the change's. This host is shared and load-sensitive: at load above ~3, suites that
+spawn a server time out at 30 s in files the change never touches, and which files fail changes from run to run. Before
+blaming the branch, prove it:
+
+- Run the same suite at the base, in the same clone: `git switch --detach <base>`, then the suite, then `git switch dev/lxy`.
+  Red at both ends is environmental.
+- Re-run the failing file alone (`npx vitest run <file>`) at both ends. Green alone and red only in the full suite is load.
+- Record the load with it: `cut -d' ' -f1 /proc/loadavg`, before and after.
+
+Then wait for the host to calm (`until` load below 1) and run the suite again unchanged. Only a failure that reproduces
+at low load, on paths the landing changes, stops the run. Everything else is reported with the base's output; never
+fix it, filter it or raise a timeout to get past it.
 
 ## 3. Merge, then gate again
 
