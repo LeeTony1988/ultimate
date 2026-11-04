@@ -89,6 +89,59 @@ it('stops a printing check at its own timeout, not the default cap', async () =>
   })
 })
 
+it('lets a check raise its no-output limit with `stall`, and keeps a silent one running past the default', async () => {
+  // The shape this host needed: a suite that goes quiet for minutes is not stalled, so `stall` may lengthen the wait.
+  expect(
+    limitsFor({ command: 'pnpm test', timeout: 600, stall: 300 }, { stall: 120, total: 600 }),
+  ).toEqual({ stall: 300, total: 600 })
+  hanging()
+  const ran = runLanderCheck(
+    '.',
+    'pnpm test',
+    context,
+    limitsFor({ command: 'pnpm test', stall: 0.3 }, { stall: 0.1, total: 0.5 }),
+  )
+  // Past the default 0.1 s silence limit, still running; stopped only at its own 0.3 s.
+  await vi.advanceTimersByTimeAsync(200)
+  expect(vi.getTimerCount()).toBeGreaterThan(0)
+  await vi.advanceTimersByTimeAsync(100)
+  expect((await ran).failure).toContain('Stalled: no output for 0.3 s')
+  expect(vi.getTimerCount()).toBe(0)
+})
+
+it('never lets `stall` outlast the total: a larger stall is clamped, not honoured', async () => {
+  // A settings value must not hold a check open past the time it is allowed.
+  expect(
+    limitsFor({ command: 'pnpm test', timeout: 30, stall: 300 }, { stall: 120, total: 600 }),
+  ).toEqual({ stall: 30, total: 30 })
+  expect(limitsFor({ command: 'pnpm test', stall: 900 }, { stall: 120, total: 600 })).toEqual({
+    stall: 600,
+    total: 600,
+  })
+  // And a check that sets neither keeps today's default exactly.
+  expect(limitsFor({ command: 'x' }, { stall: 120, total: 600 })).toEqual({
+    stall: 120,
+    total: 600,
+  })
+  // A short `timeout` still caps the default stall for a check that sets no `stall`.
+  expect(limitsFor({ command: 'x', timeout: 30 }, { stall: 120, total: 600 })).toEqual({
+    stall: 30,
+    total: 30,
+  })
+  // End to end: the clamped total stops a silent check at 0.2 s, not at its 10 s stall.
+  hanging()
+  const ran = runLanderCheck(
+    '.',
+    'pnpm test',
+    context,
+    limitsFor({ command: 'pnpm test', timeout: 0.2, stall: 10 }, { stall: 120, total: 600 }),
+  )
+  await vi.advanceTimersByTimeAsync(200)
+  // The stall limit was clamped down to the total, so the no-output limit fires first, at 0.2 s.
+  expect((await ran).failure).toMatch(/^Stalled: no output for 0.2 s/)
+  expect(vi.getTimerCount()).toBe(0)
+})
+
 it('names the tests that failed before the watchdog fired, even when they left the tail', async () => {
   hanging(
     10,
@@ -110,23 +163,26 @@ const settings = (checks: unknown) =>
     notice: () => {},
   })
 
-it('reads plain commands and commands with their own timeout from settings', async () => {
+it('reads plain commands and commands with their own limits from settings', async () => {
   expect(
     (
       await settings([
         'pnpm check',
-        [{ command: 'pnpm test', timeout: 120 }, 'pnpm test:e2e'],
+        [{ command: 'pnpm test', timeout: 600, stall: 300 }, 'pnpm test:e2e'],
         { command: 'pnpm build', timeout: 60 },
       ])
     ).checks,
   ).toEqual([
     { command: 'pnpm check' },
-    [{ command: 'pnpm test', timeout: 120 }, { command: 'pnpm test:e2e' }],
+    [{ command: 'pnpm test', timeout: 600, stall: 300 }, { command: 'pnpm test:e2e' }],
     { command: 'pnpm build', timeout: 60 },
   ])
   for (const invalid of [
     [{ command: 'pnpm test', timeout: 0 }],
     [{ command: 'pnpm test', timeout: '2m' }],
+    [{ command: 'pnpm test', stall: 0 }],
+    [{ command: 'pnpm test', stall: -1 }],
+    [{ command: 'pnpm test', stall: '5m' }],
     [{ timeout: 60 }],
     [[]],
     'pnpm test',
