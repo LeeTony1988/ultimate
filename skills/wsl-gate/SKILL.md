@@ -62,9 +62,15 @@ blaming the branch, prove it:
 - Re-run the failing file alone (`npx vitest run <file>`) at both ends. Green alone and red only in the full suite is load.
 - Record the load with it: `cut -d' ' -f1 /proc/loadavg`, before and after.
 
-Then wait for the host to calm (`until` load below 1) and run the suite again unchanged. Only a failure that reproduces
-at low load, on paths the landing changes, stops the run. Everything else is reported with the base's output; never
-fix it, filter it or raise a timeout to get past it.
+Then run the suite again unchanged, at most twice. Never block on the load average: the suite itself pins every core
+for its whole run, so a threshold high enough to wait for is one the run it just finished keeps alive, and the gate
+spends longer waiting than testing. Print the load before each attempt, run it, print it again, and keep the output.
+
+Only a failure that survives both attempts, reproduces at the base, and sits on paths the landing changes stops the
+run. Everything else is reported as _could not gate at load N_, with the base's output and the failing test names —
+never fixed, filtered or given a raised timeout to get past it. For a change with no runtime surface (Markdown, a
+skill, a doc), `pnpm check` plus the unit suite is the honest gate; say in the report that e2e was not run to green
+and why, and give the last full e2e result you have.
 
 ## 3. Merge, then gate again
 
