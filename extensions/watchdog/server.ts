@@ -16,6 +16,7 @@ import type {
   ConversationId,
   Cursor,
   EntryId,
+  EntryRecord,
   SubmissionRecord,
   TaskRecord,
   Tx,
@@ -61,6 +62,18 @@ const failed = (task: TaskRecord<JsonValue, JsonValue, JsonValue>) =>
   ['model_error', 'no_model'].includes(
     (task.state.outcome.error.detail as { reason?: string } | undefined)?.reason ?? '',
   )
+/**
+ * The reason a finished answer has nothing to show, or undefined when it has text. A `terminate` round's result and a
+ * Stop are answers of their own, and never reach this.
+ */
+function silentReason(message: AssistantMessage) {
+  if (message.stopReason !== 'stop' && message.stopReason !== 'length') return undefined
+  const text = message.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('')
+  if (text.trim()) return undefined
+  return message.stopReason === 'length'
+    ? 'The run ended at the output limit without any text: the model spent its whole answer budget on thinking'
+    : 'The model answered with no text at all, so the run left an empty turn'
+}
 const failedInput = (input: SubmissionRecord) =>
   input.type === 'input' &&
   input.status === 'unanswered' &&
@@ -274,13 +287,30 @@ export default function watchdog(host: ExtensionHost) {
       runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
   })
 
+  /** A generation task that ended, in any way: only one whose final answer has no text needs a look. */
+  const endedGeneration = (task: TaskRecord<JsonValue, JsonValue, JsonValue>) =>
+    task.kind === GenerationTask.definition.name && task.state.status === 'terminal'
+  /** A completed run's silent answer, from the entries its ending commit wrote; undefined when it answered. */
+  function silentAnswer(task: Generation, entries: readonly EntryRecord[]) {
+    if (task.state.status !== 'terminal' || task.state.outcome.status !== 'completed')
+      return undefined
+    const id = (task.state.outcome.result as { entryId?: EntryId } | null)?.entryId
+    const message = entries.find((entry) => entry.id === id)?.model?.[0]
+    if (message?.role !== 'assistant') return undefined
+    return silentReason(message)
+  }
+
   async function detect(
     task: TaskRecord<JsonValue, JsonValue, JsonValue>,
     inputs?: SubmissionRecord[],
+    entries: readonly EntryRecord[] = [],
   ) {
-    if (!failed(task)) return
-    let submissions = inputs
-    if (!submissions) {
+    if (!failed(task) && !endedGeneration(task)) return
+    const reason = failed(task) ? undefined : silentAnswer(task, entries)
+    // Most runs answer: outside a failure or a silent answer there is nothing to report, so nothing to write.
+    if (!failed(task) && reason === undefined) return
+    let submissions = inputs ?? []
+    if (failed(task) && !inputs) {
       submissions = []
       let cursor: Cursor | undefined
       do {
@@ -297,6 +327,37 @@ export default function watchdog(host: ExtensionHost) {
     await host.harness().commit(async (tx) => {
       const receipts = await tx.doc(Receipts, ROOT_CONVERSATION_ID)
       if (task.id <= (receipts.highWater ?? Infinity) || receipts.tasks[String(task.id)]) return
+      const child = (await tx.conversation(task.conversationId))!
+      const ultimate = (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
+      const recipient = child.owner?.conversationId ?? ultimate
+      if (recipient === undefined) {
+        // Only reachable while no @ultimate exists, where there is nobody to tell.
+        if (failed(task)) throw new Error('Watchdog needs @ultimate to report a failed run')
+        return
+      }
+      // A run that ended well but said nothing gets the same card, so a silent empty turn is never taken for an answer.
+      if (reason !== undefined) {
+        // Only a card is worth a receipt: every other answer is read once and dropped.
+        receipts.tasks[String(task.id)] = true
+        await tx.createTask(
+          Watchdog,
+          {
+            failedTask: task.id,
+            conversation: child.id,
+            recipient,
+            title: (await tx.doc(host.metadata, child.id)).title ?? 'Untitled',
+            error: reason,
+            step: 'final answer',
+            retried: false,
+            temporary: false,
+            until: (task.endedAt ?? Date.now()) + RETRY_AFTER,
+          },
+          { conversationId: recipient, ownership: { kind: 'conversation' }, background: true },
+        )
+        return
+      }
+      if (!failed(task)) return
+      receipts.tasks[String(task.id)] = true
       const info = await details(tx, host.metadata, task)
       const runInputs = submissions.filter(
         (input) =>
@@ -304,7 +365,6 @@ export default function watchdog(host: ExtensionHost) {
           input.entry !== undefined &&
           (inputs !== undefined || (input.entry > info.lower && input.entry <= info.upper)),
       )
-      receipts.tasks[String(task.id)] = true
       const messages = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages
       if (
         runInputs.some((input) => {
@@ -315,11 +375,6 @@ export default function watchdog(host: ExtensionHost) {
         })
       )
         return
-      const child = (await tx.conversation(task.conversationId))!
-      const ultimate = (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
-      const recipient = child.owner?.conversationId ?? ultimate
-      if (recipient === undefined)
-        throw new Error('Watchdog needs @ultimate to report a failed run')
       if (task.state.status !== 'terminal' || task.state.outcome.status !== 'failed') return
       const error = task.state.outcome.error.message
       const { hint, temporary } = diagnose(error, info.assistant)
@@ -363,19 +418,25 @@ export default function watchdog(host: ExtensionHost) {
       const inputs = publication.changes.flatMap((change) =>
         change.type === 'submission' && failedInput(change.value) ? [change.value] : [],
       )
+      // An answer is written in the same commit as the task that ended on it, so this publication carries both.
+      const entries = publication.changes.flatMap((change) =>
+        change.type === 'entry' ? [change.value] : [],
+      )
       for (const change of publication.changes) {
-        if (change.type !== 'task' || !failed(change.value)) continue
+        if (change.type !== 'task' || (!failed(change.value) && !endedGeneration(change.value)))
+          continue
         recovery = recovery
           .then(() =>
             detect(
               change.value,
               inputs.filter((input) => input.conversationId === change.value.conversationId),
+              entries.filter((entry) => entry.conversationId === change.value.conversationId),
             ),
           )
           .catch((error: unknown) => host.notice(`Watchdog recovery failed: ${String(error)}`))
       }
     })
-    const tasks = await host.harness().commit(async (tx) => {
+    const found = await host.harness().commit(async (tx) => {
       const receipts = await tx.doc(Receipts, ROOT_CONVERSATION_ID)
       if (receipts.highWater === undefined) {
         let newest = 0
@@ -386,7 +447,7 @@ export default function watchdog(host: ExtensionHost) {
           for (const task of page.items) {
             newest = task.id
             if (task.state.status !== 'terminal') unfinished = Math.min(unfinished, task.id)
-            // Terminal failures are historical even when a still-running older task holds the mark back.
+            // Terminal runs are historical even when a still-running older task holds the mark back.
             if (failed(task)) receipts.tasks[String(task.id)] = true
           }
           cursor = page.next
@@ -403,11 +464,27 @@ export default function watchdog(host: ExtensionHost) {
       } while (cursor)
       return all.toReversed()
     }, context)
-    for (const task of tasks) await detect(task)
+    for (const task of found) {
+      // Reopening replays stored history instead of a publication: read this run's answer from its conversation.
+      const answer = endedGeneration(task) && !failed(task) ? task.state.outcome : undefined
+      const id =
+        answer?.status === 'completed'
+          ? (answer.result as { entryId?: EntryId } | null)?.entryId
+          : undefined
+      const conversation =
+        id === undefined
+          ? undefined
+          : await host.harness().conversation(task.conversationId, context)
+      const entries =
+        id === undefined
+          ? []
+          : ((await conversation?.entries({ maxEntryId: id }, 1, undefined, context))?.items ?? [])
+      await detect(task, undefined, entries)
+    }
     // Do not pass unfinished tasks: an older run can fail after a newer one, even across restart.
     await host.harness().commit(async (tx) => {
       const receipts = await tx.doc(Receipts, ROOT_CONVERSATION_ID)
-      for (const task of tasks) {
+      for (const task of found) {
         if (task.state.status !== 'terminal') break
         receipts.highWater = task.id
       }
