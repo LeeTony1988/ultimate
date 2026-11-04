@@ -129,13 +129,16 @@ lander's sidebar row shows the feature it lands or landed last.
    when it is ahead.
 2. Merges the submitted tip. A conflict aborts the merge and reports the conflicting paths.
 3. Runs `lander.checks` in order. Each check is stopped after 2 minutes without output or 10 minutes total, or at
-   its own `timeout` (seconds, which also caps the no-output limit), stopping its whole process container. Checks run
+   its own limits: `timeout` (seconds) for the total, `stall` (seconds) for the no-output limit. Both only ever lower a
+   limit: a `stall` never outlasts the total, and a `timeout` without its own `stall` still caps the no-output limit,
+   so a check that sets neither keeps the defaults and no other project's behaviour changes. Stopping ends its whole
+   process container. Checks run
    through the host shell (`bash` on macOS/Linux; PowerShell on Windows) and use POSIX process groups or a Windows Job
    Object to contain descendants. Watchdog
    failures name the limit that fired, the failed test lines seen so far (vitest's `FAIL`/`×` lines, kept even when
    they scrolled out of the tail) and the output tail, and enter the same rerun/fix flow as other check failures.
    An entry is a check or an array of checks, a group that runs concurrently; a check is a command string or
-   `{ "command": "pnpm test", "timeout": 180 }`.
+   `{ "command": "pnpm test", "timeout": 600, "stall": 300 }`.
    A failing check
    reruns once: passing then is reported as flaky, failing again reports the output tail once every command of its
    group settled. Each command keeps its own memo, steps and flaky note. A passed or flaky check records its last
@@ -160,7 +163,7 @@ lander's sidebar row shows the feature it lands or landed last.
    step and notice; the landing stays landed. Invalid deploy settings give a notice and disable only the hook. No
    setting or no matching paths means no deploy step.
 
-Settings (`.ultimate/settings.json`): `"lander": { "checks": ["pnpm check", [{ "command": "pnpm test", "timeout": 180 }, "pnpm test:e2e"]], "push": "origin" }`;
+Settings (`.ultimate/settings.json`): `"lander": { "checks": ["pnpm check", [{ "command": "pnpm test", "timeout": 600, "stall": 300 }, "pnpm test:e2e"]], "push": "origin" }`;
 both are optional. Optional `"deploy": { "agent": "cloudflare", "paths": ["src/", "wrangler.json"] }` inside
 `lander` enables the deploy handoff. `paths` is a non-empty list of non-empty path prefixes (not globs), and `agent`
 must name a resident agent. The messages extension must be enabled.
