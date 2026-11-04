@@ -3,7 +3,7 @@ import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 // restore that installs a backup as a home's state.
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterAll, beforeAll, expect, it, vi } from 'vitest'
 import { backUp, backupPath, classify, Conflict, readBackup } from '../extensions/cloud/backup.ts'
@@ -283,7 +283,7 @@ it('restores into a home: moves the old state aside, installs the backup and rec
     now: new Date('2026-10-21T10:00:00Z'),
   })
   expect(result.backup).toBe(
-    join(backups, 'restore-2026-10-21T10-00-00-000Z', target.home.split('/').at(-1)!),
+    join(backups, 'restore-2026-10-21T10-00-00-000Z', basename(target.home)),
   )
   expect(result.moves).toEqual(['conversations.json', 'state.sqlite'])
   expect(notes(target.home)).toEqual(['kept history'])
@@ -585,7 +585,7 @@ it('leaves an interrupted restore journaled, keeps Ultimate out, and finishes it
   await writeFile(join(home, 'conversations.json'), '[]')
   const backups = await temp('ultimate-restore-backups-')
   const now = new Date('2026-10-21T11:00:00Z')
-  const backup = join(backups, 'restore-2026-10-21T11-00-00-000Z', home.split('/').at(-1)!)
+  const backup = join(backups, 'restore-2026-10-21T11-00-00-000Z', basename(home))
   // A file already in the backup fails the second move, after conversations.json went.
   await mkdir(backup, { recursive: true })
   await writeFile(join(backup, 'state.sqlite'), 'in the way')

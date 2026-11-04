@@ -3,7 +3,7 @@
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, realpath, rename, rm, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { createInterface } from 'node:readline/promises'
 import { parseArgs } from 'node:util'
 import { git } from '../lib/git.ts'
@@ -62,7 +62,7 @@ export const movable = async (home: string) =>
 
 /** `<backups>/<kind>-<time>/<home's folder>`: where a reset or restore keeps the state it replaces. */
 export const backupFolder = (backups: string, kind: string, home: string, now = new Date()) =>
-  join(backups, `${kind}-${now.toISOString().replace(/[:.]/g, '-')}`, home.split('/').at(-1)!)
+  join(backups, `${kind}-${now.toISOString().replace(/[:.]/g, '-')}`, basename(home))
 
 /** What a reset of `home` moves. */
 export async function plan(home: string, backups: string, now = new Date()): Promise<Plan> {

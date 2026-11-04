@@ -6,6 +6,7 @@ import { expect, it, vi } from 'vitest'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { type BashExecution } from '@earendil-works/pi-durable/tools'
 import { prepareBash } from '../../extensions/coding-tools/server.ts'
+import { shell } from '../../lib/shell.ts'
 import { removeTemp, temp } from '../helpers.ts'
 
 const run = promisify(execFile)
@@ -28,8 +29,13 @@ it.each([0, 1])(
       const before = await readdir(hooks)
       const execution: BashExecution = { command: '', cwd, env: {}, inheritEnv: true }
       prepareBash(execution, { conversationId: 34820 as ConversationId })
-      const bash = (command: string) =>
-        run('bash', ['-c', command], { cwd, env: { ...process.env, ...execution.env } })
+      // The hooks reach git through `GIT_CONFIG_*` variables of the environment the shell tool spawns, so the commands
+      // go through the shell the product uses on this host: bash on POSIX, PowerShell on Windows, where `bash` is WSL
+      // and only forwards the variables `WSLENV` lists. Both hosts then run the same command string.
+      const bash = (command: string) => {
+        const { program, args } = shell.argv(command)
+        return run(program, args, { cwd, env: { ...process.env, ...execution.env } })
+      }
       expect((await bash('git config --list')).stdout.includes('ultimate.test=preserved')).toBe(
         count === 1,
       )
@@ -40,10 +46,7 @@ it.each([0, 1])(
       expect((await git('log', '-1', '--format=%B')).stdout).toContain('Other-Trailer: kept')
 
       prepareBash(execution, { conversationId: 42 as ConversationId })
-      await run('bash', ['-c', 'git commit --amend --allow-empty --no-edit'], {
-        cwd,
-        env: { ...process.env, ...execution.env },
-      })
+      await bash('git commit --amend --allow-empty --no-edit')
       const amended = (await git('log', '-1', '--format=%B')).stdout
       expect(amended).toContain('Ultimate-Conversation: 42')
       expect(amended).not.toContain('Ultimate-Conversation: 34820')
