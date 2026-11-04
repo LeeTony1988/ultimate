@@ -12,6 +12,7 @@
     "check": "vp check && node scripts/deps.ts",
     "deps": "node scripts/deps.ts",
     "test": "vp test",
+    "test:changed": "node scripts/affected.ts",
     "test:e2e": "vitest run --config test/e2e/vitest.config.ts",
     "setup:machine": "node scripts/setup-machine.ts",
     "reset": "node scripts/reset.ts",
