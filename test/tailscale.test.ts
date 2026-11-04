@@ -1,6 +1,6 @@
 import { chmod, cp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import tailscale, { actions } from '../extensions/tailscale/server.ts'
 import type { Status } from '../extensions/tailscale/api.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
@@ -147,91 +147,51 @@ async function repo(home: string) {
   return root
 }
 
-it('starts on a project enable, takes the allowlist only from user settings and tears down on live settings reload', async () => {
-  const f = await fixture()
-  const root = await repo(f.home)
-  const server = await createServer({
-    ultimateRoot: root,
-    projectRoot: root,
-    userHome: f.home,
-    home: join(f.home, 'state'),
-    port: 0,
-  })
-  closes.push(async () => {
-    await server.vite.watcher.close()
-    await server.close()
-  })
-  const status = async () =>
-    (await post(server, '/api/extensions/tailscale/actions/status', { args: null })).data
-      .result as Status
-  expect(await status()).toMatchObject({ state: 'ready', allow: ['owner@example.com'] })
-  expect(server.system.current().access.origins).toHaveLength(1)
-  await writeFile(
-    join(f.home, '.ultimate/settings.json'),
-    '{"tailscale":{"allow":["changed@example.com"]}}',
-  )
-  await until(async () => (await status()).allow.includes('changed@example.com'))
-  expect((await f.invocations()).filter((args) => args.includes('off'))).toHaveLength(1)
-  await writeFile(join(root, '.ultimate/settings.json'), '{}')
-  await until(
-    () => server.extensions.info().find((entry) => entry.name === 'tailscale')?.enabled === false,
-  )
-  await until(
-    async () => (await f.invocations()).filter((args) => args.includes('off')).length === 2,
-  )
-  expect((await f.invocations()).filter((args) => args.includes('off'))).toHaveLength(2)
-  await until(() => server.system.current().access.origins.length === 0)
-})
-
-it('serves, verifies the owner login by default, and tears down only its port', async () => {
-  const f = await fixture()
-  const app = await f.instance()
-  expect(await app.status()).toEqual({
-    state: 'ready',
-    url: 'https://rog.example.ts.net:4747',
-    allow: ['owner@example.com'],
-  })
-  const rule = [...app.access.rules][0]
-  expect(await rule.verify({ headers: { 'tailscale-user-login': 'owner@example.com' } })).toEqual({
-    login: 'owner@example.com',
-  })
-  expect(
-    await rule.verify({ headers: { 'tailscale-user-login': 'shared@example.com' } }),
-  ).toBeUndefined()
-  expect(await rule.verify({ headers: {} })).toBeUndefined()
-  expect(await f.invocations()).toContainEqual([
-    'serve',
-    '--bg',
-    '--yes',
-    '--https=4747',
-    'http://127.0.0.1:4747',
-  ])
-  await app.close()
-  expect(app.access.origins()).toEqual([])
-  expect(await f.invocations()).toContainEqual(['serve', '--https=4747', 'off'])
-  expect(
-    JSON.parse(await readFile(join(f.home, '.ultimate/tailscale.json'), 'utf8')).ports,
-  ).toEqual({ '/project/a': { port: 4747, owner: expect.stringMatching(/^\d+:/) } })
-})
-it.each([
-  { name: 'absent', users: {} },
-  { name: 'present', users: { '9007199254740992': { LoginName: 'decoy@example.com' } } },
-])(
-  'preserves a raw 64-bit owner ID and rejects other logins (rounded-key decoy: $name)',
-  async ({ users: decoy }) => {
-    const users = {
-      '9007199254740993': { LoginName: 'owner@example.com' },
-      ...decoy,
-    }
-    const f = await fixture({
-      // Keep the numeric token raw: parsing/stringifying it in the fixture would round it first.
-      statusJson: `{
-        "BackendState": "Running",
-        "Self": { "DNSName": "rog.example.ts.net.", "UserID": 9007199254740993 },
-        "User": ${JSON.stringify(users)},
-        "CertDomains": ["rog.example.ts.net"]
-      }`,
+/**
+ * Every case drives a stub `tailscale` CLI found on PATH. Windows cannot run such a stub: `execFile` resolves no
+ * extensionless file, not by bare name, absolute path or a `.cmd` wrapper, and the product starts the CLI with its
+ * arguments only, so a copy of `node` cannot stand in either. Tailscale has no Windows CLI, so the extension is not
+ * exercised there; the cases run in full on the platforms it serves.
+ */
+describe.skipIf(process.platform === 'win32')('tailscale', () => {
+  it('starts on a project enable, takes the allowlist only from user settings and tears down on live settings reload', async () => {
+    const f = await fixture()
+    const root = await repo(f.home)
+    const server = await createServer({
+      ultimateRoot: root,
+      projectRoot: root,
+      userHome: f.home,
+      home: join(f.home, 'state'),
+      port: 0,
     })
+    closes.push(async () => {
+      await server.vite.watcher.close()
+      await server.close()
+    })
+    const status = async () =>
+      (await post(server, '/api/extensions/tailscale/actions/status', { args: null })).data
+        .result as Status
+    expect(await status()).toMatchObject({ state: 'ready', allow: ['owner@example.com'] })
+    expect(server.system.current().access.origins).toHaveLength(1)
+    await writeFile(
+      join(f.home, '.ultimate/settings.json'),
+      '{"tailscale":{"allow":["changed@example.com"]}}',
+    )
+    await until(async () => (await status()).allow.includes('changed@example.com'))
+    expect((await f.invocations()).filter((args) => args.includes('off'))).toHaveLength(1)
+    await writeFile(join(root, '.ultimate/settings.json'), '{}')
+    await until(
+      () => server.extensions.info().find((entry) => entry.name === 'tailscale')?.enabled === false,
+    )
+    await until(
+      async () => (await f.invocations()).filter((args) => args.includes('off')).length === 2,
+    )
+    expect((await f.invocations()).filter((args) => args.includes('off'))).toHaveLength(2)
+    await until(() => server.system.current().access.origins.length === 0)
+  })
+
+  it('serves, verifies the owner login by default, and tears down only its port', async () => {
+    const f = await fixture()
     const app = await f.instance()
     expect(await app.status()).toEqual({
       state: 'ready',
@@ -244,308 +204,367 @@ it.each([
         login: 'owner@example.com',
       },
     )
-    for (const login of ['decoy@example.com', 'shared@example.com'])
-      expect(await rule.verify({ headers: { 'tailscale-user-login': login } })).toBeUndefined()
+    expect(
+      await rule.verify({ headers: { 'tailscale-user-login': 'shared@example.com' } }),
+    ).toBeUndefined()
     expect(await rule.verify({ headers: {} })).toBeUndefined()
-  },
-)
-it('assigns distinct stable ports to two projects even when local ports change', async () => {
-  const f = await fixture()
-  const first = await f.instance('/project/a', 4747)
-  const second = await f.instance('/project/b', 4747)
-  expect((await first.status()).url).toBe('https://rog.example.ts.net:4747')
-  expect((await second.status()).url).toBe('https://rog.example.ts.net:4748')
-  await first.close()
-  await second.close()
-  const restarted = await f.instance('/project/a', 4750)
-  const restartedB = await f.instance('/project/b', 4751)
-  expect((await restarted.status()).url).toBe('https://rog.example.ts.net:4747')
-  expect((await restartedB.status()).url).toBe('https://rog.example.ts.net:4748')
-  expect(await f.invocations()).toContainEqual([
-    'serve',
-    '--bg',
-    '--yes',
-    '--https=4747',
-    'http://127.0.0.1:4750',
-  ])
-})
-it('replaces a stale own loopback mapping and leaves foreign mappings untouched', async () => {
-  const serve = {
-    TCP: { '443': { HTTPS: true }, '4747': { HTTPS: true } },
-    Web: {
-      'rog.example.ts.net:443': { Handlers: { '/': { Proxy: 'http://127.0.0.1:38886' } } },
-      'rog.example.ts.net:4747': { Handlers: { '/': { Proxy: 'http://127.0.0.1:4790' } } },
+    expect(await f.invocations()).toContainEqual([
+      'serve',
+      '--bg',
+      '--yes',
+      '--https=4747',
+      'http://127.0.0.1:4747',
+    ])
+    await app.close()
+    expect(app.access.origins()).toEqual([])
+    expect(await f.invocations()).toContainEqual(['serve', '--https=4747', 'off'])
+    expect(
+      JSON.parse(await readFile(join(f.home, '.ultimate/tailscale.json'), 'utf8')).ports,
+    ).toEqual({ '/project/a': { port: 4747, owner: expect.stringMatching(/^\d+:/) } })
+  })
+  it.each([
+    { name: 'absent', users: {} },
+    { name: 'present', users: { '9007199254740992': { LoginName: 'decoy@example.com' } } },
+  ])(
+    'preserves a raw 64-bit owner ID and rejects other logins (rounded-key decoy: $name)',
+    async ({ users: decoy }) => {
+      const users = {
+        '9007199254740993': { LoginName: 'owner@example.com' },
+        ...decoy,
+      }
+      const f = await fixture({
+        // Keep the numeric token raw: parsing/stringifying it in the fixture would round it first.
+        statusJson: `{
+          "BackendState": "Running",
+          "Self": { "DNSName": "rog.example.ts.net.", "UserID": 9007199254740993 },
+          "User": ${JSON.stringify(users)},
+          "CertDomains": ["rog.example.ts.net"]
+        }`,
+      })
+      const app = await f.instance()
+      expect(await app.status()).toEqual({
+        state: 'ready',
+        url: 'https://rog.example.ts.net:4747',
+        allow: ['owner@example.com'],
+      })
+      const rule = [...app.access.rules][0]
+      expect(
+        await rule.verify({ headers: { 'tailscale-user-login': 'owner@example.com' } }),
+      ).toEqual({
+        login: 'owner@example.com',
+      })
+      for (const login of ['decoy@example.com', 'shared@example.com'])
+        expect(await rule.verify({ headers: { 'tailscale-user-login': login } })).toBeUndefined()
+      expect(await rule.verify({ headers: {} })).toBeUndefined()
     },
-  }
-  const f = await fixture({ serve })
-  await writeFile(
-    join(f.home, '.ultimate/tailscale.json'),
-    JSON.stringify({ ports: { '/project/a': { port: 4747, owner: `${process.pid}:previous` } } }),
   )
-  const app = await f.instance('/project/a', 4750)
-  expect((await app.status()).state).toBe('ready')
-  await app.close()
-  expect((await f.invocations()).filter((args) => args.some((arg) => arg.includes('443')))).toEqual(
-    [],
-  )
-})
-it('skips foreign ports for new projects and refuses foreign targets on existing assignments', async () => {
-  const serve = {
-    TCP: { '4747': { HTTPS: true } },
-    Web: {
-      'rog.example.ts.net:4747': { Handlers: { '/': { Proxy: 'http://foreign.example:9000' } } },
-    },
-  }
-  const f = await fixture({ serve })
-  const newApp = await f.instance('/project/new')
-  expect((await newApp.status()).url).toBe('https://rog.example.ts.net:4748')
-  await newApp.close()
-  await writeFile(
-    join(f.home, '.ultimate/tailscale.json'),
-    JSON.stringify({ ports: { '/project/a': { port: 4747, owner: `${process.pid}:previous` } } }),
-  )
-  const app = await f.instance()
-  expect(await app.status()).toMatchObject({
-    state: 'port-conflict',
-    hint: expect.stringContaining('foreign mapping'),
+  it('assigns distinct stable ports to two projects even when local ports change', async () => {
+    const f = await fixture()
+    const first = await f.instance('/project/a', 4747)
+    const second = await f.instance('/project/b', 4747)
+    expect((await first.status()).url).toBe('https://rog.example.ts.net:4747')
+    expect((await second.status()).url).toBe('https://rog.example.ts.net:4748')
+    await first.close()
+    await second.close()
+    const restarted = await f.instance('/project/a', 4750)
+    const restartedB = await f.instance('/project/b', 4751)
+    expect((await restarted.status()).url).toBe('https://rog.example.ts.net:4747')
+    expect((await restartedB.status()).url).toBe('https://rog.example.ts.net:4748')
+    expect(await f.invocations()).toContainEqual([
+      'serve',
+      '--bg',
+      '--yes',
+      '--https=4747',
+      'http://127.0.0.1:4750',
+    ])
   })
-  await app.close()
-  expect((await f.invocations()).filter((args) => args.includes('--https=4747'))).toEqual([])
-})
-it.each([
-  { field: 'DNS name', status: { ...node, Self: { UserID: 7 } }, hint: 'MagicDNS' },
-  { field: 'owner login', status: { ...node, User: {} }, hint: 'Self.UserID and User' },
-  {
-    field: 'owner ID',
-    status: { ...node, Self: { DNSName: node.Self.DNSName } },
-    hint: 'Self.UserID and User',
-  },
-])('reports missing $field on a running daemon as a metadata error', async ({ status, hint }) => {
-  const f = await fixture({ node: status })
-  const app = await f.instance()
-  expect(await app.status()).toMatchObject({
-    state: 'error',
-    hint: expect.stringContaining(hint),
-  })
-  expect(app.access.origins()).toEqual([])
-  expect(await f.invocations()).toEqual([['status', '--json']])
-})
-it.each([
-  [{ node: { ...node, CertDomains: [] } }, 'https-disabled', 'admin console'],
-  [
-    {
-      error: 'Access denied: not operator',
-      errorOn: 'serve --bg --yes --https=4747 http://127.0.0.1:4747',
-    },
-    'not-operator',
-    'sudo tailscale set --operator=$USER',
-  ],
-])('reports actionable failure states (%s)', async (scenario, state, hint) => {
-  const f = await fixture(scenario)
-  const app = await f.instance()
-  expect(await app.status()).toMatchObject({ state, hint: expect.stringContaining(hint) })
-  expect(app.access.origins()).toEqual([])
-  await app.close()
-  expect((await f.invocations()).filter((args) => args.includes('off'))).toEqual([])
-})
-it('retries a failed start on request, one start at a time, and does nothing once ready', async () => {
-  const f = await fixture({ node: { ...node, CertDomains: [] } })
-  const app = await f.instance()
-  expect((await app.status()).state).toBe('https-disabled')
-  const config = JSON.parse(await readFile(f.config, 'utf8'))
-  await writeFile(f.config, JSON.stringify({ ...config, node }))
-  const retry = async () =>
-    (await actions.retry(null, { host: app.host } as Parameters<typeof actions.retry>[1])) as Status
-  const [first, second] = await Promise.all([retry(), retry()])
-  expect(first).toEqual({
-    state: 'ready',
-    url: 'https://rog.example.ts.net:4747',
-    allow: ['owner@example.com'],
-  })
-  expect(second).toEqual(first)
-  expect((await f.invocations()).filter((args) => args.includes('--bg'))).toHaveLength(1)
-  expect(await retry()).toEqual(first)
-  expect((await f.invocations()).filter((args) => args.includes('--bg'))).toHaveLength(1)
-})
-it('treats a missing TAILSCALE_COMMAND as not installed, never falling back to another CLI', async () => {
-  const f = await fixture()
-  // The stub on PATH would publish; a named but missing CLI must win over it and over the macOS app.
-  vi.stubEnv('TAILSCALE_COMMAND', join(f.home, 'missing-tailscale'))
-  const app = await f.instance()
-  expect(await app.status()).toMatchObject({ state: 'not-installed' })
-  expect(app.notices).toEqual([])
-  expect(await f.invocations()).toEqual([])
-})
-it('reports not installed quietly without attempting Serve', async () => {
-  const f = await fixture()
-  vi.stubEnv('PATH', join(f.home, 'missing'))
-  const app = await f.instance()
-  expect(await app.status()).toMatchObject({
-    state: 'not-installed',
-    hint: expect.stringContaining('Install Tailscale'),
-  })
-  expect(app.notices).toEqual([])
-  expect(await f.invocations()).toEqual([])
-})
-it('hands ownership to an overlapping successor and does not remove foreign replacements', async () => {
-  const f = await fixture()
-  const old = await f.instance('/project/a', 4747)
-  const next = await f.instance('/project/a', 4750)
-  await old.close()
-  expect((await f.invocations()).filter((args) => args.includes('off'))).toHaveLength(0)
-  const config = JSON.parse(await readFile(f.config, 'utf8'))
-  expect(config.serve.Web['rog.example.ts.net:4747'].Handlers['/'].Proxy).toBe(
-    'http://127.0.0.1:4750',
-  )
-  config.serve.Web['rog.example.ts.net:4747'].Handlers['/'].Proxy = 'http://foreign.example:9000'
-  await writeFile(f.config, JSON.stringify(config))
-  await next.close()
-  expect((await f.invocations()).filter((args) => args.includes('off'))).toHaveLength(0)
-})
-it('recovers dead registry owners and leaves unowned mappings intact', async () => {
-  const f = await fixture({
-    serve: {
+  it('replaces a stale own loopback mapping and leaves foreign mappings untouched', async () => {
+    const serve = {
+      TCP: { '443': { HTTPS: true }, '4747': { HTTPS: true } },
       Web: {
-        'rog.example.ts.net:4748': { Handlers: { '/': { Proxy: 'http://127.0.0.1:4998' } } },
-        'rog.example.ts.net:4749': { Handlers: { '/': { Proxy: 'http://127.0.0.1:4999' } } },
+        'rog.example.ts.net:443': { Handlers: { '/': { Proxy: 'http://127.0.0.1:38886' } } },
+        'rog.example.ts.net:4747': { Handlers: { '/': { Proxy: 'http://127.0.0.1:4790' } } },
       },
+    }
+    const f = await fixture({ serve })
+    await writeFile(
+      join(f.home, '.ultimate/tailscale.json'),
+      JSON.stringify({ ports: { '/project/a': { port: 4747, owner: `${process.pid}:previous` } } }),
+    )
+    const app = await f.instance('/project/a', 4750)
+    expect((await app.status()).state).toBe('ready')
+    await app.close()
+    expect(
+      (await f.invocations()).filter((args) => args.some((arg) => arg.includes('443'))),
+    ).toEqual([])
+  })
+  it('skips foreign ports for new projects and refuses foreign targets on existing assignments', async () => {
+    const serve = {
+      TCP: { '4747': { HTTPS: true } },
+      Web: {
+        'rog.example.ts.net:4747': { Handlers: { '/': { Proxy: 'http://foreign.example:9000' } } },
+      },
+    }
+    const f = await fixture({ serve })
+    const newApp = await f.instance('/project/new')
+    expect((await newApp.status()).url).toBe('https://rog.example.ts.net:4748')
+    await newApp.close()
+    await writeFile(
+      join(f.home, '.ultimate/tailscale.json'),
+      JSON.stringify({ ports: { '/project/a': { port: 4747, owner: `${process.pid}:previous` } } }),
+    )
+    const app = await f.instance()
+    expect(await app.status()).toMatchObject({
+      state: 'port-conflict',
+      hint: expect.stringContaining('foreign mapping'),
+    })
+    await app.close()
+    expect((await f.invocations()).filter((args) => args.includes('--https=4747'))).toEqual([])
+  })
+  it.each([
+    { field: 'DNS name', status: { ...node, Self: { UserID: 7 } }, hint: 'MagicDNS' },
+    { field: 'owner login', status: { ...node, User: {} }, hint: 'Self.UserID and User' },
+    {
+      field: 'owner ID',
+      status: { ...node, Self: { DNSName: node.Self.DNSName } },
+      hint: 'Self.UserID and User',
     },
+  ])('reports missing $field on a running daemon as a metadata error', async ({ status, hint }) => {
+    const f = await fixture({ node: status })
+    const app = await f.instance()
+    expect(await app.status()).toMatchObject({
+      state: 'error',
+      hint: expect.stringContaining(hint),
+    })
+    expect(app.access.origins()).toEqual([])
+    expect(await f.invocations()).toEqual([['status', '--json']])
   })
-  await writeFile(
-    join(f.home, '.ultimate/tailscale.json'),
-    JSON.stringify({ ports: { '/dead': { port: 4748, owner: '2147483647:dead' } } }),
-  )
-  await writeFile(
-    join(f.home, '.ultimate/tailscale.json.lock'),
-    JSON.stringify({ pid: 2147483647 }),
-  )
-  const app = await f.instance()
-  expect((await app.status()).state).toBe('ready')
-  expect(await f.invocations()).toContainEqual(['serve', '--https=4748', 'off'])
-  expect((await f.invocations()).filter((args) => args.includes('--https=4749'))).toEqual([])
-})
-it('keeps a live preview owner absent from the project supervisor list', async () => {
-  const f = await fixture({
-    serve: {
-      Web: { 'rog.example.ts.net:4748': { Handlers: { '/': { Proxy: 'http://127.0.0.1:4998' } } } },
-    },
+  it.each([
+    [{ node: { ...node, CertDomains: [] } }, 'https-disabled', 'admin console'],
+    [
+      {
+        error: 'Access denied: not operator',
+        errorOn: 'serve --bg --yes --https=4747 http://127.0.0.1:4747',
+      },
+      'not-operator',
+      'sudo tailscale set --operator=$USER',
+    ],
+  ])('reports actionable failure states (%s)', async (scenario, state, hint) => {
+    const f = await fixture(scenario)
+    const app = await f.instance()
+    expect(await app.status()).toMatchObject({ state, hint: expect.stringContaining(hint) })
+    expect(app.access.origins()).toEqual([])
+    await app.close()
+    expect((await f.invocations()).filter((args) => args.includes('off'))).toEqual([])
   })
-  await writeFile(
-    join(f.home, '.ultimate/tailscale.json'),
-    JSON.stringify({ ports: { '/preview': { port: 4748, owner: `${process.pid}:preview` } } }),
-  )
-  const app = await f.instance()
-  expect((await app.status()).state).toBe('ready')
-  expect((await f.invocations()).filter((args) => args.includes('--https=4748'))).toEqual([])
-})
-// The rog outage: a scratch server of the live project, started on its own home without ULTIMATE_INSTANCE_OWNER,
-// took the project's registration and removed the live mapping when it stopped, while the live server said ready.
-it('keeps the live mapping through a scratch server of the same project, and Check again restores a lost one', async () => {
-  const f = await fixture()
-  const registry = async () =>
-    JSON.parse(await readFile(join(f.home, '.ultimate/tailscale.json'), 'utf8')).ports
-  const proxy = async () =>
-    JSON.parse(await readFile(f.config, 'utf8')).serve.Web['rog.example.ts.net:4747']?.Handlers['/']
-      .Proxy
-  const live = await f.instance('/project/a', 4747)
-  // What a scratch started from an agent's shell inherits; only its home is its own.
-  vi.stubEnv('ULTIMATE_SUPERVISED', '1')
-  vi.stubEnv('ULTIMATE_PROJECT', '/project/a')
-  vi.stubEnv('ULTIMATE_PUBLIC_URL', 'http://127.0.0.1:4747')
-  const scratch = await f.instance('/project/a', 4799, '/tmp/scratch-home')
-  expect((await scratch.status()).url).toBe('https://rog.example.ts.net:4799')
-  expect(await registry()).toMatchObject({
-    '/project/a': { port: 4747 },
-    '/tmp/scratch-home': { port: 4799, temporary: true },
+  it('retries a failed start on request, one start at a time, and does nothing once ready', async () => {
+    const f = await fixture({ node: { ...node, CertDomains: [] } })
+    const app = await f.instance()
+    expect((await app.status()).state).toBe('https-disabled')
+    const config = JSON.parse(await readFile(f.config, 'utf8'))
+    await writeFile(f.config, JSON.stringify({ ...config, node }))
+    const retry = async () =>
+      (await actions.retry(null, { host: app.host } as Parameters<
+        typeof actions.retry
+      >[1])) as Status
+    const [first, second] = await Promise.all([retry(), retry()])
+    expect(first).toEqual({
+      state: 'ready',
+      url: 'https://rog.example.ts.net:4747',
+      allow: ['owner@example.com'],
+    })
+    expect(second).toEqual(first)
+    expect((await f.invocations()).filter((args) => args.includes('--bg'))).toHaveLength(1)
+    expect(await retry()).toEqual(first)
+    expect((await f.invocations()).filter((args) => args.includes('--bg'))).toHaveLength(1)
   })
-  await scratch.close()
-  expect(Object.keys(await registry())).toEqual(['/project/a'])
-  expect(await proxy()).toBe('http://127.0.0.1:4747')
-  expect((await f.invocations()).filter((args) => args.includes('--https=4747'))).toHaveLength(1)
+  it('treats a missing TAILSCALE_COMMAND as not installed, never falling back to another CLI', async () => {
+    const f = await fixture()
+    // The stub on PATH would publish; a named but missing CLI must win over it and over the macOS app.
+    vi.stubEnv('TAILSCALE_COMMAND', join(f.home, 'missing-tailscale'))
+    const app = await f.instance()
+    expect(await app.status()).toMatchObject({ state: 'not-installed' })
+    expect(app.notices).toEqual([])
+    expect(await f.invocations()).toEqual([])
+  })
+  it('reports not installed quietly without attempting Serve', async () => {
+    const f = await fixture()
+    vi.stubEnv('PATH', join(f.home, 'missing'))
+    const app = await f.instance()
+    expect(await app.status()).toMatchObject({
+      state: 'not-installed',
+      hint: expect.stringContaining('Install Tailscale'),
+    })
+    expect(app.notices).toEqual([])
+    expect(await f.invocations()).toEqual([])
+  })
+  it('hands ownership to an overlapping successor and does not remove foreign replacements', async () => {
+    const f = await fixture()
+    const old = await f.instance('/project/a', 4747)
+    const next = await f.instance('/project/a', 4750)
+    await old.close()
+    expect((await f.invocations()).filter((args) => args.includes('off'))).toHaveLength(0)
+    const config = JSON.parse(await readFile(f.config, 'utf8'))
+    expect(config.serve.Web['rog.example.ts.net:4747'].Handlers['/'].Proxy).toBe(
+      'http://127.0.0.1:4750',
+    )
+    config.serve.Web['rog.example.ts.net:4747'].Handlers['/'].Proxy = 'http://foreign.example:9000'
+    await writeFile(f.config, JSON.stringify(config))
+    await next.close()
+    expect((await f.invocations()).filter((args) => args.includes('off'))).toHaveLength(0)
+  })
+  it('recovers dead registry owners and leaves unowned mappings intact', async () => {
+    const f = await fixture({
+      serve: {
+        Web: {
+          'rog.example.ts.net:4748': { Handlers: { '/': { Proxy: 'http://127.0.0.1:4998' } } },
+          'rog.example.ts.net:4749': { Handlers: { '/': { Proxy: 'http://127.0.0.1:4999' } } },
+        },
+      },
+    })
+    await writeFile(
+      join(f.home, '.ultimate/tailscale.json'),
+      JSON.stringify({ ports: { '/dead': { port: 4748, owner: '2147483647:dead' } } }),
+    )
+    await writeFile(
+      join(f.home, '.ultimate/tailscale.json.lock'),
+      JSON.stringify({ pid: 2147483647 }),
+    )
+    const app = await f.instance()
+    expect((await app.status()).state).toBe('ready')
+    expect(await f.invocations()).toContainEqual(['serve', '--https=4748', 'off'])
+    expect((await f.invocations()).filter((args) => args.includes('--https=4749'))).toEqual([])
+  })
+  it('keeps a live preview owner absent from the project supervisor list', async () => {
+    const f = await fixture({
+      serve: {
+        Web: {
+          'rog.example.ts.net:4748': { Handlers: { '/': { Proxy: 'http://127.0.0.1:4998' } } },
+        },
+      },
+    })
+    await writeFile(
+      join(f.home, '.ultimate/tailscale.json'),
+      JSON.stringify({ ports: { '/preview': { port: 4748, owner: `${process.pid}:preview` } } }),
+    )
+    const app = await f.instance()
+    expect((await app.status()).state).toBe('ready')
+    expect((await f.invocations()).filter((args) => args.includes('--https=4748'))).toEqual([])
+  })
+  // The rog outage: a scratch server of the live project, started on its own home without ULTIMATE_INSTANCE_OWNER,
+  // took the project's registration and removed the live mapping when it stopped, while the live server said ready.
+  it('keeps the live mapping through a scratch server of the same project, and Check again restores a lost one', async () => {
+    const f = await fixture()
+    const registry = async () =>
+      JSON.parse(await readFile(join(f.home, '.ultimate/tailscale.json'), 'utf8')).ports
+    const proxy = async () =>
+      JSON.parse(await readFile(f.config, 'utf8')).serve.Web['rog.example.ts.net:4747']?.Handlers[
+        '/'
+      ].Proxy
+    const live = await f.instance('/project/a', 4747)
+    // What a scratch started from an agent's shell inherits; only its home is its own.
+    vi.stubEnv('ULTIMATE_SUPERVISED', '1')
+    vi.stubEnv('ULTIMATE_PROJECT', '/project/a')
+    vi.stubEnv('ULTIMATE_PUBLIC_URL', 'http://127.0.0.1:4747')
+    const scratch = await f.instance('/project/a', 4799, '/tmp/scratch-home')
+    expect((await scratch.status()).url).toBe('https://rog.example.ts.net:4799')
+    expect(await registry()).toMatchObject({
+      '/project/a': { port: 4747 },
+      '/tmp/scratch-home': { port: 4799, temporary: true },
+    })
+    await scratch.close()
+    expect(Object.keys(await registry())).toEqual(['/project/a'])
+    expect(await proxy()).toBe('http://127.0.0.1:4747')
+    expect((await f.invocations()).filter((args) => args.includes('--https=4747'))).toHaveLength(1)
 
-  // The state an earlier scratch left behind: the mapping gone, the registration owned by a dead process.
-  const config = JSON.parse(await readFile(f.config, 'utf8'))
-  delete config.serve.Web['rog.example.ts.net:4747']
-  delete config.serve.TCP['4747']
-  await writeFile(f.config, JSON.stringify(config))
-  await writeFile(
-    join(f.home, '.ultimate/tailscale.json'),
-    JSON.stringify({ ports: { '/project/a': { port: 4747, owner: '2147483647:scratch' } } }),
-  )
-  expect((await live.status()).state).toBe('ready')
-  const checked = (await actions.retry(null, { host: live.host } as Parameters<
-    typeof actions.retry
-  >[1])) as Status
-  expect(checked).toMatchObject({ state: 'ready', url: 'https://rog.example.ts.net:4747' })
-  expect(await proxy()).toBe('http://127.0.0.1:4747')
-  expect((await registry())['/project/a'].owner).toMatch(new RegExp(`^${process.pid}:`))
-  expect(live.access.origins()).toEqual(['https://rog.example.ts.net:4747'])
-
-  // A check that fails once shows the failure; the next one finds the mapping standing and shows it ready again.
-  const retry = async () =>
-    (await actions.retry(null, { host: live.host } as Parameters<
+    // The state an earlier scratch left behind: the mapping gone, the registration owned by a dead process.
+    const config = JSON.parse(await readFile(f.config, 'utf8'))
+    delete config.serve.Web['rog.example.ts.net:4747']
+    delete config.serve.TCP['4747']
+    await writeFile(f.config, JSON.stringify(config))
+    await writeFile(
+      join(f.home, '.ultimate/tailscale.json'),
+      JSON.stringify({ ports: { '/project/a': { port: 4747, owner: '2147483647:scratch' } } }),
+    )
+    expect((await live.status()).state).toBe('ready')
+    const checked = (await actions.retry(null, { host: live.host } as Parameters<
       typeof actions.retry
     >[1])) as Status
-  const healthy = await readFile(f.config, 'utf8')
-  await writeFile(
-    f.config,
-    JSON.stringify({ ...JSON.parse(healthy), error: 'boom', errorOn: 'serve status --json' }),
-  )
-  expect((await retry()).state).toBe('error')
-  await writeFile(f.config, healthy)
-  expect(await retry()).toEqual(checked)
-})
-it('publishes a preview and frees its port when it ends', async () => {
-  const f = await fixture()
-  const preview = await f.instance('/project/a', 4800, '/tmp/preview')
-  expect(await preview.status()).toMatchObject({
-    state: 'ready',
-    url: 'https://rog.example.ts.net:4800',
-    allow: ['owner@example.com'],
+    expect(checked).toMatchObject({ state: 'ready', url: 'https://rog.example.ts.net:4747' })
+    expect(await proxy()).toBe('http://127.0.0.1:4747')
+    expect((await registry())['/project/a'].owner).toMatch(new RegExp(`^${process.pid}:`))
+    expect(live.access.origins()).toEqual(['https://rog.example.ts.net:4747'])
+
+    // A check that fails once shows the failure; the next one finds the mapping standing and shows it ready again.
+    const retry = async () =>
+      (await actions.retry(null, { host: live.host } as Parameters<
+        typeof actions.retry
+      >[1])) as Status
+    const healthy = await readFile(f.config, 'utf8')
+    await writeFile(
+      f.config,
+      JSON.stringify({ ...JSON.parse(healthy), error: 'boom', errorOn: 'serve status --json' }),
+    )
+    expect((await retry()).state).toBe('error')
+    await writeFile(f.config, healthy)
+    expect(await retry()).toEqual(checked)
   })
-  expect(
-    (await f.invocations()).some(
-      (args) => args.includes('--https=4800') && args.includes('http://127.0.0.1:4800'),
-    ),
-  ).toBe(true)
-  await preview.close()
-  expect(await f.invocations()).toContainEqual(['serve', '--https=4800', 'off'])
-  expect(
-    JSON.parse(await readFile(join(f.home, '.ultimate/tailscale.json'), 'utf8')).ports,
-  ).toEqual({})
-})
-it('drops the entry of a preview that died without closing', async () => {
-  const f = await fixture({
-    serve: {
-      Web: { 'rog.example.ts.net:4800': { Handlers: { '/': { Proxy: 'http://127.0.0.1:4998' } } } },
-    },
+  it('publishes a preview and frees its port when it ends', async () => {
+    const f = await fixture()
+    const preview = await f.instance('/project/a', 4800, '/tmp/preview')
+    expect(await preview.status()).toMatchObject({
+      state: 'ready',
+      url: 'https://rog.example.ts.net:4800',
+      allow: ['owner@example.com'],
+    })
+    expect(
+      (await f.invocations()).some(
+        (args) => args.includes('--https=4800') && args.includes('http://127.0.0.1:4800'),
+      ),
+    ).toBe(true)
+    await preview.close()
+    expect(await f.invocations()).toContainEqual(['serve', '--https=4800', 'off'])
+    expect(
+      JSON.parse(await readFile(join(f.home, '.ultimate/tailscale.json'), 'utf8')).ports,
+    ).toEqual({})
   })
-  await writeFile(
-    join(f.home, '.ultimate/tailscale.json'),
-    JSON.stringify({
-      ports: { '/tmp/gone': { port: 4800, owner: '2147483647:gone', temporary: true } },
-    }),
-  )
-  const app = await f.instance()
-  expect((await app.status()).state).toBe('ready')
-  expect(await f.invocations()).toContainEqual(['serve', '--https=4800', 'off'])
-  expect(
-    Object.keys(JSON.parse(await readFile(join(f.home, '.ultimate/tailscale.json'), 'utf8')).ports),
-  ).toEqual(['/project/a'])
-})
-it('reports failed teardown without throwing and classifies filesystem failures as errors', async () => {
-  const f = await fixture()
-  const app = await f.instance()
-  const config = JSON.parse(await readFile(f.config, 'utf8'))
-  config.error = 'off failed'
-  config.errorOn = 'serve --https=4747 off'
-  await writeFile(f.config, JSON.stringify(config))
-  await expect(app.close()).resolves.toBeUndefined()
-  expect(await app.status()).toMatchObject({
-    state: 'error',
-    hint: expect.stringContaining('Could not remove'),
+  it('drops the entry of a preview that died without closing', async () => {
+    const f = await fixture({
+      serve: {
+        Web: {
+          'rog.example.ts.net:4800': { Handlers: { '/': { Proxy: 'http://127.0.0.1:4998' } } },
+        },
+      },
+    })
+    await writeFile(
+      join(f.home, '.ultimate/tailscale.json'),
+      JSON.stringify({
+        ports: { '/tmp/gone': { port: 4800, owner: '2147483647:gone', temporary: true } },
+      }),
+    )
+    const app = await f.instance()
+    expect((await app.status()).state).toBe('ready')
+    expect(await f.invocations()).toContainEqual(['serve', '--https=4800', 'off'])
+    expect(
+      Object.keys(
+        JSON.parse(await readFile(join(f.home, '.ultimate/tailscale.json'), 'utf8')).ports,
+      ),
+    ).toEqual(['/project/a'])
   })
-  await writeFile(join(f.home, '.ultimate/tailscale.json'), '{permission denied')
-  const invalid = await f.instance('/new', 4751)
-  expect((await invalid.status()).state).toBe('error')
+  it('reports failed teardown without throwing and classifies filesystem failures as errors', async () => {
+    const f = await fixture()
+    const app = await f.instance()
+    const config = JSON.parse(await readFile(f.config, 'utf8'))
+    config.error = 'off failed'
+    config.errorOn = 'serve --https=4747 off'
+    await writeFile(f.config, JSON.stringify(config))
+    await expect(app.close()).resolves.toBeUndefined()
+    expect(await app.status()).toMatchObject({
+      state: 'error',
+      hint: expect.stringContaining('Could not remove'),
+    })
+    await writeFile(join(f.home, '.ultimate/tailscale.json'), '{permission denied')
+    const invalid = await f.instance('/new', 4751)
+    expect((await invalid.status()).state).toBe('error')
+  })
 })
