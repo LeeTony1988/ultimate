@@ -110,6 +110,7 @@ $before = @(Get-Content $env:TEMP\before-status.txt)
 if (-not $before.Count) { throw 'no snapshot; run the block above first' }
 git bundle verify C:\Users\29155\ultimate-landing-1.bundle; if ($LASTEXITCODE) { throw 'bundle is not complete' }
 git bundle list-heads C:\Users\29155\ultimate-landing-1.bundle
+git branch -D landing-verify 2>$null | Out-Null   # a ref left by an interrupted run would block the fetch
 git fetch C:\Users\29155\ultimate-landing-1.bundle dev/lxy:refs/heads/landing-verify; if ($LASTEXITCODE) { throw 'git fetch failed' }
 $changed = @(git diff --name-only HEAD landing-verify)
 $dirty = @($before | ForEach-Object { ($_ -replace '^..\s+', '').Trim('"') } | Where-Object { $_ })
