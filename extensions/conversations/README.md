@@ -132,6 +132,10 @@ an unavailable summary model produce no action. Entries survive reload/restart w
 backfilled and manual renames are not logged.
 The task saves the provider response before parsing it and adds reported usage even for stale or invalid results.
 Replaying a saved response does not count it again. Crashing before it is saved can repeat the request.
+Each request asks with a 2048-token ceiling and small thinking budgets (see `SUMMARY_THINKING_BUDGETS`): the answer is
+one short JSON object, and a reasoning model that spends the whole ceiling on thinking never writes it. An answer
+stopped `length` or `toolUse` is asked once more with 8192 tokens before it is treated as failed, so a truncated answer
+costs one retry instead of a whole summary; that retry's receipt carries both asks' usage.
 State survives reloads and restarts. Failed requests preserve the last summary and retry on the next reply.
 When the summary model is unavailable in the model runtime, summaries and assessments are skipped quietly, without a
 task. A task that finds no available model before it chose one settles quietly too: no discard entry, no error status.

@@ -216,6 +216,40 @@ export type SummaryReceipt = {
   save?(response: ResponseReceipt): Promise<ResponseReceipt>
 }
 
+/** The request ceiling: enough for a title, summary, feature or abstract, and some thinking. */
+export const SUMMARY_TOKENS = 2048
+/** One more ask for an answer that stopped short; a whole reply transcription does not fit either way. */
+export const SUMMARY_RETRY_TOKENS = 8192
+/**
+ * Thinking levels for summary calls, well under Pi's own 8192 for `medium`: the answer is a short JSON object, so
+ * reasoning that spends the whole ceiling never reaches it. A model without token budgets uses its level as usual.
+ */
+const SUMMARY_THINKING_BUDGETS = { minimal: 256, low: 512, medium: 1024, high: 2048 } as const
+
+/** Two receipts' usage summed, for a request that asked twice. */
+function addUsage(a: ResponseReceipt['usage'], b: ResponseReceipt['usage']) {
+  if (!a) return b
+  if (!b) return a
+  const sum = { ...a, cost: { ...a.cost } }
+  for (const counter of [
+    'input',
+    'output',
+    'cacheRead',
+    'cacheWrite',
+    'cacheWrite1h',
+    'reasoning',
+    'totalTokens',
+  ] as const) {
+    const value = b[counter]
+    if (value !== undefined) sum[counter] = (sum[counter] ?? 0) + value
+  }
+  for (const counter of ['input', 'output', 'cacheRead', 'cacheWrite', 'total'] as const)
+    sum.cost[counter] += b.cost[counter]
+  // The retry's billing report, when it has one, is the one that covers the pair.
+  if (b.cost.totalFromProvider !== undefined) sum.cost.totalFromProvider = b.cost.totalFromProvider
+  return sum
+}
+
 /** Ask the receipt's summary model once, or return the response the receipt already holds. */
 export async function askSummaryModel(
   models: Models,
@@ -228,16 +262,11 @@ export async function askSummaryModel(
   const { provider, id, thinking } = receipt.model
   const model = models.getModel(provider, id)
   if (!model) throw new Error(`Summary model ${provider}/${id} is unavailable`)
-  const events = models.streamSimple(
-    model,
-    { systemPrompt, messages: [{ role: 'user', content: input, timestamp: Date.now() }] },
-    { ...(thinking === 'off' ? {} : { reasoning: thinking }), maxTokens: 2048, signal },
-  )
   const receive = async (answer: AssistantMessage) => {
     const text = answer.content
       .flatMap((part) => (part.type === 'text' ? [part.text] : []))
       .join('')
-    const received = copyJson(
+    return copyJson(
       {
         provider: answer.provider,
         model: answer.model,
@@ -247,15 +276,38 @@ export async function askSummaryModel(
       },
       { omitUndefinedProperties: true },
     ) as ResponseReceipt
-    return receipt.save ? receipt.save(received) : received
   }
-  let response: ResponseReceipt | undefined
-  for await (const event of events) {
-    if (event.type === 'done') response = await receive(event.message)
-    if (event.type === 'error') response = await receive(event.error)
+  // Saved once, before the answer is parsed: a resumed task replays the answer this kept, never one it threw away.
+  const ask = async (maxTokens: number) => {
+    const events = models.streamSimple(
+      model,
+      { systemPrompt, messages: [{ role: 'user', content: input, timestamp: Date.now() }] },
+      {
+        ...(thinking === 'off' ? {} : { reasoning: thinking }),
+        maxTokens,
+        // The answer is a short JSON object; a model that spends its ceiling on thinking never gets to it.
+        thinkingBudgets: thinking === 'off' ? undefined : SUMMARY_THINKING_BUDGETS,
+        signal,
+      },
+    )
+    let response: ResponseReceipt | undefined
+    for await (const event of events) {
+      if (event.type === 'done') response = await receive(event.message)
+      if (event.type === 'error') response = await receive(event.error)
+    }
+    const answer = await events.result()
+    return response ?? (await receive(answer))
   }
-  const answer = await events.result()
-  return response ?? (await receive(answer))
+  const first = await ask(SUMMARY_TOKENS)
+  // An answer cut off by the ceiling (`length`) or ended early by a stray tool call is worth one more ask with room
+  // to finish, rather than another reply without a summary. A provider error is not a budget problem and stands.
+  if (first.stopReason === 'length' || first.stopReason === 'toolUse') {
+    const second = await ask(SUMMARY_RETRY_TOKENS)
+    // Both asks were paid for: the kept receipt carries their usage together, so the ledger counts what was spent.
+    const kept = second.usage ? { ...second, usage: addUsage(first.usage, second.usage) } : second
+    return receipt.save ? receipt.save(kept) : kept
+  }
+  return receipt.save ? receipt.save(first) : first
 }
 
 export async function generateSummary(
@@ -290,7 +342,10 @@ export async function generateSummary(
     signal,
     receipt,
   )
-  if (response.stopReason !== 'stop') throw new Error('Summary request did not finish')
+  if (response.stopReason !== 'stop')
+    throw new Error(
+      `Summary request did not finish: the model stopped with "${response.stopReason}" at ${SUMMARY_RETRY_TOKENS} tokens`,
+    )
   const parsed: unknown = JSON.parse(response.text)
   if (
     mode === 'reply' &&
