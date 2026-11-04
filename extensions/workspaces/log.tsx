@@ -6,6 +6,7 @@ import {
   CircleDotIcon,
   GitMergeIcon,
   LoaderCircleIcon,
+  TimerOffIcon,
   TriangleAlertIcon,
   XIcon,
 } from 'lucide-react'
@@ -229,6 +230,8 @@ function StepLine({
             <CheckIcon className="size-3 shrink-0 text-success" />
           ) : row.check.result === 'flaky' ? (
             <TriangleAlertIcon className="size-3 shrink-0 text-warning" />
+          ) : row.check.result === 'timeout' ? (
+            <TimerOffIcon className="size-3 shrink-0 text-warning" />
           ) : (
             <XIcon className="size-3 shrink-0 text-error" />
           )

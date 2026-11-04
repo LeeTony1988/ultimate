@@ -19,7 +19,7 @@ import type {
   ConversationId,
   Tx,
 } from '@earendil-works/pi-durable'
-import { git } from '../../lib/git.ts'
+import { fastForward, git } from '../../lib/git.ts'
 import { shell } from '../../lib/shell.ts'
 import { runGroup, sweepPidFiles } from '../../lib/process-group.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -943,17 +943,21 @@ export function createLander(
                   checkTemp(host.home),
                   limitsFor(members[member], limits),
                 )
-              /** One command: its first run, then one rerun when that failed; its output tail if it failed twice. */
+              /**
+               * One command: its first run, then one rerun when that failed; its output tail if it failed twice. A run a
+               * watchdog stopped is final: reported once as `timeout`, with no rerun and no model.
+               */
               const settle = async (command: string, member: number) => {
                 // Outcomes are durable (memos are first-writer-wins, so the rerun has its own key): a resume
                 // neither reruns a passed check nor grants another rerun, and keeps the flaky note.
                 const key = `check:${id}:${attempt}:${Array.isArray(group) ? `${position}.${member}` : position}`
-                let first = await runtime.memo<'passed' | 'failed'>(key, context)
+                let first = await runtime.memo<'passed' | 'failed' | 'timeout'>(key, context)
                 if (!first) {
                   await step(`checking: ${command}`)
                   const began = performance.now()
                   const ran = await run(command, member)
-                  const result = ran.failure === undefined ? 'passed' : 'failed'
+                  const result =
+                    ran.failure === undefined ? 'passed' : ran.timedOut ? 'timeout' : 'failed'
                   // Logged before the memo: a crash in between reruns the check and logs it again, as it ran.
                   // A failure keeps its output tail, so a check that passes on its rerun can still be diagnosed.
                   await step(
@@ -962,9 +966,19 @@ export function createLander(
                     ran.failure,
                     { ms: performance.now() - began, timedOut: ran.timedOut },
                   )
+                  // The limit a stopped run hit outlives its status, so a resume still names it.
+                  if (ran.timedOut && ran.failure)
+                    await runtime.memo(`${key}:stopped`, { failure: ran.failure }, context)
                   first = await runtime.memo(key, result, context)
                 }
                 if (first === 'passed') return {}
+                // A retry cannot pass a limit the host cannot meet, so a stopped check runs once and reports the limit.
+                if (first === 'timeout')
+                  return {
+                    failure: (await runtime.memo<{ failure: string }>(`${key}:stopped`, context))
+                      ?.failure,
+                    timedOut: true,
+                  }
                 // The rerun's outcome is durable either way: a resume while the group's other commands still run
                 // neither grants a third run nor loses the failure.
                 let rerun = await runtime.memo<{ failure?: string }>(`${key}:rerun`, context)
@@ -1007,6 +1021,14 @@ export function createLander(
                 if (outcome.status === 'rejected') throw outcome.reason
                 return outcome.value
               })
+              // A watchdog stop is the host's limit, not the submission's: report it once and keep the model out of it.
+              const stopped = results.findIndex((result) => result.timedOut)
+              if (stopped !== -1)
+                return fail(
+                  `check timed out: ${commands[stopped]}`,
+                  results[stopped].failure,
+                  "A rerun cannot pass a time limit: raise this check's `timeout` (seconds) in `.ultimate/settings.json` `lander.checks`, or make the check finish inside it, then submit again.",
+                )
               const failed = results.findIndex((result) => result.failure !== undefined)
               if (failed !== -1)
                 return handOver(
@@ -1036,6 +1058,8 @@ export function createLander(
           const { base, integrated, flaky } = prepared
           await step('fast-forwarding')
           let refused: string | undefined
+          /** Uncommitted paths the fast-forward changed anyway, for work `status` did not report. */
+          let absorbed: string[] = []
           const moved = await serial(source, async () => {
             const current = await git(source, 'rev-parse', `refs/heads/${target}`)
             // A replay after the fast-forward finds exactly the integrated commit; anything else moved.
@@ -1048,8 +1072,16 @@ export function createLander(
                 .map((record) => record.split('\n'))
                 .find((record) => record.includes(`branch refs/heads/${target}`))?.[0]
                 .slice('worktree '.length)
-              if (worktree) await git(worktree, 'merge', '-q', '--ff-only', integrated)
-              else await git(source, 'update-ref', `refs/heads/${target}`, integrated, base)
+              // Git stops a fast-forward over a modified path on its own; `fastForward` also refuses paths that would
+              // arrive with content the checkout already holds, which Git would let through as a clean merge.
+              if (worktree) {
+                try {
+                  const ran = await fastForward(worktree, base, integrated)
+                  absorbed = ran.absorbed
+                } catch (error) {
+                  refused = failure(error)
+                }
+              } else await git(source, 'update-ref', `refs/heads/${target}`, integrated, base)
             } catch (error) {
               refused = failure(error)
             }
@@ -1058,7 +1090,12 @@ export function createLander(
           if (refused)
             return fail(
               `the checkout of ${target} refused the fast-forward to ${integrated.slice(0, 7)}`,
-              refused,
+              `${refused}\nCommit or stash that work, or land it separately; the submission itself is intact.`,
+            )
+          if (absorbed.length)
+            return fail(
+              `the fast-forward to ${integrated.slice(0, 7)} wrote over uncommitted work in ${target}'s checkout`,
+              `${absorbed.join('\n')}\nThe commit is now on ${target} with that work inside it; restore the file and commit the restoration.`,
             )
           if (moved) {
             if (attempt < attempts) return retry()
