@@ -5,7 +5,7 @@ description: Land this repository from Windows through a WSL full gate and a Git
 
 # Land through the WSL gate
 
-This host's lander cannot run the project gate: `pnpm test` broad-fails and exceeds its 180 s check limit. WSL runs
+This host's lander cannot run the project gate: `pnpm test` broad-fails and exceeds its check limit. WSL runs
 the gate; Windows owns the checkout and pushes. A red gate is never bypassed.
 
 ## Hard rules
