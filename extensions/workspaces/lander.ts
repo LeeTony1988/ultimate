@@ -240,7 +240,8 @@ export const sweepChecks = async (home: string) => {
   })
   for (const name of names)
     if (!name.startsWith(`${process.pid}-`))
-      await rm(join(checkTemp(home), name), { recursive: true, force: true })
+      // One directory a child still holds (EBUSY on Windows) must not abort the sweep of all the others.
+      await removeCheckTemp(join(checkTemp(home), name))
 }
 /**
  * Where checks keep temporary files: on disk under the project home, not in `/tmp`, which is often a small tmpfs

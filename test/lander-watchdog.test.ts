@@ -1,4 +1,4 @@
-import { access, mkdtemp, readdir, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { withAbortSignal } from '@earendil-works/chord/context'
@@ -6,14 +6,20 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { context } from '../server/harness.ts'
 import { runGroup } from '../lib/process-group.ts'
 import {
+  checkTemp,
   landerSettings,
   limitsFor,
   removeCheckTemp,
   runLanderCheck as run,
+  sweepChecks,
 } from '../extensions/workspaces/lander.ts'
 
 vi.mock('../lib/process-group.ts', () => ({
   runGroup: vi.fn<typeof runGroup>(),
+  // The sweep kills the process groups a crashed host left; these tests only care about its directory cleanup.
+  sweepPidFiles: vi.fn<(directory: string, owned: (name: string) => boolean) => Promise<void>>(
+    async () => undefined,
+  ),
 }))
 const runLanderCheck = (
   path: string,
@@ -202,6 +208,19 @@ it('removes a check temp directory, and stays quiet when it cannot', async () =>
   // And a directory it can remove is gone afterwards.
   await expect(removeCheckTemp(dir)).resolves.toBeUndefined()
   await expect(access(dir)).rejects.toThrow('ENOENT')
+})
+
+it('sweeps the stale check directories past one it cannot remove', async () => {
+  // A live check of this process keeps its own; the others are swept, and one held by a child (EBUSY on Windows) must
+  // not abort the sweep of the rest. A leftover *file* where a directory is expected is the removable-failure stand-in.
+  const home = await mkdtemp(join(tmpdir(), 'lander-sweep-'))
+  const temp = checkTemp(home)
+  await mkdir(temp, { recursive: true })
+  await mkdir(join(temp, `${process.pid}-live`))
+  await mkdir(join(temp, 'stale-a'))
+  await mkdir(join(temp, 'stale-b'))
+  await expect(sweepChecks(home)).resolves.toBeUndefined()
+  expect((await readdir(temp)).toSorted()).toEqual([`${process.pid}-live`])
 })
 
 it('preserves task cancellation instead of reporting a watchdog failure', async () => {
