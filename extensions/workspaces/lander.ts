@@ -249,6 +249,19 @@ export const sweepChecks = async (home: string) => {
 export const checkTemp = (home: string) => join(home, 'lander-tmp')
 
 /**
+ * Remove a check's temp directory, never throwing: on Windows a file the check's children still hold makes this EBUSY,
+ * and a throw here would replace the result the run just decided, so a watchdog stop would report "it failed" and the
+ * real reason would be lost. A directory left behind is swept on the host's next open; a lost report is not recoverable.
+ */
+export async function removeCheckTemp(tmp: string) {
+  await rm(tmp, { recursive: true, force: true }).catch((error: unknown) => {
+    // Ignored on purpose, whatever it is: the directory is disposable, and the run's own result must not be replaced
+    // by a cleanup failure (see above). The next host open sweeps anything left.
+    void (error as NodeJS.ErrnoException).code
+  })
+}
+
+/**
  * Run `command` in the host shell in its own recorded process container. The watchdog and task cancellation stop the
  * runner and its descendants; a host crash is cleaned up on its next open.
  */
@@ -325,7 +338,7 @@ export async function runLanderCheck(
   } finally {
     clearTimeout(stallTimer)
     clearTimeout(totalTimer)
-    await rm(tmp, { recursive: true, force: true })
+    await removeCheckTemp(tmp)
   }
 }
 
@@ -1038,12 +1051,16 @@ export function createLander(
               })
               // A watchdog stop is the host's limit, not the submission's: report it once and keep the model out of it.
               const stopped = results.findIndex((result) => result.timedOut)
-              if (stopped !== -1)
+              if (stopped !== -1) {
+                // Name the limit that fired: a silent check is stopped by `stall`, a printing one by `timeout`, and the
+                // two settings are different, so advice that named only `timeout` sent people to the wrong one.
+                const limit = results[stopped].failure?.startsWith('Stalled:') ? 'stall' : 'timeout'
                 return fail(
                   `check timed out: ${commands[stopped]}`,
                   results[stopped].failure,
-                  "A rerun cannot pass a time limit: raise this check's `timeout` (seconds) in `.ultimate/settings.json` `lander.checks`, or make the check finish inside it, then submit again.",
+                  `A rerun cannot pass a time limit: raise this check's \`${limit}\` (seconds) in \`.ultimate/settings.json\` \`lander.checks\`, or make the check finish inside it, then submit again.`,
                 )
+              }
               const failed = results.findIndex((result) => result.failure !== undefined)
               if (failed !== -1)
                 return handOver(

@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, writeFile } from 'node:fs/promises'
+import { access, mkdtemp, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { withAbortSignal } from '@earendil-works/chord/context'
@@ -8,6 +8,7 @@ import { runGroup } from '../lib/process-group.ts'
 import {
   landerSettings,
   limitsFor,
+  removeCheckTemp,
   runLanderCheck as run,
 } from '../extensions/workspaces/lander.ts'
 
@@ -188,6 +189,19 @@ it('reads plain commands and commands with their own limits from settings', asyn
     'pnpm test',
   ])
     await expect(settings(invalid)).rejects.toThrow('lander.checks must be')
+})
+
+it('removes a check temp directory, and stays quiet when it cannot', async () => {
+  // Windows EBUSY: a child still holding a file. Throwing here would replace the result the run just decided.
+  const dir = await mkdtemp(join(tmpdir(), 'lander-clean-'))
+  await writeFile(join(dir, 'left'), '')
+  // A path inside a regular file is not a directory `rm` can remove; the call must resolve, not reject.
+  const file = join(dir, 'plain')
+  await writeFile(file, '')
+  await expect(removeCheckTemp(join(file, 'tmp'))).resolves.toBeUndefined()
+  // And a directory it can remove is gone afterwards.
+  await expect(removeCheckTemp(dir)).resolves.toBeUndefined()
+  await expect(access(dir)).rejects.toThrow('ENOENT')
 })
 
 it('preserves task cancellation instead of reporting a watchdog failure', async () => {

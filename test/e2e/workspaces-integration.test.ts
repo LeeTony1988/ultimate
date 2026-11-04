@@ -1614,6 +1614,9 @@ it.concurrent('a check the watchdog stops is reported once as a timeout, never r
   expect(report).toContain('was not landed: check timed out: sleep 30')
   // A silent check trips the stall limit, a printing one the total: either way the report names the limit.
   expect(report).toMatch(/Stalled: no output for 1 s|Timed out after 1 s/)
+  // And the advice names that same setting, because `stall` and `timeout` are different knobs.
+  expect(report).toContain("raise this check's `stall`")
+  expect(report).not.toContain("raise this check's `timeout`")
   // The machine's limit, not the submission's: the model never sees it and the target does not move.
   expect(asked).toBe(0)
   expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
@@ -1630,6 +1633,30 @@ it.concurrent('a check the watchdog stops is reported once as a timeout, never r
   // One event, and it says why: not a failing check the rerun repeated.
   const checks = await f.host.eventLog.recent({ events: [CheckRan], limit: 20 })
   expect(checks.map((event) => event.data.result)).toEqual(['timeout'])
+})
+it.concurrent('names `timeout` when a printing check is stopped by the total, not by the silence limit', async () => {
+  // The other branch of the same advice: a check that keeps printing reaches its total, so `stall` is the wrong knob.
+  // A script file rather than `node -e`: the host shell wraps the command, and nested quotes do not survive that.
+  const f = await lander({ checks: [{ command: 'node spin.cjs', timeout: 2 }] })
+  await writeFile(join(f.projectRoot, 'spin.cjs'), "setInterval(() => console.log('tick'), 100)\n")
+  // `commit` writes the file it is given as itself, so commit a different path to keep the script intact.
+  await commit(f.projectRoot, 'spin-marker.txt')
+  await landerDefinition(f, 'fix')
+  let asked = 0
+  f.answerLander(() => {
+    asked++
+    return fauxAssistantMessage('no idea')
+  })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await commit((await f.service.get(id, context))!.path)
+  await f.service.submit(id, 'None', context)
+  const [report] = await submitted(f, id)
+  expect(report).toContain('was not landed: check timed out:')
+  expect(report).toContain('Timed out after 2 s')
+  expect(report).toContain("raise this check's `timeout`")
+  expect(report).not.toContain("raise this check's `stall`")
+  expect(asked).toBe(0)
 })
 it.concurrent('reruns only the failing command of a group, reports its output twice failed, and lands a flaky one', async () => {
   const f = await lander({
