@@ -41,7 +41,7 @@ export type Landed = {
 /** A check's result; a passed or flaky one carries its last output line as `summary`. */
 export type LanderCheck = {
   command: string
-  result: 'passed' | 'failed' | 'flaky'
+  result: 'passed' | 'failed' | 'flaky' | 'timeout'
   summary?: string
 }
 /** One row of a submission's progress: a step, or a check with its result. */
