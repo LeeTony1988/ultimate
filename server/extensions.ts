@@ -464,6 +464,28 @@ export async function loadExtensions(
   ].map(normalizePath)
   let previousSettings: string | undefined
   let diagnostics: string[] = []
+  /** The collisions last reported, so a reload that changes nothing else does not repeat them. */
+  let reportedCollisions = new Set<string>()
+  /**
+   * Every tool name two loaded extensions both declare: Pi composes same-named tools last-wins, so one of the pair is
+   * silently not the tool its extension means. The tool, both extensions and the winner are named, once per collision.
+   */
+  function toolCollisions() {
+    const owners = new Map<string, string[]>()
+    for (const extension of host.registry.snapshot().installed())
+      for (const tool of extension.tools ?? [])
+        owners.set(tool.name, [...(owners.get(tool.name) ?? []), extension.name])
+    const collisions = new Set<string>()
+    for (const [tool, names] of owners) {
+      if (names.length < 2) continue
+      // The registry installs in display order, so the last one is the tool every agent gets.
+      collisions.add(
+        `Tool ${tool} is declared by ${names.join(' and ')}; ${names.at(-1)} wins, so the others never run it. Rename one tool in a user or project override.`,
+      )
+    }
+    for (const message of collisions) if (!reportedCollisions.has(message)) notice(message)
+    reportedCollisions = collisions
+  }
   async function discover() {
     const active = await discoverExtensions(host.ultimateRoot, host.projectRoot, host.userHome)
     const available = await discoverExtensions(
@@ -634,6 +656,7 @@ export async function loadExtensions(
     const missing = new Set(apis.missing())
     for (const message of missing) if (!missingApis.has(message)) notice(message)
     missingApis = missing
+    toolCollisions()
     await changed()
   }
   async function reloadSettings() {
@@ -756,6 +779,7 @@ export async function loadExtensions(
       diagnostics: () => [
         ...new Set([
           ...diagnostics,
+          ...reportedCollisions,
           ...[...facetNotices.values()].flatMap((messages) => [...messages.keys()]),
           ...apis.missing(),
           ...projectDiagnostics(host.projectRoot, host.userHome),
