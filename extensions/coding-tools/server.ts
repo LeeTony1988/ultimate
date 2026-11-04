@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { readFile, rm } from 'node:fs/promises'
+import { readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 import type { Context } from '@earendil-works/chord'
 import { BACKGROUND_CONTEXT, withCancel } from '@earendil-works/chord/context'
 import { bool, num, obj, opt, str } from '@earendil-works/pi-schema'
@@ -36,6 +36,16 @@ function editTool() {
     ...edit,
     description: `${edit.description} After "Could not find", read the region again before retrying; after "Found N occurrences", widen oldText with surrounding lines.`,
   }
+}
+
+/** The directory a shell call asks to run in: absolute, existing, a directory; `undefined` keeps the default. */
+export async function shellWorkingDirectory(cwd: string | undefined) {
+  if (cwd === undefined) return undefined
+  if (!isAbsolute(cwd)) throw new Error(`cwd must be an absolute path, got ${JSON.stringify(cwd)}`)
+  // A missing path and a path of the wrong kind fail the same way: with a message naming the directory.
+  const info = await stat(cwd).catch(() => undefined)
+  if (!info?.isDirectory()) throw new Error(`cwd is not a directory: ${cwd}`)
+  return cwd
 }
 
 function defaultBashTimeout() {
@@ -286,12 +296,18 @@ async function madeCommits(path: string, conversation: number) {
 export default function codingTools(host: Pick<ExtensionHost, 'emit'>) {
   const tool = shell.create()
   // Pi's own shell schema is closed over `command`/`timeout`; a tool schema is any JSON Schema object, so ours states
-  // the same two fields with the tripwire's wording and adds `interruptible`.
+  // the same two fields with the tripwire's wording and adds `interruptible` and `cwd`.
   const parameters = obj(
     {
       command: str({
         description: `${shell.name === 'powershell' ? 'PowerShell' : 'Bash'} command to execute`,
       }),
+      cwd: opt(
+        str({
+          description:
+            "Absolute working directory for this call; without it the conversation's own is used. No `cd` prefix is needed.",
+        }),
+      ),
       timeout: opt(
         num({
           description:
@@ -305,16 +321,21 @@ export default function codingTools(host: Pick<ExtensionHost, 'emit'>) {
         }),
       ),
     },
-    // Open, as Pi's own shell schema is (pi-durable dist/tools/bash.js): a call that carries an extra key, such as the
-    // `cwd` a model sometimes adds, is accepted rather than refused as an unknown field.
+    // Open, as Pi's own shell schema is (pi-durable dist/tools/bash.js): a call that carries an extra key is accepted
+    // rather than refused as an unknown field.
     { open: true },
   )
   // In the tool itself, not a wrap, so the events carry the call's trace and conversation.
   const shellCall = defineTool({
     ...tool,
-    description: `${tool.description} Set interruptible for a command that only waits or polls, so a steering message can end it early.`,
+    description: `${tool.description} Set interruptible for a command that only waits or polls, so a steering message can end it early.${
+      shell.name === 'powershell'
+        ? " No heredocs: write a multi-line value to a file outside `.git` (a linked worktree's `.git` is a file) and pass it, as `git commit -F <file>`."
+        : ''
+    }`,
     parameters,
-    async execute({ interruptible, ...args }, api, context) {
+    async execute({ interruptible, cwd, ...args }, api, context) {
+      const directory = await shellWorkingDirectory(cwd)
       const change = interruptible ? changes(args.command) : undefined
       if (change)
         throw new Error(
@@ -323,7 +344,10 @@ export default function codingTools(host: Pick<ExtensionHost, 'emit'>) {
       // One log per invocation: task ids repeat across projects and a retried call reruns its task.
       const log = join(tmpdir(), `ultimate-commits-${randomUUID()}.log`)
       const call = shell.create({
-        prepare: (execution) => prepareBash(execution, api, log),
+        prepare: (execution) => {
+          if (directory) execution.cwd = directory
+          prepareBash(execution, api, log)
+        },
       })
       const run = (command: Context) => call.execute(args, api, command)
       try {
