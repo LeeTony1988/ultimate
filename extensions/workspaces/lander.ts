@@ -253,13 +253,17 @@ export const checkTemp = (home: string) => join(home, 'lander-tmp')
  * Remove a check's temp directory, never throwing: on Windows a file the check's children still hold makes this EBUSY,
  * and a throw here would replace the result the run just decided, so a watchdog stop would report "it failed" and the
  * real reason would be lost. A directory left behind is swept on the host's next open; a lost report is not recoverable.
+ * `report` keeps the failure visible instead of silent, so the next host open is not the only trace of it.
  */
-export async function removeCheckTemp(tmp: string) {
-  await rm(tmp, { recursive: true, force: true }).catch((error: unknown) => {
-    // Ignored on purpose, whatever it is: the directory is disposable, and the run's own result must not be replaced
-    // by a cleanup failure (see above). The next host open sweeps anything left.
-    void (error as NodeJS.ErrnoException).code
-  })
+export async function removeCheckTemp(
+  tmp: string,
+  report?: (failure: { path: string; error: unknown }) => void,
+) {
+  await rm(tmp, { recursive: true, force: true }).catch(
+    // Never fatal, whatever it is: the directory is disposable, and the run's own result must not be replaced by a
+    // cleanup failure (see above). The next host open sweeps anything left, and `report` says what was left.
+    (error: unknown) => report?.({ path: tmp, error }),
+  )
 }
 
 /**
@@ -273,6 +277,12 @@ export async function runLanderCheck(
   pids: string,
   temp: string,
   limits: CheckLimits = checkLimits,
+  /**
+   * Told when the check's temporary directory could not be removed. Cleanup must never decide the check: on Windows an
+   * antivirus or indexer holding a file makes `rm` fail with EBUSY, and throwing here would replace a watchdog result
+   * ("Timed out after 10 min") with a bare "it failed", losing the evidence the report exists to carry.
+   */
+  report?: (failure: { path: string; error: unknown }) => void,
 ) {
   // Synchronous, so the watchdog's timers start in the same tick as the call.
   mkdirSync(temp, { recursive: true })
@@ -339,7 +349,7 @@ export async function runLanderCheck(
   } finally {
     clearTimeout(stallTimer)
     clearTimeout(totalTimer)
-    await removeCheckTemp(tmp)
+    await removeCheckTemp(tmp, report)
   }
 }
 
@@ -497,9 +507,22 @@ export const failurePrompt = ({
     '',
     `Your checkout ${integration} is left as it failed. ${state}`,
     mode === 'fix'
-      ? 'Mode: fix. Resolve or fix it here with the smallest change and commit it (Conventional Commits). Leave the checkout clean. Never push or touch other checkouts. Every check then runs again before it lands. If it cannot be fixed safely, change nothing and explain why. An environment or gate failure is not fixed in product code: for a missing shell or POSIX tool, a CRLF or formatting baseline unrelated to the submission, or a provider limit, report the exact check, command and failure and change nothing outside the submission.'
+      ? fixRules
       : `Mode: diagnose. Explain the cause and the smallest fix for the submitter. Change nothing.`,
   ].join('\n')
+
+/** What a fix-mode lander may and may not change, in the order it must weigh them. */
+const fixRules = [
+  'Mode: fix. Resolve or fix it here with the smallest change and commit it (Conventional Commits).',
+  'Leave the checkout clean. Never push or touch other checkouts. Every check then runs again before it lands.',
+  'If it cannot be fixed safely, change nothing and explain why.',
+  'An environment or gate failure is not fixed in product code: for a missing shell or POSIX tool, a CRLF or',
+  'formatting baseline unrelated to the submission, or a provider limit, report the exact check, command and',
+  'failure and change nothing outside the submission.',
+  'Never make a check pass by editing what it checks: do not weaken, skip, delete or widen the timeout of a test',
+  'or a lint rule, even when it fails twice. A failing test is a finding, not an obstacle: report the failure with',
+  'its output, say whether it is environmental or caused by the change, and leave the decision to the submitter.',
+].join(' ')
 
 export function createLander(
   host: Host,
@@ -971,6 +994,10 @@ export function createLander(
                   checkPids(host.home),
                   checkTemp(host.home),
                   limitsFor(members[member], limits),
+                  (left) =>
+                    host.notice(
+                      `Lander check temp not removed after ${command} (${left.path}): ${String(left.error)}`,
+                    ),
                 )
               /**
                * One command: its first run, then one rerun when that failed; its output tail if it failed twice. A run a

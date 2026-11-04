@@ -26,6 +26,15 @@ it('keeps the diagnose prompt free of the fix fence', () => {
   expect(prompt).not.toContain('change nothing outside the submission')
 })
 
+it('forbids a fix from making a check pass by editing what it checks', () => {
+  // The loophole this closes: a lander turned a red gate green by editing the test that carried the failure.
+  const prompt = failurePrompt({ ...failed, mode: 'fix' })
+  expect(prompt).toContain('Never make a check pass by editing what it checks')
+  expect(prompt).toContain('even when it fails twice')
+  expect(prompt).toContain('report the failure with its output')
+  expect(prompt).toContain('leave the decision to the submitter')
+})
+
 it('states the same fence in the built-in lander instructions', async () => {
   const instructions = await readFile('agents/lander.md', 'utf8')
   expect(instructions).toContain('missing shell or POSIX tool')

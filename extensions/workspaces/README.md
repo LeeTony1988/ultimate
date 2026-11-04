@@ -137,6 +137,9 @@ lander's sidebar row shows the feature it lands or landed last.
    Object to contain descendants. Watchdog
    failures name the limit that fired, the failed test lines seen so far (vitest's `FAIL`/`×` lines, kept even when
    they scrolled out of the tail) and the output tail, and enter the same rerun/fix flow as other check failures.
+   A check's temporary directory is removed best effort: when Windows refuses the removal, a notice names the path and
+   the check keeps its own result instead of the cleanup's error deciding the report.
+   A lander's fix may never make a check pass by editing what it checks, and it never reruns a stopped check.
    An entry is a check or an array of checks, a group that runs concurrently; a check is a command string or
    `{ "command": "pnpm test", "timeout": 600, "stall": 300 }`.
    A failing check

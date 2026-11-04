@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, readdir, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { withAbortSignal } from '@earendil-works/chord/context'
@@ -21,6 +21,11 @@ vi.mock('../lib/process-group.ts', () => ({
     async () => undefined,
   ),
 }))
+// Wrap `rm` so a test can make removing a check's temp directory fail; every other call reaches the real one.
+vi.mock('node:fs/promises', async (original) => {
+  const fs = await original<typeof import('node:fs/promises')>()
+  return { ...fs, rm: vi.fn<typeof fs.rm>(fs.rm) }
+})
 const runLanderCheck = (
   path: string,
   command: string,
@@ -253,4 +258,28 @@ it('gives each check its own TMPDIR in the given directory and removes it afterw
   await run('.', 'pnpm test', context, tmpdir(), temp)
   expect(seen && dirname(seen)).toBe(temp)
   expect(await readdir(temp)).toEqual([])
+})
+
+it('keeps a watchdog result when the check temp cannot be removed, and reports the path', async () => {
+  // Windows EBUSY made the cleanup throw and replaced "Timed out after 10 min" with a bare "it failed".
+  const temp = await mkdtemp(join(tmpdir(), 'lander-tmp-'))
+  hanging()
+  const reported: { path: string; error: unknown }[] = []
+  vi.mocked(rm).mockRejectedValueOnce(
+    Object.assign(new Error('EBUSY: resource busy'), { code: 'EBUSY' }),
+  )
+  const ran = run(
+    '.',
+    'pnpm test',
+    context,
+    tmpdir(),
+    temp,
+    { stall: 0.1, total: 0.3 },
+    (failure) => reported.push(failure),
+  )
+  await vi.advanceTimersByTimeAsync(100)
+  expect((await ran).failure).toBe('Stalled: no output for 0.1 s, stopped')
+  expect(reported).toHaveLength(1)
+  expect(reported[0].path).toContain('lander-tmp-')
+  expect(String(reported[0].error)).toContain('EBUSY')
 })
