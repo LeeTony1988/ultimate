@@ -596,6 +596,7 @@ export async function loadExtensions(
               extension.tools?.map((tool) => ({
                 name: tool.name,
                 description: tool.description.trim().split('\n')[0] ?? '',
+                ...(tool.deferred ? { deferred: true as const } : {}),
               })) ?? [],
             sections: extension.sections?.map((section) => section.key) ?? [],
             hooks: extension.hooks?.length ?? 0,

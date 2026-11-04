@@ -161,7 +161,8 @@ A successful restart never returns: the new host opens the requested chapter.
 
 `refs.ts` holds the documents and actions: `start`, `end`, `asleep`, `switch` (user-only), `chapters`, `pass`, `journal`, `decide` (status plus `branch`, `sha` for a landing outside the lander, and an optional one-line `reason`),
 and `stats`, which reads tool calls from `<home>/trace.sqlite` read-only: calls, failures and mean duration per tool,
-the 20 most frequent errors, and enabled tools never called in the trace's window (7 days or 200k rows).
+the 20 most frequent errors, and enabled tools never called in the trace's window (7 days or 200k rows). A deferred
+tool is left out of `unused`: `tool_search` hides it until it loads it, so not calling it says nothing.
 
 On open, a sleep a restart stopped during its gates (`seeding`, `checking`, `backing up`) becomes `failed`: nothing
 switched, and Fall asleep can be tried again.

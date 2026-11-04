@@ -262,3 +262,50 @@ it('reads tool numbers from the trace, with unused tools and frequent errors', a
   })
   expect(toolStats(join(await temp(), 'none.sqlite'), ['read']).unused).toEqual(['read'])
 })
+
+it('leaves deferred tools out of unused, since tool_search hides them until it loads them', async () => {
+  const file = join(await temp(), 'trace.sqlite')
+  const db = new DatabaseSync(file)
+  db.exec(
+    'CREATE TABLE calls (id TEXT, at REAL, ms REAL, kind TEXT, name TEXT, ok INTEGER, error TEXT)',
+  )
+  db.prepare('INSERT INTO calls VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+    '1',
+    100,
+    10,
+    'tool',
+    'edit',
+    1,
+    null,
+  )
+  db.close()
+  const host = {
+    chapter: { trace: file },
+    extensions: () => [
+      {
+        name: 'coding-tools',
+        enabled: true,
+        server: {
+          tools: [
+            { name: 'edit', description: 'Change a file.' },
+            { name: 'read', description: 'Read a file.' },
+          ],
+          sections: [],
+          hooks: 0,
+          docs: [],
+        },
+      },
+      {
+        name: 'recall',
+        enabled: true,
+        server: {
+          tools: [{ name: 'recall', description: 'Find old work.', deferred: true }],
+          sections: [],
+          hooks: 0,
+          docs: [],
+        },
+      },
+    ],
+  } as unknown as ExtensionHost
+  expect(actions.stats(null, { host } as ActionContext).unused).toEqual(['read'])
+})
