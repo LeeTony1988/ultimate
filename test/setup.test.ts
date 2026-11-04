@@ -209,6 +209,28 @@ it('warns about a missing worktree setup until one is configured', async () => {
   })
 })
 
+it('warns when the running Node does not satisfy the project engines, naming both', async () => {
+  const host = await checkHost({ logins: ['openrouter', 'openai-codex'] })
+  const row = async (engines?: string) => {
+    await mkdir(host.projectRoot, { recursive: true })
+    await writeFile(
+      join(host.projectRoot, 'package.json'),
+      JSON.stringify(engines === undefined ? {} : { engines: { node: engines } }),
+    )
+    return (await check(host)).find((issue) => issue.area === 'Node')
+  }
+  const major = Number(process.versions.node.split('.')[0])
+  // A range the running Node leaves names it and the requirement; a satisfied or absent one says nothing.
+  const warning = await row(`>=${major + 1}`)
+  expect(warning).toMatchObject({ status: 'warn' })
+  expect(warning!.summary).toContain(`v${process.versions.node}`)
+  expect(warning!.summary).toContain(`>=${major + 1}`)
+  expect(warning!.impact).toContain(process.execPath)
+  expect(warning!.impact).toContain('unrelated to a change')
+  expect(await row(`>=${major}`)).toBeUndefined()
+  expect(await row()).toBeUndefined()
+})
+
 it('warns about a listed root without memories until it has one', async () => {
   const host = await checkHost({ logins: ['openrouter', 'openai-codex'] })
   const docs: Record<string, Record<number, JsonObject>> = {

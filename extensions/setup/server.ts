@@ -13,7 +13,9 @@ import type {
 } from '@earendil-works/pi-durable'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { existsSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { satisfiesRange } from '../../lib/node-range.ts'
 import { discoverAgents } from '../../lib/agents.ts'
 import { isolatable } from '../../lib/git.ts'
 import { implementAction } from '../../lib/actions.ts'
@@ -247,6 +249,32 @@ async function landerArea(host: CheckHost): Promise<SetupIssue | undefined> {
   }
 }
 
+/**
+ * The Node that runs Ultimate against the project's declared `engines.node`: a version this machine's PATH chooses
+ * instead of the one nvm meant can fail checks and tests for reasons no change explains.
+ */
+async function nodeArea(host: Pick<CheckHost, 'projectRoot'>): Promise<SetupIssue | undefined> {
+  let manifest: { engines?: { node?: unknown } }
+  try {
+    manifest = JSON.parse(await readFile(join(host.projectRoot, 'package.json'), 'utf8'))
+  } catch (error) {
+    // No package.json, or one this cannot read: nothing here declares a Node version.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT' || error instanceof SyntaxError)
+      return undefined
+    throw error
+  }
+  const engines = manifest.engines?.node
+  if (typeof engines !== 'string' || !engines.trim()) return undefined
+  const running = process.versions.node
+  if (satisfiesRange(running, engines)) return undefined
+  return {
+    area: 'Node',
+    status: 'warn',
+    summary: `v${running} does not satisfy engines.node ${engines}`,
+    impact: `Checks and tests may fail for reasons unrelated to a change: \`node\` here resolves ${process.execPath}, and the project needs a v${engines} first on PATH.`,
+  }
+}
+
 /** Files that say a fresh checkout needs installing before it runs: a worktree has none of their ignored output. */
 const MANIFESTS = [
   'package.json',
@@ -323,6 +351,7 @@ export async function check(
   const areas = await Promise.all(
     (
       [
+        nodeArea,
         summaryArea,
         agentsArea,
         providersArea,
