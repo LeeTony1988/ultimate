@@ -1596,6 +1596,41 @@ it.concurrent('runs a check group concurrently and records each summary', async 
   )
   expect(checks).toHaveLength(3)
 })
+it.concurrent('a check the watchdog stops is reported once as a timeout, never rerun, and never handed to the model', async () => {
+  // The limit is the host's: a rerun cannot pass it, and the lander model cannot fix it in product code.
+  const f = await lander({ checks: [{ command: 'sleep 30', timeout: 1 }] })
+  await landerDefinition(f, 'fix')
+  let asked = 0
+  f.answerLander(() => {
+    asked++
+    return fauxAssistantMessage('no idea')
+  })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const head = await git(f.projectRoot, 'rev-parse', 'HEAD')
+  await commit((await f.service.get(id, context))!.path)
+  await f.service.submit(id, 'None', context)
+  const [report] = await submitted(f, id)
+  expect(report).toContain('was not landed: check timed out: sleep 30')
+  // A silent check trips the stall limit, a printing one the total: either way the report names the limit.
+  expect(report).toMatch(/Stalled: no output for 1 s|Timed out after 1 s/)
+  // The machine's limit, not the submission's: the model never sees it and the target does not move.
+  expect(asked).toBe(0)
+  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
+  const { log } = await landerLog(f)
+  expect(log.filter((line) => line.step?.startsWith('rerunning:'))).toEqual([])
+  expect(log.findLast((line) => line.check)!.check).toMatchObject({
+    command: 'sleep 30',
+    result: 'timeout',
+  })
+  expect(log.at(-1)).toMatchObject({
+    outcome: 'failed',
+    reason: 'check timed out: sleep 30',
+  })
+  // One event, and it says why: not a failing check the rerun repeated.
+  const checks = await f.host.eventLog.recent({ events: [CheckRan], limit: 20 })
+  expect(checks.map((event) => event.data.result)).toEqual(['timeout'])
+})
 it.concurrent('reruns only the failing command of a group, reports its output twice failed, and lands a flaky one', async () => {
   const f = await lander({
     checks: [['echo PASSING_SUMMARY', 'echo CHECK_OUTPUT_TAIL; test ! -f fail.txt']],
@@ -1699,6 +1734,28 @@ it.concurrent('fast-forwards the worktree that has the target checked out, past 
   expect(reports.at(-1)).toContain('refused the fast-forward')
   expect(reports.at(-1)).toContain('overlap.txt')
   expect(await git(elsewhere, 'rev-parse', 'HEAD')).toBe(tip)
+})
+// ffbe6071: a landing whose diff contained exactly the user's uncommitted line landed clean, and its commit message
+// claimed the edit was untouched. Git fast-forwards a staged copy of the arriving content without a word.
+it.concurrent('refuses a landing whose paths hold the user’s uncommitted work, even when it would merge clean', async () => {
+  const f = await lander({})
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const workspace = (await f.service.get(id, context))!
+  const head = await git(f.projectRoot, 'rev-parse', 'HEAD')
+  // The submission rewrites base.txt; the source checkout stages that same line, staged, so Git merges it cleanly.
+  await writeFile(join(workspace.path, 'base.txt'), 'landed')
+  await commit(workspace.path)
+  await writeFile(join(f.projectRoot, 'base.txt'), 'landed')
+  await git(f.projectRoot, 'add', 'base.txt')
+  await f.service.submit(id, 'None', context)
+  const [report] = await submitted(f, id)
+  expect(report).toContain('refused the fast-forward')
+  expect(report).toContain('base.txt')
+  // Nothing landed, and the user's work is exactly as it was.
+  expect(await git(f.projectRoot, 'rev-parse', 'HEAD')).toBe(head)
+  expect(await readFile(join(f.projectRoot, 'base.txt'), 'utf8')).toBe('landed')
+  expect(await git(f.projectRoot, 'status', '--porcelain')).toBe('M  base.txt')
 })
 it.concurrent('counts checkouts by state, commits and uncommitted changes, and measures their disk once a minute', async () => {
   const f = await fixture()

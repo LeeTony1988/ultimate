@@ -12,7 +12,7 @@ import {
 } from '@earendil-works/pi-durable'
 import type { ConversationId, Cursor, TaskId, Tx } from '@earendil-works/pi-durable'
 import { exec } from '../../lib/exec.ts'
-import { git, isolatable } from '../../lib/git.ts'
+import { fastForward, git, isolatable } from '../../lib/git.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { samePath, worktreePath } from './paths.ts'
@@ -677,6 +677,8 @@ export function workspaces(host: Host) {
         paths: [],
         files: [],
       }
+      /** Uncommitted work the fast-forward wrote over, if any; the landing still counts. */
+      let absorbed: string[] = []
       if (!integrated) {
         if (
           !(await git(source, 'merge-base', '--is-ancestor', head, tip).then(
@@ -701,7 +703,8 @@ export function workspaces(host: Host) {
         const needsRestart =
           (await realpath(source)) === (await realpath(host.ultimateRoot)) &&
           files.some(({ path }) => /^(server|shared)\//.test(path))
-        await git(source, 'merge', '--ff-only', tip)
+        const landed = await fastForward(source, head, tip)
+        absorbed = landed.absorbed
         result = {
           text: `Landed commits:\n${commits.join('\n')}\nChanged files:\n${files.map((file) => `${file.path} +${file.added} -${file.removed}`).join('\n')}${needsRestart ? '\nNeeds restart.' : ''}`,
           landed: tip,
@@ -711,9 +714,14 @@ export function workspaces(host: Host) {
           ...(needsRestart ? { needsRestart: true } : {}),
         }
       }
+      // The commit is on the branch either way, so record it first and only then report what it ran over.
       await host.harness().commit(async (tx) => {
         ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)].landed = tip
       }, context)
+      if (absorbed.length)
+        throw new Error(
+          `Landed, but the fast-forward wrote over uncommitted work in:\n${absorbed.join('\n')}\nRestore it and commit the restoration; the commit is already on ${workspace.target}.`,
+        )
       return result
     })
   }
