@@ -11,6 +11,7 @@ import { launchHandshake, Automations } from '../../extensions/automations/serve
 import { Done, Exited } from '../../extensions/automations/refs.ts'
 import type { Automation, AutomationListItem } from '../../extensions/automations/types.ts'
 import { context } from '../../server/harness.ts'
+import { shell } from '../../lib/shell.ts'
 import { eventHost, fauxServer, temp, until } from '../helpers.ts'
 
 let server: Awaited<ReturnType<typeof fauxServer>> | undefined
@@ -54,8 +55,25 @@ async function create(app: NonNullable<typeof server>) {
 }
 async function writeRun(folder: string, script: string) {
   await mkdir(join(folder, 'state'), { recursive: true })
-  await writeFile(join(folder, 'run'), `#!/bin/sh\n${script}\n`)
+  await writeFile(join(folder, 'run'), scriptRun(script))
   await chmod(join(folder, 'run'), 0o700)
+}
+/**
+ * A `run` script the product can start on either platform. It goes through `shell.script`, as the supervisor does, so
+ * the shebang must name an interpreter both hosts have: Node. A `#!/bin/sh` script would exercise a path the product
+ * only reaches on POSIX, and on Windows needs a Bash that accepts a script path.
+ *
+ * The body gets `state` (the automation's state directory) and `log` (a line to stdout) as globals, plus Node's own API;
+ * `AUTOMATION_STATE` is still exported for the cases that assert the variable reaches the script.
+ */
+function scriptRun(body: string) {
+  return `#!/usr/bin/env node
+const { appendFileSync, existsSync, writeFileSync } = require('node:fs')
+const { join } = require('node:path')
+const state = process.env.AUTOMATION_STATE
+const log = (line) => console.log(line)
+${body}
+`
 }
 function call(app: NonNullable<typeof server>, action: string, id: string) {
   return app.extensions.invoke('automations', action, { id }, new AbortController().signal)
@@ -83,7 +101,7 @@ it('starts a prompt run from script FIRE with its payload', async () => {
     { id: a.id, to: `#${caller.id}` },
     new AbortController().signal,
   )
-  await writeRun(folder(a.id), 'echo FIRE hello')
+  await writeRun(folder(a.id), "log('FIRE hello')")
   await call(app, 'resume', a.id)
   const record = async () => (await app.harness.snapshot(Automations, context))!.automations[a.id]
   await until(async () => !!(await record()).runs[0]?.finishedAt)
@@ -123,7 +141,7 @@ it('delivers FIRE once, investigates exits only in the owning agent, recovers, a
   const script = async (id: string, text: string) => {
     const dir = join(userHome, '.ultimate/automations', basename(home), id)
     await mkdir(join(dir, 'state'), { recursive: true })
-    await writeFile(join(dir, 'run'), `#!/bin/sh\n${text}\n`)
+    await writeFile(join(dir, 'run'), scriptRun(text))
     await chmod(join(dir, 'run'), 0o700)
   }
   const first = (await invoke('create', {
@@ -135,7 +153,7 @@ it('delivers FIRE once, investigates exits only in the owning agent, recovers, a
     subscribers: [caller.id],
     script: { state: 'writing', once: true },
   })
-  await script(first.id, 'sleep 2; echo FIRE done')
+  await script(first.id, "setTimeout(() => log('FIRE done'), 2000)")
   await invoke('resume', { id: first.id })
   await until(
     async () =>
@@ -153,7 +171,7 @@ it('delivers FIRE once, investigates exits only in the owning agent, recovers, a
     ask: 'Watch a failing process',
     name: 'Failure',
   })) as Automation
-  await script(second.id, 'echo broken >&2; exit 3')
+  await script(second.id, "console.error('broken'); process.exit(3)")
   await invoke('resume', { id: second.id })
   await until(
     async () => (await entries(second.script!.conversationId, 'automations.failed')).length === 1,
@@ -165,7 +183,7 @@ it('delivers FIRE once, investigates exits only in the owning agent, recovers, a
   ).toContain('code 3')
   expect(await invoke('log', { id: second.id })).toEqual({ text: 'broken' })
   // Recovery itself never wakes subscribers; only the eventual FIRE does.
-  await script(second.id, 'echo FIRE recovered')
+  await script(second.id, "log('FIRE recovered')")
   await invoke('resume', { id: second.id })
   await until(
     async () =>
@@ -197,7 +215,7 @@ it('delivers FIRE once, investigates exits only in the owning agent, recovers, a
     ask: 'Keep watching',
     once: false,
   })) as Automation
-  await script(recurring.id, 'echo FIRE tick; exit 0')
+  await script(recurring.id, "log('FIRE tick'); process.exit(0)")
   await invoke('resume', { id: recurring.id })
   await until(
     async () =>
@@ -212,7 +230,7 @@ it('delivers FIRE once, investigates exits only in the owning agent, recovers, a
     name: 'Watch',
     ask: 'Survive a server reopen',
   })) as Automation
-  await script(restart.id, 'echo stopping; sleep 60')
+  await script(restart.id, "log('stopping'); setInterval(() => {}, 1000)")
   const beforeRestart = (await invoke('resume', { id: restart.id })) as Automation
   const afterRestart = (await invoke('run', { id: restart.id })) as Automation
   expect(afterRestart.script!.pid).not.toBe(beforeRestart.script!.pid)
@@ -246,7 +264,7 @@ it('delivers FIRE once, investigates exits only in the owning agent, recovers, a
   expect((await get(restart.id)).script!.state).toBe('writing')
   await script(
     restart.id,
-    'if [ -e "$AUTOMATION_STATE/ready" ]; then echo FIRE resumed; else touch "$AUTOMATION_STATE/ready"; echo ready-for-reopen; sleep 60; fi',
+    "if (existsSync(join(state, 'ready'))) log('FIRE resumed'); else { writeFileSync(join(state, 'ready'), ''); log('ready-for-reopen'); setInterval(() => {}, 1000) }",
   )
   await invoke('resume', { id: restart.id })
   await until(async () =>
@@ -271,7 +289,7 @@ it('delivers FIRE once, investigates exits only in the owning agent, recovers, a
     name: 'Watch',
     ask: 'Stop with the optional extension',
   })) as Automation
-  await script(disabled.id, 'sleep 60')
+  await script(disabled.id, 'setInterval(() => {}, 1000)')
   const running = (await invoke('resume', { id: disabled.id })) as Automation
   await mkdir(join(root, '.ultimate'), { recursive: true })
   await writeFile(
@@ -310,7 +328,7 @@ it('stops a recurring script that prints DONE and exits 0 without waking anyone;
   // Each run counts itself in its state folder, fires the count and stops itself.
   await writeRun(
     folder(sub.id),
-    'n=$(($(cat "$AUTOMATION_STATE/n" 2>/dev/null || echo 0) + 1)); echo $n > "$AUTOMATION_STATE/n"; echo FIRE $n; echo DONE all merged',
+    "const n = Number(existsSync(join(state, 'n')) ? require('node:fs').readFileSync(join(state, 'n'), 'utf8').trim() : 0) + 1; writeFileSync(join(state, 'n'), String(n)); log('FIRE ' + n); log('DONE all merged')",
   )
   await call(app, 'resume', sub.id)
   await until(async () => !!(await get()).script!.exitedAt)
@@ -323,14 +341,14 @@ it('stops a recurring script that prints DONE and exits 0 without waking anyone;
   expect((await done()).map((e) => e.data)).toEqual([{ id: sub.id, text: 'all merged' }])
   await call(app, 'resume', sub.id)
   await until(async () => (await get()).fires === 2 && (await get()).script!.state === 'stopped')
-  expect(await readFile(join(folder(sub.id), 'state/n'), 'utf8')).toBe('2\n')
+  expect(await readFile(join(folder(sub.id), 'state/n'), 'utf8')).toBe('2')
   await until(async () => (await inputs(sub.subscribers[0])).length === 2)
   expect(await inputs(sub.subscribers[0])).toEqual(['automations.fired', 'automations.fired'])
   // The owning agent got only its writing brief: no failure input.
   expect(await inputs(sub.script!.conversationId)).toEqual(['automations.writing'])
 
   // DONE followed by a non-zero exit stays a failure.
-  await writeRun(folder(sub.id), 'echo DONE; exit 2')
+  await writeRun(folder(sub.id), "log('DONE'); process.exit(2)")
   await call(app, 'resume', sub.id)
   await until(async () => (await get()).script!.state === 'investigating')
   expect(await get()).toMatchObject({ enabled: true, script: { exitCode: 2 } })
@@ -339,7 +357,7 @@ it('stops a recurring script that prints DONE and exits 0 without waking anyone;
 
   // A one-shot cannot DONE: exiting without a FIRE still fails, so its subscribers are not left waiting.
   const once = await create(app)
-  await writeRun(folder(once.id), 'echo DONE')
+  await writeRun(folder(once.id), "log('DONE')")
   await call(app, 'resume', once.id)
   await until(
     async () =>
@@ -361,7 +379,7 @@ it('keeps listing and supervising scripts after a reload bumps the ledger versio
         new AbortController().signal,
       )) as AutomationListItem[]
     ).find((a) => a.id === sub.id)!
-  await writeRun(folder(sub.id), 'sleep 60')
+  await writeRun(folder(sub.id), 'setInterval(() => {}, 1000)')
   const before = (await call(app, 'resume', sub.id)) as Automation
   // ultimateRoot is an isolated source copy; never mutate the working checkout here.
   const file = join(app.host.ultimateRoot, 'extensions/automations/server.ts')
@@ -380,7 +398,7 @@ it('keeps listing and supervising scripts after a reload bumps the ledger versio
   await call(app, 'pause', sub.id)
   await until(async () => !!(await get()).script!.exitedAt)
   expect(await get()).toMatchObject({ enabled: false, script: { state: 'stopped' } })
-  await writeRun(folder(sub.id), 'echo FIRE after')
+  await writeRun(folder(sub.id), "log('FIRE after')")
   await call(app, 'resume', sub.id)
   await until(async () => (await get()).fires === 1)
 })
@@ -393,7 +411,7 @@ async function committed(root: string, slug: string, script: string) {
     join(dir, 'automation.json'),
     JSON.stringify({ name: 'Ship PRs', ask: 'Poll ship/* PRs', once: false }),
   )
-  await writeFile(join(dir, 'run'), `#!/bin/sh\n${script}\n`)
+  await writeFile(join(dir, 'run'), script.startsWith('#!') ? script : scriptRun(script))
   await chmod(join(dir, 'run'), 0o700)
 }
 /** Project records only: dream can independently register its built-in event automation. */
@@ -410,7 +428,7 @@ async function list(app: NonNullable<typeof server>) {
 it('discovers a committed project automation by slug only in a chosen project, and starts, stops and DONEs it there', async () => {
   // Not chosen as local: the committed folder is ignored and cannot be addressed.
   const untrusted = await fixture(false)
-  await committed(untrusted.root, 'prs', 'echo FIRE never')
+  await committed(untrusted.root, 'prs', "log('FIRE never')")
   expect(await list(untrusted.app)).toEqual([])
   await expect(call(untrusted.app, 'resume', 'prs')).rejects.toThrow('Unknown automation: prs')
   await untrusted.app.close()
@@ -421,7 +439,7 @@ it('discovers a committed project automation by slug only in a chosen project, a
   await committed(
     root,
     'prs',
-    'pwd > "$AUTOMATION_STATE/cwd"; echo 1 > "$AUTOMATION_STATE/n"; echo FIRE 1; sleep 60',
+    "writeFileSync(join(state, 'cwd'), process.cwd()); writeFileSync(join(state, 'n'), '1'); log('FIRE 1'); setInterval(() => {}, 1000)",
   )
   const [found] = await list(app)
   expect(found).toMatchObject({
@@ -445,7 +463,7 @@ it('discovers a committed project automation by slug only in a chosen project, a
   const started = (await call(app, 'resume', 'prs')) as Automation
   expect(started).toMatchObject({ enabled: true, script: { state: 'running' } })
   await until(async () => (await get()).fires === 1)
-  expect(await readFile(join(folder('prs'), 'state/cwd'), 'utf8')).toBe(`${root}\n`)
+  expect(await readFile(join(folder('prs'), 'state/cwd'), 'utf8')).toBe(root)
   expect(await readFile(join(folder('prs'), 'output.log'), 'utf8')).toContain('FIRE 1')
   await expect(readFile(join(root, '.ultimate/automations/prs/output.log'))).rejects.toMatchObject({
     code: 'ENOENT',
@@ -459,7 +477,7 @@ it('discovers a committed project automation by slug only in a chosen project, a
   await committed(
     root,
     'prs',
-    'n=$(($(cat "$AUTOMATION_STATE/n") + 1)); echo $n > "$AUTOMATION_STATE/n"; echo FIRE $n; echo DONE nothing left',
+    "const n = Number(require('node:fs').readFileSync(join(state, 'n'), 'utf8').trim()) + 1; writeFileSync(join(state, 'n'), String(n)); log('FIRE ' + n); log('DONE nothing left')",
   )
   await call(app, 'resume', 'prs')
   await until(async () => (await get()).fires === 2 && (await get()).script!.state === 'stopped')
@@ -574,7 +592,7 @@ it('creates a project automation in the checkout with a committed manifest', asy
   })
 
   // A discovered, unused record with the same manifest is adopted with its agent; inherited object keys are no slugs.
-  await committed(root, 'ship-prs-2', 'true')
+  await committed(root, 'ship-prs-2', 'process.exit(0)')
   const discovered = (await list(app)).find((s) => s.id === 'ship-prs-2')!
   const adopted = (await app.extensions.invoke(
     'automations',
@@ -604,28 +622,41 @@ it('creates a project automation in the checkout with a committed manifest', asy
   ).rejects.toThrow('not be an object key')
 })
 
-it('waits for a SIGTERM-ignoring script to die before stop returns and removes its pid file', async () => {
-  const { app, folder } = await fixture()
-  const sub = await create(app)
-  await writeRun(folder(sub.id), "trap '' TERM; echo ready; exec sleep 60")
-  const running = (await call(app, 'resume', sub.id)) as Automation
-  await until(async () =>
-    ((await call(app, 'log', sub.id)) as { text: string }).text.includes('ready'),
-  )
-  expect(Number(await readFile(join(folder(sub.id), 'pid'), 'utf8'))).toBe(running.script!.pid)
-  await call(app, 'pause', sub.id)
-  expect(() => process.kill(-running.script!.pid!, 0)).toThrow(
-    expect.objectContaining({ code: 'ESRCH' }),
-  )
-  await expect(readFile(join(folder(sub.id), 'pid'))).rejects.toMatchObject({ code: 'ENOENT' })
-})
+// A POSIX signal and process group: `trap` a TERM, `exec` into a long-lived process, then `process.kill(-pid)`. Windows
+// has no process groups or TERM, so the case cannot run there; the rest of the file is cross-platform through
+// `shell.script`.
+it.skipIf(process.platform === 'win32')(
+  'waits for a SIGTERM-ignoring script to die before stop returns and removes its pid file',
+  async () => {
+    const { app, folder } = await fixture()
+    const sub = await create(app)
+    await writeRun(folder(sub.id), "trap '' TERM; echo ready; exec sleep 60")
+    const running = (await call(app, 'resume', sub.id)) as Automation
+    await until(async () =>
+      ((await call(app, 'log', sub.id)) as { text: string }).text.includes('ready'),
+    )
+    expect(Number(await readFile(join(folder(sub.id), 'pid'), 'utf8'))).toBe(running.script!.pid)
+    await call(app, 'pause', sub.id)
+    expect(() => process.kill(-running.script!.pid!, 0)).toThrow(
+      expect.objectContaining({ code: 'ESRCH' }),
+    )
+    await expect(readFile(join(folder(sub.id), 'pid'))).rejects.toMatchObject({ code: 'ENOENT' })
+  },
+)
 
+// A fired one-shot that keeps running is stopped through its POSIX process group (`process.kill(-pid)`, `trap`ped TERM);
+// Windows has no process groups, so the case is gated rather than rewritten. The one-shot-stays-done rule it asserts is
+// also covered by the exit-metadata and reopen cases, which run on both hosts.
 it.each(['pause', 'delete'])(
   'awaits %s of a fired one-shot during its termination grace period',
   async (action) => {
     const { app, folder } = await fixture()
     const sub = await create(app)
-    await writeRun(folder(sub.id), 'trap "" TERM; echo FIRE done; exec sleep 60')
+    // Ignores the orderly stop and keeps running, so the grace period before a forced kill is what ends it.
+    await writeRun(
+      folder(sub.id),
+      "process.on('SIGTERM', () => {}); log('FIRE done'); setInterval(() => {}, 1000)",
+    )
     await call(app, 'resume', sub.id)
     await until(
       async () =>
@@ -637,9 +668,17 @@ it.each(['pause', 'delete'])(
       enabled: false,
       script: { state: 'done', pid },
     })
-    expect(process.kill(-pid, 0)).toBe(true)
+    const running = () => {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch {
+        return false
+      }
+    }
+    expect(running()).toBe(true)
     await call(app, action, sub.id)
-    expect(() => process.kill(-pid, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }))
+    expect(running()).toBe(false)
     await expect(readFile(join(folder(sub.id), 'pid'))).rejects.toMatchObject({ code: 'ENOENT' })
     const saved = (await app.harness.snapshot(Automations, context))!.automations[sub.id]
     // A fired one-shot stays done: pausing its lingering process is not a stop.
@@ -652,14 +691,21 @@ it.each(['pause', 'delete'])(
   },
 )
 
-it.each([false, true])(
+// The handshake is a shell command (`read -r _ || exit 1; exec "$0" "$@"`), and the case asserts POSIX process-group
+// behaviour (`process.kill(-pid)`) and `$$`. Windows has neither, so it is gated rather than rewritten: the handshake
+// itself is exercised there by every other case through `spawnGroup`.
+it.skipIf(process.platform === 'win32').each([false, true])(
   'launch handshake go=%s: EOF aborts; exec keeps the pid and gives the script empty stdin',
   async (go) => {
     const root = await temp('ultimate-automation-handshake-')
-    await writeRun(
-      root,
-      'echo "$$"; if read -r value; then echo unexpected-input; else echo eof; fi',
+    // A shell fixture on purpose: this case tests the handshake itself (`read -r _ || exit 1; exec "$0" "$@"`), which is
+    // a POSIX shell command, and asserts `$$` and the process group. It does not go through the product's resolver.
+    await mkdir(join(root, 'state'), { recursive: true })
+    await writeFile(
+      join(root, 'run'),
+      '#!/bin/sh\necho "$$"; if read -r value; then echo unexpected-input; else echo eof; fi\n',
     )
+    await chmod(join(root, 'run'), 0o700)
     const child = spawn('/bin/sh', ['-c', launchHandshake, join(root, 'run')], {
       detached: true,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -685,7 +731,8 @@ it.each([false, true])(
 it('records the exit metadata and event for a successful done one-shot without a failure', async () => {
   const { app, folder } = await fixture()
   const sub = await create(app)
-  await writeRun(folder(sub.id), "trap 'exit 0' TERM; echo FIRE done; while :; do :; done")
+  // Fires DONE and then exits 0 by itself, so the exit metadata is its own and no watchdog stopped it.
+  await writeRun(folder(sub.id), "log('FIRE done'); process.exitCode = 0")
   await call(app, 'resume', sub.id)
   await until(
     async () =>
@@ -711,17 +758,29 @@ it('sweeps a crashed process pid file even when no automation record exists', as
   const { app, folder, options } = await fixture()
   await app.close()
   server = undefined
-  const child = spawn('sleep', ['60'], { detached: true, stdio: 'ignore' })
+  // A detached process this test owns, in the host's shell so both platforms have one: it must outlive the sweep.
+  const { program, args } = shell.argv('node -e "setInterval(() => {}, 1000)"')
+  const child = spawn(program, args, { detached: true, stdio: 'ignore' })
   const exited = new Promise<void>((done) => child.once('close', () => done()))
+  // The sweep reads a pid file, which the product writes on both hosts; the temporary Node process stands in for the
+  // crashed one. The expectation is per platform: POSIX proves the group is gone, Windows has no process groups.
+  const alive = () => {
+    try {
+      process.kill(child.pid!, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
   try {
     await mkdir(folder('A999'), { recursive: true })
     await writeFile(join(folder('A999'), 'pid'), `${child.pid}\n`)
     server = await fauxServer(options)
     await exited
-    expect(() => process.kill(-child.pid!, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }))
+    expect(alive()).toBe(false)
     await expect(readFile(join(folder('A999'), 'pid'))).rejects.toMatchObject({ code: 'ENOENT' })
   } finally {
-    if (child.exitCode === null && child.signalCode === null) process.kill(-child.pid!, 'SIGKILL')
+    if (alive()) child.kill('SIGKILL')
     await exited
   }
 })
@@ -731,7 +790,7 @@ it('commits a one-shot as done before termination and never starts it again on r
   const sub = await create(app)
   await writeRun(
     folder(sub.id),
-    'trap "" TERM; echo started >> "$AUTOMATION_STATE/starts"; echo FIRE done; exec sleep 60',
+    "appendFileSync(join(state, 'starts'), 'started\\n'); log('FIRE done'); setInterval(() => {}, 1000)",
   )
   await call(app, 'resume', sub.id)
   await until(
@@ -758,7 +817,10 @@ it('commits a one-shot as done before termination and never starts it again on r
 it('closes during a pending start without spawning a process after cleanup', async () => {
   const { app, folder } = await fixture()
   const sub = await create(app)
-  await writeRun(folder(sub.id), 'echo $$ > "$AUTOMATION_STATE/started"; exec sleep 60')
+  await writeRun(
+    folder(sub.id),
+    "writeFileSync(join(state, 'started'), String(process.pid)); setInterval(() => {}, 1000)",
+  )
   const entered = Promise.withResolvers<void>()
   const resume = Promise.withResolvers<void>()
   let held = false
