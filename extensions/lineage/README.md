@@ -85,7 +85,8 @@ document, tools and model-facing text, where agents and stored entries already u
 - **Project memory** (`memory.ts`): doc `lineage.memory` on a root (`MemoryDoc` in `refs.ts`; forks start empty)
   holds `{ memories: Record<slug, { kind: 'decision' | 'fact' | 'lesson', line, body, source?, updated }> }`: slugs
   match `^[a-z0-9][a-z0-9-]{0,47}$`, `line` is one line of at most 120 characters, `body` at most 2000, `source` a
-  `#<conversation>/<entry>` breadcrumb, at most 150 memories (`MEMORY_LIMIT`). Every write goes through
+  `#<conversation>/<entry>` breadcrumb, at most 150 memories (`MEMORY_LIMIT`). A too-long `line` or `body` is refused
+  with the length it got and the limit, so a retry knows how much to cut. Every write goes through
   `applyMemoryOps(tx, root, ops)` with ops `{op:'add', slug, kind, line, body, source?}`,
   `{op:'update', slug, kind?, line?, body?, source?}` and `{op:'delete', slug}`: it validates the whole batch against
   the memory as the batch leaves it first (fields, add of an existing slug, update or delete of a missing one, the cap

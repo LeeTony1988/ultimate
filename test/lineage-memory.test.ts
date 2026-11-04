@@ -149,9 +149,9 @@ it.concurrent('applies memory ops atomically and holds the cap', async () => {
     [[add('fine'), { op: 'update', slug: 'missing', line: 'x' }], 'no memory missing'],
     [[add('fine'), { op: 'delete', slug: 'missing' }], 'no memory missing'],
     [[add('fine'), add('Bad_Slug')], 'slug must match'],
-    [[add('fine'), add('long', 'x'.repeat(121))], 'at most 120'],
+    [[add('fine'), add('long', 'x'.repeat(121))], 'at most 120 characters, got 121'],
     [[add('fine'), { ...add('multi'), line: 'one\ntwo' }], 'one non-empty line'],
-    [[add('fine'), { ...add('big'), body: 'x'.repeat(2001) }], 'at most 2000'],
+    [[add('fine'), { ...add('big'), body: 'x'.repeat(2001) }], 'at most 2000 characters, got 2001'],
     [[add('fine'), { ...add('odd'), kind: 'opinion' }], 'kind must be'],
   ] as const)
     await expect(apply(server, [...ops])).rejects.toThrow(error)

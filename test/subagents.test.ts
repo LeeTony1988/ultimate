@@ -365,7 +365,11 @@ it('runs root -> forked review lead -> parallel leaves -> lead -> root with scop
     ).wait(context)
     expect(await f.opened.harness.snapshot(Subagents, leaf.id, context)).toBeUndefined()
     const denial = await call(f.opened, { action: 'wait', id: leaf.id })
-    expect(denial.text).toContain('id must identify a child')
+    expect(denial.text).toContain('id must be one of')
+    // The mistake is passing a conversation number that is not a child: the error names the children that are.
+    expect(denial.text).toContain(`#${rootChildren[0].conversationId} scout`)
+    expect(denial.text).toContain(`#${leadId} lead`)
+    expect(denial.text).toContain(`(got ${leaf.id})`)
   }
   const leadTranscript = seen.find((transcript) =>
     transcript.messages.some((message) => message.role === 'user' && message.content === 'TEAM'),

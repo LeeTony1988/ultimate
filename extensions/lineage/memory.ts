@@ -90,13 +90,13 @@ function parseOp(value: unknown, index: number): MemoryOp {
     if (typeof line !== 'string' || !line.trim() || /\n/.test(line.trim()))
       return fail('line must be one non-empty line')
     if (line.trim().length > LINE_CHARS)
-      return fail(`line must be at most ${LINE_CHARS} characters`)
+      return fail(`line must be at most ${LINE_CHARS} characters, got ${line.trim().length}`)
     fields.line = line.trim()
   }
   if (body !== undefined) {
     if (typeof body !== 'string' || !body.trim()) return fail('body must be non-empty text')
     if (body.trim().length > BODY_CHARS)
-      return fail(`body must be at most ${BODY_CHARS} characters`)
+      return fail(`body must be at most ${BODY_CHARS} characters, got ${body.trim().length}`)
     fields.body = body.trim()
   }
   if (source !== undefined) {

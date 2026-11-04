@@ -89,7 +89,7 @@ export interface ExtensionInfo {
   server?: {
     loadedAt?: string
     /** Each tool's name and the first line of its description. */
-    tools: { name: string; description: string }[]
+    tools: { name: string; description: string; deferred?: true }[]
     sections: string[]
     hooks: number
     docs: string[]

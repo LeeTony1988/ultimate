@@ -96,8 +96,8 @@ conversation only where they point at something.
 - **corrections** — what the user had to say more than once, corrections of the agents' work, and the wishes: what
   Ultimate itself would like to have or be able to do, from friction seen in old conversations.
 - **codify** — memories that should stop depending on being remembered and become how the harness works. For each
-  candidate propose one of: code (a behaviour or default), a lint rule or check (only enforcement the user asked for;
-  `no-guards` keeps most rules in prompts), agent definitions or docs (an instruction rather than a project fact), a
+  candidate propose one of: code (a behaviour or default), a lint rule or check (only enforcement the user asked for),
+  agent definitions or docs (an instruction rather than a project fact), a
   skill (a multi-step procedure agents repeat across conversations but need only sometimes: clone `skills/`, the
   project's `.ultimate/skills/` or the user's `~/.ultimate/skills/`), or stays a memory (context about the project or
   the user). Say the memory delete or update that follows once it is

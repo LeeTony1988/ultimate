@@ -10,6 +10,9 @@ Shell calls without `timeout` have a 600-second tripwire ceiling. `ULTIMATE_BASH
 in seconds and is read at each call; it must be positive and finite. A tripwire timeout stops the process and reports
 how to request a longer explicit timeout. Explicit timeouts retain Pi's ordinary timeout error.
 
+`cwd` runs one call in another directory: an absolute path, refused before anything runs when it is missing or not a
+directory. Without it the call keeps the conversation's own working directory, so a command needs no `cd` prefix.
+
 A shell call with `interruptible: true` (waits and polls: CI checks, deploys, a file appearing) ends early when a steer
 is queued in its conversation: the tool watches the conversation's `pi.inbox` and cancels the command, which kills its
 process, then returns the output so far followed by "[Interrupted by a steering message after Ns; …]" (last, so

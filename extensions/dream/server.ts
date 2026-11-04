@@ -530,7 +530,11 @@ export const actions = {
       host
         .extensions()
         .filter((item) => item.enabled)
-        .flatMap((item) => item.server?.tools.map((tool) => tool.name) ?? []),
+        // A deferred tool is hidden until `tool_search` loads it, so not calling it says nothing about it.
+        .flatMap(
+          (item) =>
+            item.server?.tools.filter((tool) => !tool.deferred).map((tool) => tool.name) ?? [],
+        ),
     ),
   ),
 }
