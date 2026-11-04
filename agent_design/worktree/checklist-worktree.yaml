@@ -1,0 +1,393 @@
+meta:
+  doc: AD-01
+  version: '1.0'
+  baseline_commit: 3f7b7bec2d4713c036d371870b0bea65a9acb8a2
+  baseline_date: '2026-10-27'
+  updated: '2026-10-28'
+  scope: worktree management and visualization
+items:
+  - id: P-01
+    phase: plan
+    task: Confirm repository baseline, branch and toolchain versions
+    deliverable: 01-worktree-plan.md metadata
+    acceptance: baseline commit and versions recorded
+    status: done
+    evidence: git rev-parse HEAD -> 3f7b7bec2d4713c036d371870b0bea65a9acb8a2; node v24.21.0; pnpm 11.8.0
+  - id: P-02
+    phase: plan
+    task: Define document skeleton, requirement IDs, evidence format and external research protocol
+    deliverable: 01-worktree-plan.md §3-§4
+    acceptance: four rule sets present
+    status: done
+    evidence: 01-worktree-plan.md §3.1-§4.4
+  - id: P-03
+    phase: plan
+    task: Define delivery index and reading paths
+    deliverable: README.md worktree section
+    acceptance: every worktree doc listed with purpose and audience
+    status: done
+    evidence: README.md worktree section
+  - id: P-04
+    phase: plan
+    task: Build machine-readable checklist
+    deliverable: checklist-worktree.yaml
+    acceptance: YAML parses; every item has id/task/acceptance/status
+    status: done
+    evidence: checklist-worktree.yaml
+  - id: P-05
+    phase: plan
+    task: Add worktree terms to glossary
+    deliverable: 90-glossary.md
+    acceptance: each term has one definition and source of truth
+    status: done
+    evidence: 90-glossary.md worktree section
+  - id: M-01
+    phase: management
+    task: Inventory worktree entry points and consumers
+    deliverable: 50-worktree-management-spec.md §3
+    acceptance: call graph with rg evidence for create/use/land/submit/discard/release
+    status: done
+    evidence: 50-worktree-management-spec.md §3
+  - id: M-02
+    phase: management
+    task: Document data model and JSON examples
+    deliverable: 50 §4
+    acceptance: every WorkspaceIndex field has type, producer, consumer
+    status: done
+    evidence: 50 §4
+  - id: M-03
+    phase: management
+    task: Document lifecycle state machines
+    deliverable: 50 §5
+    acceptance: record, preparation, queue entry, lander task have transition tables and illegal transitions
+    status: done
+    evidence: 50 §5
+  - id: M-04
+    phase: management
+    task: Document creation, preparation, setup and rollback
+    deliverable: 50 §7.1-§7.3
+    acceptance: path/branch/base formulas, idempotency, rollback and retry
+    status: done
+    evidence: 50 §7.1-§7.3
+  - id: M-05
+    phase: management
+    task: Document tool gate and self-healing
+    deliverable: 50 §7.4
+    acceptance: unavailable/ready decision table with every state
+    status: done
+    evidence: 50 §7.4
+  - id: M-06
+    phase: management
+    task: Document synchronous land
+    deliverable: 50 §7.5
+    acceptance: guards, ff-only, result fields and refusal paths
+    status: done
+    evidence: 50 §7.5
+  - id: M-07
+    phase: management
+    task: Document submit queue
+    deliverable: 50 §7.6
+    acceptance: divergence validation, breadcrumb, dedupe, position, atomicity
+    status: done
+    evidence: 50 §7.6
+  - id: M-08
+    phase: management
+    task: Document lander task
+    deliverable: 50 §7.7
+    acceptance: reset/merge/checks/watchdog/flaky/ff/push/report/onFailure/deploy steps
+    status: done
+    evidence: 50 §7.7
+  - id: M-09
+    phase: management
+    task: Document release, discard, reconciliation and nesting
+    deliverable: 50 §7.8
+    acceptance: decision tree and descendant retention
+    status: done
+    evidence: 50 §7.8
+  - id: M-10
+    phase: management
+    task: Document concurrency and durability
+    deliverable: 50 §7.9
+    acceptance: per-source serialization, transaction boundaries, crash recovery
+    status: done
+    evidence: 50 §7.9
+  - id: M-11
+    phase: management
+    task: Document observability contract
+    deliverable: 50 §6.4
+    acceptance: actions, events, entries and fields with trigger points
+    status: done
+    evidence: 50 §6.4
+  - id: M-12
+    phase: management
+    task: Build failure matrix
+    deliverable: 50 §12
+    acceptance: every E_* has trigger, retryability, user text, recovery
+    status: done
+    evidence: 50 §12
+  - id: M-13
+    phase: management
+    task: Write replication spec
+    deliverable: 50 §3-§12
+    acceptance: module, interface, algorithm, file manifest, M0-Mn, tests, acceptance
+    status: done
+    evidence: 50 §3-§12
+  - id: M-14
+    phase: management
+    task: Evidence audit for every REQ-WM
+    deliverable: 50 §13
+    acceptance: no REQ without path:line evidence
+    status: done
+    evidence: 50 §13
+  - id: M-15
+    phase: management
+    task: Fold external ADOPT/ADAPT decisions into the spec
+    deliverable: 50 §14
+    acceptance: each adopted item names source, target section, acceptance
+    status: done
+    evidence: 50 §14
+  - id: R-01
+    phase: research-management
+    task: Define comparison dimensions
+    deliverable: research/worktree-management-research.md §2
+    acceptance: dimensions cover creation, location, branch, lifecycle, merge, cleanup, permission, UI, ecosystem
+    status: done
+    evidence: research/worktree-management-research.md §2
+  - id: R-02
+    phase: research-management
+    task: Research Claude Code worktree support
+    deliverable: research doc §3
+    acceptance: facts with URL and access date
+    status: done
+    evidence: research doc §3
+  - id: R-03
+    phase: research-management
+    task: Research Codex worktree or environment isolation
+    deliverable: research doc §4
+    acceptance: facts with URL and access date
+    status: done
+    evidence: research doc §4
+  - id: R-04
+    phase: research-management
+    task: Research Z Code (zcode) worktree support and product identity
+    deliverable: research doc §5
+    acceptance: ambiguity resolved or listed; facts with URL
+    status: done
+    evidence: research doc §5
+  - id: R-05
+    phase: research-management
+    task: Research other tools
+    deliverable: research doc §6
+    acceptance: Cursor, Gemini CLI, Conductor, Sculptor, Claude Squad, Crystal, Vibe Kanban, worktrunk, uzi covered
+    status: done
+    evidence: research doc §6
+  - id: R-06
+    phase: research-management
+    task: Research skills and plugins
+    deliverable: research doc §7
+    acceptance: superpowers, worktree skills, VS Code extensions, git-worktree-runner covered
+    status: done
+    evidence: research doc §7
+  - id: R-07
+    phase: research-management
+    task: Synthesize patterns and ADOPT/ADAPT/REJECT decisions
+    deliverable: research doc §8
+    acceptance: 8-12 patterns, each with decision and rationale
+    status: done
+    evidence: research doc §8
+  - id: R-08
+    phase: research-management
+    task: Write research doc and audit URLs
+    deliverable: research/worktree-management-research.md
+    acceptance: every external claim has URL; sampled URLs open
+    status: done
+    evidence: research/worktree-management-research.md
+  - id: V-01
+    phase: visualization
+    task: Inventory worktree UI surfaces
+    deliverable: 60-worktree-visualization-spec.md §3
+    acceptance: sidebar, Info, transcript, root note, review, status line, titlebar covered
+    status: done
+    evidence: 60-worktree-visualization-spec.md §3
+  - id: V-02
+    phase: visualization
+    task: Map data sources and refresh triggers
+    deliverable: 60 §4
+    acceptance: every visible field maps to doc/action/event/entry/tool output
+    status: done
+    evidence: 60 §4
+  - id: V-03
+    phase: visualization
+    task: Design sidebar visualization
+    deliverable: 60 §7.1
+    acceptance: project row, in-flight row, work line, lander row, menu, Landed group
+    status: done
+    evidence: 60 §7.1
+  - id: V-04
+    phase: visualization
+    task: Design Info panel
+    deliverable: 60 §7.2
+    acceptance: checkout card, lander queue, stats, disk
+    status: done
+    evidence: 60 §7.2
+  - id: V-05
+    phase: visualization
+    task: Design transcript components
+    deliverable: 60 §7.3
+    acceptance: workspace tool card, status chip, steps, lander log, lander ask
+    status: done
+    evidence: 60 §7.3
+  - id: V-06
+    phase: visualization
+    task: Design landing surfaces
+    deliverable: 60 §7.4
+    acceptance: LandingCard, root note, report, tone, divergence, commit links
+    status: done
+    evidence: 60 §7.4
+  - id: V-07
+    phase: visualization
+    task: Design review integration
+    deliverable: 60 §7.5
+    acceptance: branch/uncommitted/range specs and fallback
+    status: done
+    evidence: 60 §7.5
+  - id: V-08
+    phase: visualization
+    task: Enumerate component states and interactions
+    deliverable: 60 §6
+    acceptance: six states per component; click/fold/copy/refresh specified
+    status: done
+    evidence: 60 §6
+  - id: V-09
+    phase: visualization
+    task: Specify algorithms
+    deliverable: 60 §8
+    acceptance: in-progress/superseded/duration/landedAt/inFlight/grouping/sorting pseudocode
+    status: done
+    evidence: 60 §8
+  - id: V-10
+    phase: visualization
+    task: Set performance and accessibility budgets
+    deliverable: 60 §9
+    acceptance: event-driven refresh, query limits, aria, keyboard, responsive
+    status: done
+    evidence: 60 §9
+  - id: V-11
+    phase: visualization
+    task: Write replication spec
+    deliverable: 60 §3-§12
+    acceptance: components, pages, M0-Mn, tests, acceptance
+    status: done
+    evidence: 60 §3-§12
+  - id: V-12
+    phase: visualization
+    task: Evidence audit for every REQ-WV
+    deliverable: 60 §13
+    acceptance: no REQ without path:line evidence
+    status: done
+    evidence: 60 §13
+  - id: V-13
+    phase: visualization
+    task: Fold external ADOPT/ADAPT decisions into the spec
+    deliverable: 60 §14
+    acceptance: each adopted item names source, target section, acceptance
+    status: done
+    evidence: 60 §14
+  - id: U-01
+    phase: research-visualization
+    task: Define visualization dimensions
+    deliverable: research/worktree-ui-research.md §2
+    acceptance: overview, list, status, diff, merge, queue, alert, actions
+    status: done
+    evidence: research/worktree-ui-research.md §2
+  - id: U-02
+    phase: research-visualization
+    task: Research Claude Code, Codex and Cursor parallel-agent UI
+    deliverable: research doc §3
+    acceptance: facts with URL and access date
+    status: done
+    evidence: research doc §3
+  - id: U-03
+    phase: research-visualization
+    task: Research Conductor, Sculptor, Claude Squad, Crystal, Vibe Kanban, Terragon
+    deliverable: research doc §4
+    acceptance: comparison table with URL
+    status: done
+    evidence: research doc §4
+  - id: U-04
+    phase: research-visualization
+    task: Research IDE and Git clients
+    deliverable: research doc §5
+    acceptance: VS Code, GitKraken, GitHub Desktop, Tower/Fork, GitButler
+    status: done
+    evidence: research doc §5
+  - id: U-05
+    phase: research-visualization
+    task: Extract information architecture and interaction patterns
+    deliverable: research doc §6
+    acceptance: pattern library with examples
+    status: done
+    evidence: research doc §6
+  - id: U-06
+    phase: research-visualization
+    task: Make ADOPT/ADAPT/REJECT decisions
+    deliverable: research doc §7
+    acceptance: each decision maps to 60 section
+    status: done
+    evidence: research doc §7
+  - id: U-07
+    phase: research-visualization
+    task: Write research doc and audit URLs
+    deliverable: research/worktree-ui-research.md
+    acceptance: every external claim has URL; sampled URLs open
+    status: done
+    evidence: research/worktree-ui-research.md
+  - id: Q-01
+    phase: quality
+    task: Check terminology consistency
+    deliverable: 90-glossary.md + cross-check table
+    acceptance: one name per concept across five docs
+    status: done
+    evidence: 90-glossary.md + cross-check table
+  - id: Q-02
+    phase: quality
+    task: Check contract consistency between management and visualization specs
+    deliverable: mapping table
+    acceptance: every field used by 60 exists in 50 with same type
+    status: done
+    evidence: mapping table
+  - id: Q-03
+    phase: quality
+    task: Build requirement-to-acceptance coverage matrix
+    deliverable: 92-coverage-matrix.md worktree section
+    acceptance: every REQ has at least one AC
+    status: done
+    evidence: 92-coverage-matrix.md worktree section
+  - id: Q-04
+    phase: quality
+    task: Check internal links and sample external URLs
+    deliverable: command output
+    acceptance: no broken internal link; sampled URLs open
+    status: done
+    evidence: command output
+  - id: Q-05
+    phase: quality
+    task: Cold-read test by an uninvolved agent
+    deliverable: cold-read record
+    acceptance: agent restates goal, module boundaries and first three milestones
+    status: done
+    evidence: cold-read record
+  - id: Q-06
+    phase: quality
+    task: Update README index and reading paths
+    deliverable: README.md
+    acceptance: worktree docs listed with purpose
+    status: done
+    evidence: README.md
+  - id: Q-07
+    phase: quality
+    task: Close out checklist and quality report
+    deliverable: checklist-worktree.yaml + 93-quality-report.md worktree section
+    acceptance: all done or blocked with reason
+    status: done
+    evidence: checklist-worktree.yaml + 93-quality-report.md worktree section

@@ -1,0 +1,375 @@
+meta:
+  doc: AD-00
+  version: '1.0'
+  baseline_commit: 3f7b7bec2d4713c036d371870b0bea65a9acb8a2
+  baseline_date: '2026-10-27'
+  updated: '2026-10-28'
+items:
+  - id: P-01
+    phase: plan
+    task: Confirm repository baseline, branch and toolchain versions
+    deliverable: 00-plan.md metadata
+    acceptance: baseline commit and versions recorded
+    status: done
+    evidence: git rev-parse HEAD -> 3f7b7bec2d4713c036d371870b0bea65a9acb8a2
+  - id: P-02
+    phase: plan
+    task: Define document skeleton, requirement IDs and evidence format
+    deliverable: 00-plan.md §4
+    acceptance: all four rule sets present
+    status: done
+    evidence: 00-plan.md §4.1-§4.4
+  - id: P-03
+    phase: plan
+    task: Build delivery index and reading order
+    deliverable: map.md
+    acceptance: every doc listed with purpose and audience
+    status: done
+  - id: P-04
+    phase: plan
+    task: Build machine-readable checklist
+    deliverable: checklist.yaml
+    acceptance: YAML parses; every item has id/task/acceptance/status
+    status: done
+  - id: P-05
+    phase: plan
+    task: Build glossary for self-evolution, orchestration, task, subagent, branch, isolate
+    deliverable: 90-glossary.md
+    acceptance: every term has one definition and its source of truth
+    status: done
+  - id: S-01
+    phase: self
+    task: Map the six self-modification surfaces and their persistence
+    deliverable: self-evolution/10-self-evolution-spec.md §3
+    acceptance: each surface has trigger, storage, effect timing, rollback
+    status: done
+  - id: S-02
+    phase: self
+    task: Analyze system prompt assembly, prompt.build notes and instruction hot reload
+    deliverable: 10 §3.2
+    acceptance: sequence + cache-stability invariants + source citations
+    status: done
+  - id: S-03
+    phase: self
+    task: Analyze project memory, brief, landing distillation
+    deliverable: 10 §4
+    acceptance: schema, ops validation, brief algorithm, failure paths
+    status: done
+  - id: S-04
+    phase: self
+    task: Analyze dream pipeline end to end
+    deliverable: 10 §3.4
+    acceptance: state machine covers start/handoff/passes/journal/decide/asleep
+    status: done
+  - id: S-05
+    phase: self
+    task: Analyze skill and agent-definition authoring
+    deliverable: 10 §3.3
+    acceptance: discovery precedence, overlay rules, save/delete semantics
+    status: done
+  - id: S-06
+    phase: self
+    task: Analyze extension/surface authoring and reload
+    deliverable: 10 §3.5
+    acceptance: file layout, facet lifecycle, reload matrix
+    status: done
+  - id: S-07
+    phase: self
+    task: Analyze core self-modification, restart, supervisor swap and rollback
+    deliverable: 10 §3.6
+    acceptance: sequence diagram + failure matrix + generation semantics
+    status: done
+  - id: S-08
+    phase: self
+    task: Analyze update extension and its refusals
+    deliverable: 10 §3.7
+    acceptance: state machine + refusal table
+    status: done
+  - id: S-09
+    phase: self
+    task: Analyze verification loop preview/review/lander/watchdog/trace
+    deliverable: 10 §3.8
+    acceptance: flow diagram with gates and evidence artifacts
+    status: done
+  - id: S-10
+    phase: self
+    task: Extract invariants and safety boundaries
+    deliverable: 10 §2.3
+    acceptance: every INV has enforcement point and violation symptom
+    status: done
+  - id: S-11
+    phase: self
+    task: 'Write replication spec: data, interfaces, algorithms, files, order'
+    deliverable: 10 §4-§9
+    acceptance: an agent can start M0 from the file manifest
+    status: done
+  - id: S-12
+    phase: self
+    task: Write acceptance tests and failure injection list
+    deliverable: 10 §10-§12
+    acceptance: each AC is binary and command-backed
+    status: done
+  - id: S-13
+    phase: self
+    task: Evidence audit for every REQ-S
+    deliverable: 10 §13
+    acceptance: no REQ without path:line evidence
+    status: done
+  - id: A-01
+    phase: subagent
+    task: Analyze definition discovery, overlay and model resolution
+    deliverable: subagent-orchestration/20-subagent-orchestration-spec.md §3.1
+    acceptance: parser algorithm, error table, precedence examples
+    status: done
+  - id: A-02
+    phase: subagent
+    task: Analyze lifecycle state machine
+    deliverable: 20 §5
+    acceptance: transition table covers start/message/wait/stop/list/land/discard
+    status: done
+  - id: A-03
+    phase: subagent
+    task: Analyze reporter exactly-once delivery and recovery
+    deliverable: 20 §3.3
+    acceptance: sequence + invariants + crash points
+    status: done
+  - id: A-04
+    phase: subagent
+    task: Analyze task graph, ownership, anchors, parent relations
+    deliverable: 20 §4
+    acceptance: graph model + query recipes
+    status: done
+  - id: A-05
+    phase: subagent
+    task: 'Analyze isolates: create, setup, cwd, land, discard, nesting'
+    deliverable: 20 §3.5
+    acceptance: state machine + path layout + failure paths
+    status: done
+  - id: A-06
+    phase: subagent
+    task: Analyze branch, standing agent, automation run and review team reuse
+    deliverable: 20 §3.6
+    acceptance: relationship diagram + difference table
+    status: done
+  - id: A-07
+    phase: subagent
+    task: Analyze delegation prompts and report contract
+    deliverable: 20 §3.7
+    acceptance: brief template + report format + anti-patterns
+    status: done
+  - id: A-08
+    phase: subagent
+    task: Analyze concurrency and races
+    deliverable: 20 §6
+    acceptance: race table with resolution and test
+    status: done
+  - id: A-09
+    phase: subagent
+    task: Analyze failure matrix and user-visible messages
+    deliverable: 20 §12
+    acceptance: every failure has cause, detection, recovery, message
+    status: done
+  - id: A-10
+    phase: subagent
+    task: Define observability contract for visualization
+    deliverable: 20 §7
+    acceptance: event fields enough to rebuild tree, timeline, messages
+    status: done
+  - id: A-11
+    phase: subagent
+    task: 'Write replication spec: modules, interfaces, algorithms, files, order'
+    deliverable: 20 §4-§9
+    acceptance: module boundaries and build order are runnable
+    status: done
+  - id: A-12
+    phase: subagent
+    task: Write acceptance tests including crash recovery and duplicate delivery
+    deliverable: 20 §10-§11
+    acceptance: each AC names command and expected result
+    status: done
+  - id: A-13
+    phase: subagent
+    task: Evidence audit
+    deliverable: 20 §13
+    acceptance: no REQ without path:line
+    status: done
+  - id: T-01
+    phase: task-app
+    task: Define personas and jobs-to-be-done
+    deliverable: desktop-apps/30-task-orchestration-desktop-spec.md §1
+    acceptance: 3 personas, 8 JTBD, each mapped to a view
+    status: done
+  - id: T-02
+    phase: task-app
+    task: Survey 5+ orchestration products and extract information architecture
+    deliverable: 30 §2 + desktop-apps/research/desktop-research.md
+    acceptance: comparison table with URLs and access dates
+    status: done
+  - id: T-03
+    phase: task-app
+    task: Survey data standards and adapter cost
+    deliverable: 30 §2.3
+    acceptance: OTel/AG-UI/A2A mapping table
+    status: done
+  - id: T-04
+    phase: task-app
+    task: Produce technology decision matrix
+    deliverable: 30 §3.1
+    acceptance: weighted matrix, sensitivity analysis, recommendation
+    status: done
+  - id: T-05
+    phase: task-app
+    task: Define domain model
+    deliverable: 30 §4
+    acceptance: TypeScript types + JSON examples + invariants
+    status: done
+  - id: T-06
+    phase: task-app
+    task: Define ingestion protocols and backpressure
+    deliverable: 30 §3.3
+    acceptance: Ultimate/OTel/JSONL adapters with ordering guarantees
+    status: done
+  - id: T-07
+    phase: task-app
+    task: Design main UI and component tree
+    deliverable: 30 §6
+    acceptance: wireframes + component tree + empty/loading/error states
+    status: done
+  - id: T-08
+    phase: task-app
+    task: Define layout and interaction algorithms
+    deliverable: 30 §7
+    acceptance: pseudocode + complexity + edge cases
+    status: done
+  - id: T-09
+    phase: task-app
+    task: Define performance budgets and large-data strategy
+    deliverable: 30 §8
+    acceptance: numeric budgets and degradation behavior
+    status: done
+  - id: T-10
+    phase: task-app
+    task: Define desktop architecture, IPC, storage, security, updates
+    deliverable: 30 §3.2/§3.4
+    acceptance: process diagram + permission table
+    status: done
+  - id: T-11
+    phase: task-app
+    task: Write replication spec and acceptance tests
+    deliverable: 30 §9-§12
+    acceptance: M0-M5 with commands and binary ACs
+    status: done
+  - id: T-12
+    phase: task-app
+    task: Design end-to-end sample using Ultimate data
+    deliverable: 30 §13
+    acceptance: sample JSON + expected screenshot description
+    status: done
+  - id: V-01
+    phase: agent-app
+    task: Define personas and jobs-to-be-done
+    deliverable: desktop-apps/40-subagent-visualization-desktop-spec.md §1
+    acceptance: 3 personas, 8 JTBD, each mapped to a view
+    status: done
+  - id: V-02
+    phase: agent-app
+    task: Survey agent observability/studio products
+    deliverable: 40 §2 + desktop-apps/research/desktop-research.md
+    acceptance: comparison table with URLs and access dates
+    status: done
+  - id: V-03
+    phase: agent-app
+    task: Define domain model
+    deliverable: 40 §4
+    acceptance: types for agent/conversation/spawn/message/tool/answer/workspace
+    status: done
+  - id: V-04
+    phase: agent-app
+    task: Define realtime ingestion and ordering
+    deliverable: 40 §3.3
+    acceptance: SSE/tasks/trace adapters with resume semantics
+    status: done
+  - id: V-05
+    phase: agent-app
+    task: Design four linked views
+    deliverable: 40 §6
+    acceptance: swimlane/tree/messages/call-tree wireframes + linkage rules
+    status: done
+  - id: V-06
+    phase: agent-app
+    task: Define timeline semantics
+    deliverable: 40 §6.3
+    acceptance: activity block mapping table + edge cases
+    status: done
+  - id: V-07
+    phase: agent-app
+    task: Define control plane and permissions
+    deliverable: 40 §7
+    acceptance: read-only default, steer/stop confirmation, audit log
+    status: done
+  - id: V-08
+    phase: agent-app
+    task: Define cost and performance metrics
+    deliverable: 40 §8
+    acceptance: formulas + data source + display rules
+    status: done
+  - id: V-09
+    phase: agent-app
+    task: Define replay and run comparison
+    deliverable: 40 §9
+    acceptance: event sourcing, time travel, diff algorithm
+    status: done
+  - id: V-10
+    phase: agent-app
+    task: Write replication spec and acceptance tests
+    deliverable: 40 §10-§12
+    acceptance: M0-M5 with commands and binary ACs
+    status: done
+  - id: V-11
+    phase: agent-app
+    task: Design branch-to-worker-to-reviewer end-to-end sample
+    deliverable: 40 §13
+    acceptance: event sequence + expected screenshot description
+    status: done
+  - id: Q-01
+    phase: quality
+    task: Enforce glossary consistency across docs
+    deliverable: 90-glossary.md + term table
+    acceptance: every term has one spelling and one definition
+    status: done
+  - id: Q-02
+    phase: quality
+    task: Verify contracts compose (A events feed T/V adapters)
+    deliverable: 91-contract-map.md
+    acceptance: field mapping table with required/optional
+    status: done
+  - id: Q-03
+    phase: quality
+    task: Verify REQ to AC coverage
+    deliverable: 92-coverage-matrix.md
+    acceptance: each REQ covered; each AC executable
+    status: done
+  - id: Q-04
+    phase: quality
+    task: Link check
+    deliverable: command output
+    acceptance: no broken internal links; external URLs reachable
+    status: done
+  - id: Q-05
+    phase: quality
+    task: Cold-read test with an independent agent
+    deliverable: review note
+    acceptance: agent restates goal, boundaries, first three milestones
+    status: done
+  - id: Q-06
+    phase: quality
+    task: Final index and reading paths
+    deliverable: map.md
+    acceptance: role-based reading paths present
+    status: done
+  - id: Q-07
+    phase: quality
+    task: Backfill checklist status
+    deliverable: checklist.yaml
+    acceptance: all done or justified blocked
+    status: done

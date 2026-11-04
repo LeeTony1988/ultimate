@@ -104,6 +104,25 @@ See [integration details](docs/worktrees.md#standing-permission-to-push-this-rep
   never plain Markdown in a message. Look at the running app and recent screenshots first, write the expected look into
   task descriptions, and check a worker's screenshots against it before accepting.
 
+## Agent design documents
+
+`agent_design/` is a set of AI-first replication specs plus human-readable companions. One directory per theme, one
+top-level index.
+
+- `map.md` is the index: a summary and file table per theme, the cross-topic documents, and role-based reading paths.
+  `README.md` only points to it. Adding, moving or removing a document updates `map.md` and the theme `README.md` in
+  the same change.
+- The top level holds `map.md`, `README.md` and cross-topic documents only: plan, checklist, glossary, contract map,
+  coverage matrix, quality report.
+- A theme directory keeps its specs at the root, written AI-first: numbered requirements, contracts, state machines,
+  algorithms, milestones, acceptance checks and `path:line` evidence, enough for an agent without this repository to
+  rebuild the mechanism from the spec alone.
+- `<theme>/research/` holds evidence maps, surveys and source material behind the specs.
+- `<theme>/for_human/` holds the human-readable companion: narrative, diagrams, trade-offs and examples, with no
+  requirement IDs or `path:line` citations; each document ends with the spec sections to read for depth.
+  `for_human/README.md` indexes them.
+- Every theme directory has a `README.md` indexing its spec, research and human documents.
+
 ## Review quality
 
 Rules about how agents behave live in prompts and agent definitions, not in code. Code checks protect only safety and

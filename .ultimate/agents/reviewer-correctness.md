@@ -1,7 +1,7 @@
 ---
 name: reviewer-correctness
 description: Correctness, security and regressions review of an immutable commit range (Astra 6).
-model: me/deepseek-v4.1-flash
+model: siweichuangjie-qwen/Qwen3.8-Flash
 thinking: max
 tools: [read, bash]
 resident: false
