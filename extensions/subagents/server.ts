@@ -284,6 +284,12 @@ const reply = (text: string, info?: ReturnType<typeof details>) => ({
   ...(info === undefined ? {} : { details: info }),
 })
 
+/** The valid child ids for an error: `#<id> <agent>` each, or that the conversation has none yet. */
+const listChildren = (agents: Record<string, { conversationId: ConversationId; agent: string }>) =>
+  Object.values(agents)
+    .map((child) => `#${child.conversationId} ${child.agent}`)
+    .join(', ') || 'this conversation has no children yet'
+
 /** Stop only these local waits; child and reporter ownership never changes. */
 async function waitInterruptibly(
   api: ToolExecutionApi,
@@ -904,7 +910,9 @@ export default function subagents(
             args.action !== 'start' &&
             (!args.id || !Object.hasOwn(index.agents, String(args.id)))
           )
-            throw new Error('id must identify a child of this conversation')
+            throw new Error(
+              `id must be one of this conversation's children: ${listChildren(index.agents)} (got ${JSON.stringify(args.id)})`,
+            )
           if (args.action === 'land' || args.action === 'discard') {
             if (await api.memo<boolean>('workspace-operation', context))
               throw new Error('Workspace operation interrupted; call again')

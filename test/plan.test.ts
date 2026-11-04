@@ -223,6 +223,19 @@ it('shares the root ledger read-only with descendants, saves verdicts, and repla
     opened = await prepared.open()
     expect(await opened.harness.snapshot(Plan, opened.root.id, context)).toEqual(saved)
     expect((await call({ action: 'update', key: 'E1', status: 'todo' })).isError).toBe(true)
+    // An epic cannot be in_review and a task cannot be planning: the error names which statuses a kind accepts.
+    const epicStatus = JSON.stringify(
+      (await call({ action: 'update', key: 'E1', status: 'in_review' })).content,
+    ).replaceAll('\\"', '"')
+    expect(epicStatus).toContain('Invalid status for epic E1: "in_review"')
+    expect(epicStatus).toContain('Epic statuses: planning, in_progress, done, blocked')
+    const taskStatus = JSON.stringify(
+      (await call({ action: 'update', key: 'E1.1', status: 'planning' })).content,
+    ).replaceAll('\\"', '"')
+    expect(taskStatus).toContain('Invalid status for task E1.1: "planning"')
+    expect(taskStatus).toContain(
+      'Task statuses: backlog, todo, in_progress, in_review, done, blocked, canceled',
+    )
     expect((await call({ action: 'show', key: 'E99' })).isError).toBe(true)
     expect(await opened.harness.snapshot(Plan, opened.root.id, context)).toEqual(saved)
     await call({
