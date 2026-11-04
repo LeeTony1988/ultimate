@@ -4,7 +4,7 @@
 import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, posix, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
@@ -142,7 +142,9 @@ function services(options: UnitOptions, path: string): Service[] {
       description: `Ultimate (${project})`,
       cwd: project,
       env: { PATH: path, ULTIMATE_NO_OPEN: '1' },
-      args: [node, join(clone, 'bin/ultimate.ts')],
+      // The units are systemd's and launchd's: their paths are POSIX even when this script runs on another platform
+      // to render them (a test does). `checkPaths` already refuses a backslash, so a host join could only break it.
+      args: [node, posix.join(clone, 'bin/ultimate.ts')],
     },
   ]
 }
@@ -180,9 +182,9 @@ const xml = (value: string) =>
 
 const string = (value: string) => `<string>${xml(value)}</string>`
 
-/** The log file launchd writes an agent's stdout and stderr to. */
+/** The log file launchd writes an agent's stdout and stderr to; a macOS path, so it is joined as one on any host. */
 export const agentLog = (home: string, label: string) =>
-  join(home, 'Library/Logs/ultimate', `${label}.log`)
+  posix.join(home, 'Library/Logs/ultimate', `${label}.log`)
 
 /**
  * Renders the launchd agents; pure, so the side effects stay in main. Plists escape every value, so no path is

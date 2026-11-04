@@ -49,8 +49,13 @@ export function phaseState(entries: readonly EntryRecord[], roots: readonly stri
         case 'edit':
         case 'write': {
           const path = typeof args.path === 'string' ? args.path : ''
-          const root = roots.find((candidate) => path.startsWith(candidate + '/'))
-          value = root ? relative(root, path) : path
+          // A root and a path reach here in either separator: the host's own (`D:\work`) and slashed tool arguments.
+          const normalized = path.replaceAll('\\', '/')
+          const root = roots.find((candidate) => {
+            const base = candidate.replaceAll('\\', '/').replace(/\/$/, '')
+            return normalized.startsWith(`${base}/`)
+          })
+          value = root ? relative(root, path).replaceAll('\\', '/') : path
           break
         }
         case 'subagent':

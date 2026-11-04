@@ -140,12 +140,21 @@ async function agentsArea(host: CheckHost): Promise<SetupIssue[]> {
   return issues
 }
 
-const shortPath = (host: Pick<CheckHost, 'projectRoot' | 'userHome'>, path: string) =>
-  path.startsWith(`${host.projectRoot}/`)
-    ? path.slice(host.projectRoot.length + 1)
-    : path.startsWith(host.userHome)
-      ? `~${path.slice(host.userHome.length)}`
+/**
+ * `path` as the user reads it: relative to the project, or `~` for the user's home. Both sides are compared with `/`,
+ * since a host path arrives with the platform's separator, and the short form is the same on every platform.
+ */
+const shortPath = (host: Pick<CheckHost, 'projectRoot' | 'userHome'>, path: string) => {
+  const slashed = (value: string) => value.replaceAll('\\', '/').replace(/\/$/, '')
+  const shown = slashed(path)
+  const project = slashed(host.projectRoot)
+  const home = slashed(host.userHome)
+  return shown.startsWith(`${project}/`)
+    ? shown.slice(project.length + 1)
+    : shown === home || shown.startsWith(`${home}/`)
+      ? `~${shown.slice(home.length)}`
       : path
+}
 
 async function providersArea(host: CheckHost): Promise<SetupIssue | undefined> {
   const providers = await host.want(HealthApi)?.providers()

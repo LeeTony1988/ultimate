@@ -37,7 +37,9 @@ it("gives Pi Ultimate's context, skills and Claude Code instead of Pi's personal
     expect.arrayContaining(['--no-context-files', '--no-skills', '--no-extensions']),
   )
   expect(flag('--skill')).toContain(join(home, '.ultimate/skills/mine/SKILL.md'))
-  expect(flag('--extension')).toEqual([expect.stringMatching(/pi-claude-code\/src\/index\.ts$/)])
+  expect(flag('--extension')).toEqual([
+    expect.stringMatching(/pi-claude-code[/\\]src[/\\]index\.ts$/),
+  ])
   expect(flag('--session-dir')).toEqual([join(host.home, 'cli-sessions')])
   // The harness's default model first, then the user's own arguments, so their --model wins and their message stays.
   expect(flag('--model')).toEqual(['openai-codex/gpt-6.1-sol', 'anthropic/claude-opus-5-5'])
