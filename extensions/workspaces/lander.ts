@@ -197,8 +197,8 @@ export async function landerAgent(
     }),
   }
 }
-/** One check command, with its own total limit in seconds when set. */
-type Check = { command: string; timeout?: number }
+/** One check command, with its own total and no-output limits in seconds when set. */
+type Check = { command: string; timeout?: number; stall?: number }
 /** Checks run in order; an array is a group whose commands run concurrently. */
 type Settings = {
   checks: (Check | Check[])[]
@@ -207,14 +207,19 @@ type Settings = {
 }
 /** Bounded retries when the target moves while a submission is integrated. */
 const attempts = 3
-/** Seconds without output and total seconds allowed for one check, unless the check sets its own `timeout`. */
+/** Seconds without output and total seconds allowed for one check, unless the check sets its own limits. */
 type CheckLimits = { stall: number; total: number }
 const checkLimits: CheckLimits = { stall: 2 * 60, total: 10 * 60 }
-/** A check's limits: its `timeout` replaces the total, and the stall limit never exceeds it. */
-export const limitsFor = (check: Check, limits: CheckLimits): CheckLimits =>
-  check.timeout === undefined
-    ? limits
-    : { stall: Math.min(limits.stall, check.timeout), total: check.timeout }
+/**
+ * A check's limits. Its own `timeout` is the total and its own `stall` the no-output limit; `stall` may raise the
+ * default no-output limit, since a suite that goes quiet for minutes is not stalled, but never past the total, which
+ * stays the ceiling: no setting can hold a check open longer than the time it is allowed. A check that sets no `stall`
+ * keeps the default, lowered by its own `timeout` when that is shorter, so no other project's behaviour changes.
+ */
+export const limitsFor = (check: Check, limits: CheckLimits): CheckLimits => {
+  const total = check.timeout ?? limits.total
+  return { stall: Math.min(check.stall ?? limits.stall, total), total }
+}
 /** Lines naming failed tests (vitest's `FAIL`, `×` and `✗` marks), kept from a check's whole output. */
 const failedLine = /^\s*(FAIL|×|✗)\s/
 const seconds = (value: number) => (value < 60 ? `${value} s` : `${+(value / 60).toFixed(1)} min`)
@@ -324,14 +329,24 @@ export async function runLanderCheck(
   }
 }
 
-/** A check from settings: a command, or `{ command, timeout }` with a positive timeout in seconds. */
+/** A check from settings: a command, or `{ command, timeout, stall }` with positive seconds for the limits it sets. */
 const parseCheck = (value: unknown): Check | undefined => {
   if (typeof value === 'string') return { command: value }
   if (!value || typeof value !== 'object') return undefined
-  const { command, timeout } = value as { command?: unknown; timeout?: unknown }
+  const { command, timeout, stall } = value as {
+    command?: unknown
+    timeout?: unknown
+    stall?: unknown
+  }
   if (typeof command !== 'string') return undefined
-  if (timeout === undefined) return { command }
-  return typeof timeout === 'number' && timeout > 0 ? { command, timeout } : undefined
+  const positive = (limit: unknown) =>
+    limit === undefined || (typeof limit === 'number' && limit > 0)
+  if (!positive(timeout) || !positive(stall)) return undefined
+  return {
+    command,
+    ...(timeout !== undefined ? { timeout: timeout as number } : {}),
+    ...(stall !== undefined ? { stall: stall as number } : {}),
+  }
 }
 export const landerSettings = async (
   host: Pick<Host, 'projectSettings' | 'notice'>,
@@ -351,7 +366,7 @@ export const landerSettings = async (
     : undefined
   if (!checks?.every((group) => (Array.isArray(group) ? group.every(Boolean) : group)))
     throw new Error(
-      'lander.checks must be an array of checks or check groups; a check is a command or { "command", "timeout" } with timeout in seconds',
+      'lander.checks must be an array of checks or check groups; a check is a command or { "command", "timeout", "stall" } with each limit in positive seconds',
     )
   if (lander?.push !== undefined && typeof lander.push !== 'string')
     throw new Error('lander.push must be a remote name')
