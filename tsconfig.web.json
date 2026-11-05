@@ -54,6 +54,7 @@
     "extensions/onboarding/onboarded.ts",
     "extensions/sidebar/label.ts",
     "extensions/tasks/kinds.ts",
+    "extensions/tasks/layout.ts",
     "extensions/sidebar/listed.ts",
     "extensions/side-chat/logic.ts",
     "extensions/voice-live/relay.ts",

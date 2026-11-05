@@ -5,8 +5,8 @@ import { implementAction } from '../../lib/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { AutomationsApi } from '../automations/api.ts'
 import type { Message } from '../messages/api.ts'
-import { DescribeAction, StartedAction } from './refs.ts'
-import type { TaskFacts } from './refs.ts'
+import { DescribeAction, EndedAction, StartedAction } from './refs.ts'
+import type { TaskEnd, TaskFacts } from './refs.ts'
 
 type Input = Record<string, unknown> | null | undefined
 /** The message's opening words, lines joined: a first line alone is often only "The user's go:". */
@@ -97,6 +97,24 @@ export const actions = {
         if (task) described[id] = await facts(host, tx, task.kind, task.input as Input)
       }
       return described
+    }, context)
+  }),
+  /** The durable outcome of tasks that left the live graph; live or unknown tasks are left out. */
+  ended: implementAction(EndedAction, async (args, { host }) => {
+    const ids = (args as { ids?: unknown } | null)?.ids
+    if (!Array.isArray(ids) || !ids.every((id) => Number.isSafeInteger(id)))
+      throw new Error('Expected task ids')
+    return host.harness().commit(async (tx) => {
+      const ended: Record<string, TaskEnd> = {}
+      for (const id of ids as number[]) {
+        const task = await tx.task(id as TaskId)
+        if (task?.state.status !== 'terminal') continue
+        ended[id] = {
+          outcome: task.state.outcome.status,
+          ...(task.endedAt === undefined ? {} : { endedAt: task.endedAt }),
+        }
+      }
+      return ended
     }, context)
   }),
 }

@@ -38,3 +38,12 @@ export const DescribeAction = actionRef<{ ids: number[] }, Record<string, TaskFa
   'tasks',
   'describe',
 )
+
+/** The durable end of a task that has left the live graph: its outcome and end time. */
+export type TaskEnd = {
+  outcome: 'completed' | 'failed' | 'aborted' | 'orphaned' | 'faulted'
+  endedAt?: number
+}
+
+/** `{ ids }` → `{ [taskId]: end }`; tasks still live, or unknown, are left out. */
+export const EndedAction = actionRef<{ ids: number[] }, Record<string, TaskEnd>>('tasks', 'ended')
