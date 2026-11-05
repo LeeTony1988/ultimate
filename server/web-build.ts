@@ -58,8 +58,11 @@ try {
       if (content.length > 1024) await writeFile(file + '.gz', gzipSync(content))
     }
   const inputs = output.output.flatMap((chunk) => (chunk.type === 'chunk' ? chunk.moduleIds : []))
+  // Absolute paths only, and both spellings of one: on Windows a module id is `D:/…`, which a leading-slash test
+  // dropped, so editing an extension's `web.tsx` never invalidated the bundle and the page kept the old one.
+  const absolute = (id: string) => /^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(id)
   result = {
-    inputs: [...new Set(inputs.filter((id) => id.startsWith('/')).map((id) => id.split('?')[0]))],
+    inputs: [...new Set(inputs.filter(absolute).map((id) => id.split('?')[0]))],
   }
 } catch (error) {
   const first = (error as { errors?: { id?: string; loc?: { file?: string }; message: string }[] })

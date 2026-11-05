@@ -206,7 +206,7 @@ export async function createWeb(options: {
       at,
       inputs: [
         ...new Set([
-          ...result.inputs.filter((file) => !file.includes('/node_modules/')),
+          ...result.inputs.filter((file) => !/[/\\]node_modules[/\\]/.test(file)),
           ...always,
           join(webRoot, 'index.html'),
           ...publicFiles,
