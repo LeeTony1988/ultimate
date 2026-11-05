@@ -337,20 +337,23 @@ function ModelSelect({
   const groups = useMemo(() => {
     const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
     const all = models?.models ?? []
+    // Every model stays choosable, available or not: a family may be set up before its provider is logged in, and the
+    // warning under the field names that. Deciding by availability here hid whole providers with no explanation;
+    // the sort still puts working models first.
     const found = terms.length
       ? all.filter((model) =>
           terms.every((term) =>
             `${model.provider}/${model.id} ${model.name}`.toLowerCase().includes(term),
           ),
         )
-      : all.filter((model) => model.available || `${model.provider}/${model.id}` === value)
+      : all
     return [
       ...Map.groupBy(
         found.toSorted((a, b) => Number(b.available) - Number(a.available)).slice(0, LIMIT),
         (model) => model.provider,
       ),
     ]
-  }, [models, query, value])
+  }, [models, query])
   const choose = (next: () => void) => {
     next()
     setOpen(false)
