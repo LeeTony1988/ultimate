@@ -7,9 +7,24 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { alive, readOwner } from '../../server/lock.ts'
 import { git } from '../../lib/git.ts'
 
-/** Hold both lock transactions throughout cleanup; PID sidecars also protect startup and shutdown gaps. */
+/**
+ * Hold both lock transactions while a preview's worktrees and branches are removed, and release them for the final
+ * unlink: Windows refuses to remove an open database. The PID sidecars carry the protection across that last step, so
+ * they are read again once the locks are gone: a preview that started there keeps its home.
+ */
 export async function cleanPreview(home: string) {
   const locks: DatabaseSync[] = []
+  const release = () => {
+    for (const database of locks.splice(0)) database.close()
+  }
+  /** A live process owns this home through either PID sidecar; a stale or absent one leaves it to cleanup. */
+  async function liveOwner() {
+    for (const name of ['ultimate.lock', 'storage.lock']) {
+      const owner = await readOwner(join(home, name))
+      if (owner && alive(owner.pid)) return true
+    }
+    return false
+  }
   try {
     for (const name of ['ultimate.lock', 'storage.lock']) {
       const owner = await readOwner(join(home, name))
@@ -84,10 +99,14 @@ export async function cleanPreview(home: string) {
       for (const branch of left.split('\n').filter(Boolean))
         await git(common, '--git-dir', common, 'branch', '-D', '--', branch)
     }
+    // Everything the locks guarded is gone. Close them before removing the home; if another process still holds it,
+    // `rm` throws, and the sweep reports the home it could not remove instead of leaving it behind silently.
+    release()
+    if (await liveOwner()) return false
     await rm(home, { recursive: true, force: true })
     return true
   } finally {
-    for (const database of locks) database.close()
+    release()
   }
 }
 

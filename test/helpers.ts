@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import {
   cp,
+  link,
   mkdir,
   mkdtemp,
   readdir,
@@ -132,6 +133,16 @@ export async function temp(prefix = 'ultimate-test-', parent = tmpdir()) {
 export async function linkDirectory(target: string, path: string) {
   if (!(await stat(target)).isDirectory()) throw new Error(`Not a directory: ${target}`)
   await symlink(target, path, process.platform === 'win32' ? 'junction' : 'dir')
+}
+/** Link a file into a fixture; without Windows symlink privilege a hard link stands in, and atomic writes replace it. */
+export async function linkFile(target: string, path: string) {
+  try {
+    await symlink(target, path)
+  } catch (error) {
+    if (process.platform !== 'win32' || (error as NodeJS.ErrnoException).code !== 'EPERM')
+      throw error
+    await link(target, path)
+  }
 }
 export async function linkDependencies(root: string) {
   const target = join(root, 'node_modules')
