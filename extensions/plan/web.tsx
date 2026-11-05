@@ -635,6 +635,21 @@ function Panel({
     drag.current = undefined
   }
 
+  // A press anywhere else puts the card away; the pill is the card's own control and is left to handle itself.
+  const dismiss = useRef(close)
+  dismiss.current = close
+  useEffect(() => {
+    const away = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null
+      if (!target || box.current?.contains(target)) return
+      if (target.closest('[data-plan-pill]')) return
+      dismiss.current()
+    }
+    // Capture, so a handler that stops the event cannot keep the card open.
+    addEventListener('pointerdown', away, true)
+    return () => removeEventListener('pointerdown', away, true)
+  }, [])
+
   return (
     <div
       className="pointer-events-auto flex max-h-[60vh] w-[420px] max-w-full flex-col overflow-hidden rounded-lg border border-border/80 bg-popover shadow-lg"
@@ -791,6 +806,8 @@ function CoordinatorPlan({
 }) {
   const plan = useDoc(PlanDoc)
   const [expanded, setExpanded] = useUiState('plan.panel', false)
+  // The card remembers where it was dragged; the pill brings it back to this spot above the prompt.
+  const [place, setPlace] = useUiState<{ x: number; y: number } | null>('plan.place', null)
   const [focus, setFocus] = useState<Focus>()
   useEffect(() => {
     if (!request || plan === undefined) return
@@ -818,8 +835,20 @@ function CoordinatorPlan({
           aria-expanded={expanded}
           className={pill}
           data-plan-pill
-          onClick={() => setExpanded(!expanded)}
-          title={`${shown.epic.key} · ${shown.epic.title}`}
+          onClick={() => {
+            // A card dragged elsewhere comes back above this chip; an anchored one is opened or shut.
+            if (place) {
+              setPlace(null)
+              setExpanded(true)
+              return
+            }
+            setExpanded(!expanded)
+          }}
+          title={
+            place
+              ? `${shown.epic.key} · ${shown.epic.title} - bring the card back here`
+              : `${shown.epic.key} · ${shown.epic.title}`
+          }
           type="button"
         >
           <ClipboardListIcon className="size-3.5 shrink-0" />
@@ -834,6 +863,7 @@ function CoordinatorPlan({
 
 function WorkerPlan({ conversation, task }: { conversation: number; task: TaskLink }) {
   const [expanded, setExpanded] = useUiState('plan.panel', false)
+  const [place, setPlace] = useUiState<{ x: number; y: number } | null>('plan.place', null)
   const plan = useDocOf(expanded ? task.coordinator : undefined, PlanDoc)
   const openTask = useOpenTask()
   const focus = useMemo(() => ({ key: task.key }), [task.key])
@@ -854,7 +884,15 @@ function WorkerPlan({ conversation, task }: { conversation: number; task: TaskLi
         <button
           aria-expanded={expanded}
           className="max-w-56 min-w-0 truncate hover:text-foreground"
-          onClick={() => setExpanded(!expanded)}
+          onClick={() => {
+            // A card dragged elsewhere comes back above this chip; an anchored one is opened or shut.
+            if (place) {
+              setPlace(null)
+              setExpanded(true)
+              return
+            }
+            setExpanded(!expanded)
+          }}
           title={task.title}
           type="button"
         >
