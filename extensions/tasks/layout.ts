@@ -110,10 +110,9 @@ export function layout(
   let y = 0
   let columns = 0
   for (const [index, band] of bands.entries()) {
-    const min = Math.min(...band.tasks.map((task) => depth.get(task.id)!))
     const byColumn = new Map<number, TaskGraphNode[]>()
     for (const task of band.tasks) {
-      const column = depth.get(task.id)! - min
+      const column = depth.get(task.id)!
       columns = Math.max(columns, column + 1)
       const list = byColumn.get(column) ?? []
       list.push(task)
