@@ -197,8 +197,10 @@ export default defineConfig({
     include: ['test/**/*.test.ts'],
     exclude: ['test/e2e/**'],
     testTimeout: 30000,
-    // A hung hook or teardown fails within seconds and names its test, instead of stalling the run.
-    hookTimeout: 5000,
+    // A hung hook or teardown fails within seconds and names its test, instead of stalling the run. A fixture's
+    // `sourceCopy` is real work, not a hang: it copies every tracked file and links dependencies, which measured
+    // 3.9 s on Windows and grows with the repository, so the lineage and summary fixtures close on the limit.
+    hookTimeout: 15000,
     teardownTimeout: 5000,
     maxWorkers: 8,
   },
