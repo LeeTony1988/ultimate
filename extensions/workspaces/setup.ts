@@ -1,5 +1,6 @@
 import type { JsonObject } from '@earendil-works/pi-durable'
 import { exec } from '../../lib/exec.ts'
+import { shell } from '../../lib/shell.ts'
 
 /** Run the project's `isolates.worktree.setup` commands in a new worktree at `path`, branched from `source`. */
 export async function setup(
@@ -15,8 +16,10 @@ export async function setup(
   for (const command of commands) {
     signal.throwIfAborted()
     try {
+      // The platform's own shell carries the command: hard-coding `sh` fails on a Windows host that has no Git Bash.
+      const { program, args } = shell.argv(command, ['ULTIMATE_SOURCE'])
       // exec closes the command's input, so one that reads it gets EOF.
-      await exec('sh', ['-c', command], {
+      await exec(program, args, {
         cwd: path,
         env: { ...process.env, ULTIMATE_SOURCE: source },
         signal,
