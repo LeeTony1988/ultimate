@@ -643,8 +643,10 @@ export async function saveOverlay(
     settings.push(`thinking: ${scalar(form.thinking)}`)
   }
   if (form.family !== base.family || unpin) {
-    if (!form.family) throw cannot('clear the family')
-    settings.push(`family: ${scalar(form.family)}`)
+    // Pinning a model does not clear the family: a definition keeps the one it names and only the model is written,
+    // so an edit from the form cannot fail on a family it never touches.
+    if (!form.family && !form.model) throw cannot('clear the family')
+    if (form.family) settings.push(`family: ${scalar(form.family)}`)
   }
   if ((form.isolate ?? 'none') !== (base.isolate ?? 'none'))
     settings.push(`isolate: ${form.isolate ?? 'none'}`)
