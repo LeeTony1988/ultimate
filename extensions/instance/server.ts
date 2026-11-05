@@ -96,10 +96,60 @@ const COPIED = [
  * Shared with the host through a link: user extensions are code the UI never writes (and some find their repository
  * through their real path), and the Tailscale registry is how every server on the machine picks a distinct port.
  */
-const LINKED = ['extensions', 'tailscale.json']
+const LINKED: [name: string, kind: 'directory' | 'file'][] = [
+  ['extensions', 'directory'],
+  ['tailscale.json', 'file'],
+]
+/** Files bigger than this are caches or system state a preview does not need; copying them is not worth the delay. */
+const MAX_SHARED_FILE = 1024 * 1024
+
+/**
+ * Share one entry at `target`. Directories get a junction on Windows, which needs no symlink privilege; POSIX keeps the
+ * symlink it always had. A file whose symlink Windows refuses is copied when small, and skipped with a warning when it
+ * is too big or cannot be read: a preview that cannot share one entry must still start.
+ */
+async function shareEntry(
+  source: string,
+  target: string,
+  kind: 'directory' | 'file',
+  notice?: (message: string) => void,
+) {
+  try {
+    const junction = process.platform === 'win32' && kind === 'directory'
+    await symlink(
+      junction ? resolvePath(source) : source,
+      target,
+      junction ? 'junction' : undefined,
+    )
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return true
+    // POSIX symlinks work; only Windows' link privilege makes a per-entry fallback necessary.
+    if (process.platform !== 'win32') throw error
+  }
+  const info = await stat(source).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT' || error.code === 'EACCES' || error.code === 'EPERM')
+      return undefined
+    throw error
+  })
+  // A missing entry (such as no tailscale registry yet) stays missing; its owner creates it when it is needed.
+  if (!info) return false
+  if (info.isDirectory() || info.size > MAX_SHARED_FILE) {
+    notice?.(`Preview home: skipped ${basename(target)}; it could not be linked`)
+    return false
+  }
+  try {
+    await cp(source, target, { dereference: true, errorOnExist: true, force: false })
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return true
+    notice?.(`Preview home: skipped ${basename(target)}: ${String(error)}`)
+    return false
+  }
+}
 
 /** Seed `<to>/.ultimate` from the user's `<from>/.ultimate`; what the user has not got is left out. */
-export async function seedUserHome(from: string, to: string) {
+export async function seedUserHome(from: string, to: string, notice?: (message: string) => void) {
   const source = join(from, '.ultimate')
   const target = join(to, '.ultimate')
   await mkdir(target, { recursive: true, mode: 0o700 })
@@ -114,21 +164,36 @@ export async function seedUserHome(from: string, to: string) {
       force: false,
     }).catch(missing)
   // Linked even when missing: the first server to register creates the one registry every server shares.
-  for (const name of LINKED) await symlink(join(source, name), join(target, name))
+  for (const [name, kind] of LINKED)
+    await shareEntry(join(source, name), join(target, name), kind, notice)
 }
 
 /**
  * Make `to` a whole home: every entry of `from` but `.ultimate` is linked back, so logins, caches and dotfiles stay
  * shared while `~/.ultimate` is the private copy. Entries already there are kept, so it runs on every start.
  */
-export async function linkHome(from: string, to: string) {
+export async function linkHome(from: string, to: string, notice?: (message: string) => void) {
+  const skipped: string[] = []
   for (const name of await readdir(from)) {
     if (name === '.ultimate') continue
-    await symlink(join(from, name), join(to, name)).catch((error: NodeJS.ErrnoException) => {
-      // Already linked, or a private copy the preview wrote over the link: keep it.
-      if (error.code !== 'EEXIST') throw error
+    const source = join(from, name)
+    const info = await stat(source).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT' || error.code === 'EACCES' || error.code === 'EPERM')
+        return undefined
+      throw error
     })
+    if (!info) continue
+    try {
+      if (!(await shareEntry(source, join(to, name), info.isDirectory() ? 'directory' : 'file')))
+        skipped.push(name)
+    } catch (error) {
+      // Already linked, or a private copy the preview wrote over the link: keep it. Any other per-entry failure only
+      // costs the preview that entry, never its start.
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') skipped.push(name)
+    }
   }
+  if (skipped.length)
+    notice?.(`Preview home: skipped ${skipped.length} unshared home entries: ${skipped.join(', ')}`)
 }
 
 /** The branch a preview with this home lands on; it shares the prefix of the preview's workspace branches. */
@@ -470,8 +535,8 @@ export default function instanceExtension(
       if (args.home) await writeFile(join(home, 'instance-preserve'), '')
       const userHome = join(home, 'user')
       // A restarted explicit home keeps the config its preview changed.
-      if (!existsSync(userHome)) await seedUserHome(host.userHome, userHome)
-      await linkHome(host.userHome, userHome)
+      if (!existsSync(userHome)) await seedUserHome(host.userHome, userHome, host.notice)
+      await linkHome(host.userHome, userHome, host.notice)
       const env = previewEnv(process.env, {
         home,
         project,
@@ -555,13 +620,27 @@ export default function instanceExtension(
         if (!ready) throw new Error(`Instance did not become ready:\n${item.output}`)
         return info(item)
       } catch (error) {
-        await stop(instances, id)
+        try {
+          await stop(instances, id)
+        } catch (cleanupError) {
+          // The start failure is the cause the caller needs; a home that could not be removed is reported beside it.
+          host.notice(`Preview cleanup failed for ${item.home}: ${String(cleanupError)}`)
+        }
         throw error
       }
     } catch (error) {
       if (pendingHome) {
-        await unlink(join(pendingHome, 'ultimate.lock'))
-        await cleanPreview(pendingHome)
+        try {
+          await unlink(join(pendingHome, 'ultimate.lock')).catch(
+            (unlinkError: NodeJS.ErrnoException) => {
+              if (unlinkError.code !== 'ENOENT') throw unlinkError
+            },
+          )
+          await cleanPreview(pendingHome)
+        } catch (cleanupError) {
+          // Keep the original failure: a stuck home is reported, not made to masquerade as the reason startup failed.
+          host.notice(`Preview cleanup failed for ${pendingHome}: ${String(cleanupError)}`)
+        }
       }
       throw error
     } finally {

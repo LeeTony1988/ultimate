@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { ModelRuntime } from '@earendil-works/pi-coding-agent'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -17,6 +17,7 @@ import { saveDefinition } from '../lib/agents.ts'
 import { writeFamilies } from '../lib/families-settings.ts'
 import { writeJson } from '../lib/json-file.ts'
 import { at, label } from '../extensions/instance/links.ts'
+import { linkFile } from './helpers.ts'
 
 const homes: string[] = []
 afterEach(async () => {
@@ -112,8 +113,8 @@ it("keeps a preview's agent and family writes out of the user's linked config", 
   await mkdir(join(user, '.ultimate/agents'), { recursive: true })
   await writeFile(join(dotfiles, 'agents/helper.md'), agent)
   await writeFile(join(dotfiles, 'model-families.json'), '{}\n')
-  await symlink(join(dotfiles, 'agents/helper.md'), join(user, '.ultimate/agents/helper.md'))
-  await symlink(join(dotfiles, 'model-families.json'), join(user, '.ultimate/model-families.json'))
+  await linkFile(join(dotfiles, 'agents/helper.md'), join(user, '.ultimate/agents/helper.md'))
+  await linkFile(join(dotfiles, 'model-families.json'), join(user, '.ultimate/model-families.json'))
 
   await seedUserHome(user, copy)
   const runtime = await ModelRuntime.create()
@@ -131,9 +132,33 @@ it("keeps a preview's agent and family writes out of the user's linked config", 
   expect(await readFile(join(dotfiles, 'model-families.json'), 'utf8')).toBe('{}\n')
   expect(await readFile(join(copy, '.ultimate/agents/helper.md'), 'utf8')).toContain('Moved')
   expect(await readFile(join(copy, '.ultimate/model-families.json'), 'utf8')).toContain('recent')
-  // Every preview and the host pick Tailscale ports in one registry, even one the preview creates.
+  // Every preview and the host pick Tailscale ports in one registry, even one the preview creates. A Windows host
+  // without the file-symlink privilege seeds a copy instead, which cannot carry the write back.
   await writeJson(join(copy, '.ultimate/tailscale.json'), { ports: {} })
-  expect(await readFile(join(user, '.ultimate/tailscale.json'), 'utf8')).toContain('ports')
+  const linked = (await lstat(join(copy, '.ultimate/tailscale.json'))).isSymbolicLink()
+  const userRegistry = await readFile(join(user, '.ultimate/tailscale.json'), 'utf8').catch(
+    (error: NodeJS.ErrnoException) => error.code,
+  )
+  const shared = typeof userRegistry === 'string' && userRegistry.includes('ports')
+  expect(shared).toBe(linked)
+})
+
+it('seeds linked extensions and a small registry when Windows refuses file symlinks', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ultimate-preview-seed-'))
+  homes.push(root)
+  const [user, copy] = ['user', 'preview'].map((name) => join(root, name))
+  await mkdir(join(user, '.ultimate/extensions/local'), { recursive: true })
+  await writeFile(join(user, '.ultimate/extensions/local/index.ts'), 'export {}\n')
+  await writeJson(join(user, '.ultimate/tailscale.json'), { ports: {} })
+
+  await seedUserHome(user, copy)
+
+  expect(await readFile(join(copy, '.ultimate/extensions/local/index.ts'), 'utf8')).toBe(
+    'export {}\n',
+  )
+  expect(JSON.parse(await readFile(join(copy, '.ultimate/tailscale.json'), 'utf8'))).toEqual({
+    ports: {},
+  })
 })
 
 // Regression: a preview agent's bash `~` and write tool `~/…` reached the user's real ~/.ultimate/skills.
