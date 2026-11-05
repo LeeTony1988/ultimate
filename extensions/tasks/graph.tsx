@@ -320,7 +320,7 @@ function TaskGraphSurface() {
   )
   const drawing = layout(visible, started)
   const background = tasks.filter((task) => task.background)
-  const busy = tasks.filter((task) => task.state.status === 'running' && !task.blocked).length
+  const busy = visible.filter((task) => task.state.status === 'running' && !task.blocked).length
   const shownFinished = finished.filter((item) => now - item.at < 30_000).toReversed()
   const finishedMeanings = new Map(
     shownFinished.map((item) => {
@@ -343,7 +343,7 @@ function TaskGraphSurface() {
           Task DAG
         </span>
         <span className="ml-2 shrink-0 font-mono text-[10.5px] text-muted-foreground">
-          {tasks.length} live{busy > 0 && ` · ${busy} running`}
+          {visible.length} live{busy > 0 && ` · ${busy} running`}
           {visible.length < tasks.length && ` · ${tasks.length - visible.length} hidden`}
         </span>
         <span className="ml-auto flex items-center gap-2 font-mono text-[10px] text-muted-foreground/65">
