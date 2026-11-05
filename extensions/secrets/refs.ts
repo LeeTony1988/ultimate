@@ -12,7 +12,10 @@ export type Secret = {
   url?: string
   /** The extensions that declare it. */
   declaredBy: string[]
+  /** Stored in the user's secrets file. */
   set: boolean
+  /** The model provider whose configured auth stands in for it, when it has auth. */
+  via?: string
   /** ISO time of the last change, while set. */
   updatedAt?: string
 }

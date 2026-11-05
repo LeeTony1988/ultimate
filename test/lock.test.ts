@@ -1,12 +1,14 @@
 import { rm, writeFile } from 'node:fs/promises'
 import { temp, removeTemp } from './helpers.ts'
 import { join } from 'node:path'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { acquireLock, readOwner, retireStorageOwner, alive } from '../server/lock.ts'
+import * as processes from '../lib/process-group.ts'
 
 const directories: string[] = []
 const locks: Awaited<ReturnType<typeof acquireLock>>[] = []
 afterEach(async () => {
+  vi.restoreAllMocks()
   for (const lock of locks.splice(0)) await lock.close()
   for (const directory of directories.splice(0)) await removeTemp(directory)
 })
@@ -18,7 +20,19 @@ async function path() {
 it('refuses to signal an unverified owner of a held storage lock', async () => {
   const file = await path()
   locks.push(await acquireLock(file, { pid: process.pid }))
+  await expect(retireStorageOwner(file)).rejects.toThrow(
+    'shut down its Ultimate instance cleanly before restarting; refusing to signal',
+  )
+  expect(alive(process.pid)).toBe(true)
+})
+it('refuses a reused pid even while the storage lock remains held', async () => {
+  const file = await path()
+  locks.push(await acquireLock(file, { pid: process.pid }))
+  await writeFile(file, JSON.stringify({ pid: process.pid, coreStart: 'previous-start' }))
+  vi.spyOn(processes, 'identify').mockReturnValue('current-start')
+  const kill = vi.spyOn(process, 'kill')
   await expect(retireStorageOwner(file)).rejects.toThrow('refusing to signal')
+  expect(kill.mock.calls.every(([, signal]) => signal === 0)).toBe(true)
   expect(alive(process.pid)).toBe(true)
 })
 it('holds ownership until close, then lets a waiting contender acquire it', async () => {

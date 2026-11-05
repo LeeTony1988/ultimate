@@ -142,10 +142,9 @@ describe('supervisor restart', () => {
     try {
       await writeFile(file, 'const invalid: string = 7; export { invalid }\n')
       await until(() => stream.system().code.coreStale === true)
-      const [failed, concurrent] = await Promise.all([
-        post(running.url, '/api/restart'),
-        post(running.url, '/api/restart'),
-      ])
+      const [failed, concurrent] = (
+        await Promise.all([post(running.url, '/api/restart'), post(running.url, '/api/restart')])
+      ).toSorted((result) => (String(result.data.error).includes('in progress') ? 1 : -1))
       expect(concurrent).toEqual({
         status: 500,
         data: { ok: false, error: 'A core swap is already in progress.' },

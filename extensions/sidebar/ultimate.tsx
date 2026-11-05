@@ -87,6 +87,7 @@ function Primary({ parked }: { parked?: ReadonlySet<number> }) {
                       'flex h-5 shrink-0 items-center gap-1.5 rounded-sm px-1.5 transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring',
                       active && 'text-foreground',
                     )}
+                    data-ui="ultimate-button"
                     data-ultimate-button
                     onClick={() => void talkToUltimate(actions)}
                     type="button"

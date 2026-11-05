@@ -9,7 +9,12 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
-import type { Extension, ToolRegistration, ToolTaskInput } from '@earendil-works/pi-durable'
+import type {
+  Extension,
+  ToolExecutionResult,
+  ToolRegistration,
+  ToolTaskInput,
+} from '@earendil-works/pi-durable'
 import type { EventContext } from '../shared/events.ts'
 
 export type TraceContext = EventContext & { traceId: string; parentCall: string }
@@ -81,6 +86,21 @@ const SEALED = new Set(['secrets', 'models'])
 function failure(error: unknown, credentials: boolean) {
   if (credentials) return error instanceof Error ? error.name : typeof error
   return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * What a tool's error result says, cut at about 300 characters: its error diagnostics, then its text. A shell command
+ * that exits nonzero has no text parts, its retained output tail sits in `structuredOutput.output`, and its one error
+ * diagnostic says `Command exited with code 2`; that is the row's error.
+ */
+function toolError(result: ToolExecutionResult) {
+  const text = [
+    ...(result.diagnostics ?? []).flatMap((item) =>
+      item.severity === 'error' ? [item.message] : [],
+    ),
+    ...(result.output ?? []).flatMap((part) => (part.type === 'text' ? [part.text] : [])),
+  ].join('\n')
+  return text.length <= LIMIT ? text : text.slice(0, LIMIT) + '…'
 }
 
 /** JSON of `value`, cut at about 300 characters, with values under secret-looking keys replaced. */
@@ -312,7 +332,9 @@ export function callTrace(file: string | (() => string), retention = { rows: 200
       polls.clear()
       try {
         database = new DatabaseSync(typeof file === 'string' ? file : file())
+        // Commits need not fsync: a crash may lose the newest trace rows, never corrupt the file.
         database.exec(`PRAGMA journal_mode = WAL;
+PRAGMA synchronous = NORMAL;
 CREATE TABLE IF NOT EXISTS calls (id TEXT PRIMARY KEY, parent TEXT, trace TEXT NOT NULL, at REAL NOT NULL,
   ms REAL NOT NULL, caller TEXT NOT NULL, callee TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL,
   ok INTEGER NOT NULL, error TEXT, args TEXT, result TEXT, conversation INTEGER, task INTEGER, entry INTEGER);
@@ -374,23 +396,24 @@ CREATE INDEX IF NOT EXISTS calls_at ON calls (at);`)
             entryId: input?.kind === 'model' ? input.assistant : undefined,
             sealed: true,
           }
-          return run(
-            call,
-            async () => {
-              const self = traceContext()!
-              const key = `${api.taskId}/${api.callId}`
-              const state = { extension: extension.name, done: false }
-              toolRuns.set(self, state)
-              tools.set(key, self)
-              try {
-                return await tool.execute(args, api, context)
-              } finally {
-                tools.delete(key)
-                state.done = true
-              }
-            },
-            parent ?? null,
-          )
+          const { context: self, finish } = begin(call, parent ?? null)
+          const key = `${api.taskId}/${api.callId}`
+          const state = { extension: extension.name, done: false }
+          toolRuns.set(self, state)
+          tools.set(key, self)
+          try {
+            const result = await storage.run(self, () => tool.execute(args, api, context))
+            // A tool that returns an error result failed, though it did not throw; its row keeps the error's text.
+            if (result?.isError) finish(false, toolError(result))
+            else finish(true, result)
+            return result
+          } catch (error) {
+            finish(false, error)
+            throw error
+          } finally {
+            tools.delete(key)
+            state.done = true
+          }
         },
       })
       return { ...extension, tools: extension.tools.map(traced) }

@@ -25,13 +25,11 @@ export function Section({
       }
       open={!closed.includes(id)}
     >
-      <CollapsibleTrigger className="flex h-8 w-full items-center gap-1.5 px-3 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase transition-colors hover:text-foreground">
+      <CollapsibleTrigger className="flex h-8 w-full items-center gap-1.5 px-3 section-label transition-colors hover:text-foreground">
         <ChevronRightIcon className="size-3 shrink-0 transition-transform group-data-[state=open]/section:rotate-90" />
         {title}
         {meta !== undefined && (
-          <span className="ml-auto truncate pl-2 tracking-normal normal-case text-muted-foreground/70">
-            {meta}
-          </span>
+          <span className="ml-auto truncate pl-2 text-muted-foreground/70">{meta}</span>
         )}
       </CollapsibleTrigger>
       <CollapsibleContent className="px-3 pb-3">{children}</CollapsibleContent>

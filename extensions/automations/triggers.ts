@@ -11,9 +11,7 @@ import { Standing, SubagentsApi } from '../subagents/api.ts'
 import { describeSchedule } from './schedule.ts'
 import type { Automations as Ledger } from './server.ts'
 import type { Automation, TriggerEvent } from './types.ts'
-import { RUN_TASK } from './types.ts'
-/** A standing agent's name in a context target or an event filter: `@ultimate`. */
-const STANDING = /^@[a-zA-Z0-9_-]+$/
+import { RUN_TASK, STANDING } from './types.ts'
 
 export const TRIGGER_EVENTS: TriggerEvent[] = [
   {
@@ -127,7 +125,8 @@ export function triggers(
       usage.percent >= condition.above &&
       condition.armed &&
       (paused === undefined || paused >= condition.idleFor!) &&
-      (a.lastFireAt === undefined || now - a.lastFireAt >= condition.cooldownMs)
+      // A manual run is not a crossing: the cooldown counts from the condition's own fire.
+      (condition.firedAt === undefined || now - condition.firedAt >= condition.cooldownMs)
     ) {
       const count = (n: number) =>
         Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(n)
@@ -138,6 +137,7 @@ export function triggers(
         `${condition.of} context ${Math.round(usage.percent)}%${usage.tokens !== undefined && usage.window !== undefined ? ` (${count(usage.tokens)}/${count(usage.window)})` : ''}${paused === undefined ? '' : ` after ${hours(paused)} without the user's input`}`,
       )
       condition.armed = false
+      condition.firedAt = now
     }
   }
   let stop: (() => void) | undefined

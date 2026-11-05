@@ -3,15 +3,19 @@
 Each extension is a folder `extensions/<name>/`: `server.ts` exports a Durable extension with that name
 (or a factory receiving `ExtensionHost`, which provides `ultimateRoot` (the clone), `projectRoot` (your work), state/home paths, models/settings, build and system inspection, conversation summaries, harness access, shared resources, and lifecycle hooks), `web.tsx` is its optional browser facet
 (`defineWebExtension` from `@/sdk`), and `README.md` describes it. The server facet may export `docs`, an array of conversation document tokens;
-subscribe with `/api/events?conversation=<id>&docs=<kind>,<kind>` for `doc` snapshots and `docOps` batches.
+read their `doc` snapshots and `docOps` batches from `/api/events`. A browser tab keeps one such stream; its first
+event, `stream`, carries the id with which `POST /api/events/<stream>/<sub>` (`{ conversation?, docs?, view? }`)
+subscribes to a conversation and `DELETE` ends that (`ServerEvents` in `shared/protocol.ts`). A subscription's
+`view`, `ops`, `doc` and `docOps` events carry its id on their first data line, so their `data` reads `<sub>\n{…}`:
+parse what follows the first newline.
 The Documents tab shows each exported kind through the renderer a web facet registers (`documents: [{ kind, title, component }]`), or as JSON.
 Local imported modules reload with the facet. Failed loads leave the previous version installed.
 
 Server extensions coordinate through typed contracts in each provider's `api.ts`: services, extension points,
-documents and durable events (below); lint rejects the untyped `host.provide` and `host.use` in `extensions/`. The
+documents and durable events (below). The
 browser has its own ephemeral `events`/`useEvent` bus from `@/sdk`. Use `<extension>:<event>` channels there, reserve
 `ultimate:*` for core, and keep durable state in documents. `useReady()` becomes true once the initial facets settle and a system snapshot
-arrives, stays true across hot reloads, and exposes failed facet names. Overlays render as facets install, even while
+arrives, stays true for the page, and exposes failed facet names. Overlays render as facets install, even while
 others load; see [Events](../extensions/README.md#events).
 
 ## Durable events
@@ -55,8 +59,8 @@ each with the browser's `device` label and, through Tailscale Serve, the `login`
 action calls get the same `Device` as `ctx.device`. A `beforeInput` hook gets no device: it sees only the input entry
 and runs for queued inputs too, so record the device from a UI action instead. A typed input and a review commit
 right after Pi admits them, which has no hook for queued inputs; answers commit with their reply. Something the user must see
-exactly once and that feeds the result the owner reports, like the lander's deploy handoff, stays a call, idempotent by
-request id; when it calls up the layering, it goes through an extension point (below).
+exactly once and that feeds the result the owner reports, like the lander waking a landed branch's starter, stays a
+call, idempotent by request id; when it calls up the layering, it goes through an extension point (below).
 `onCommit(host.harness(), …)` (`lib/commits.ts`, over Pi Durable's `Session.observeCommits`) remains for watching Pi's
 own records (entries, tasks, submissions, conversation records, usage and live documents), which are no domain events;
 each such watcher says so in a comment above it. Do not invent an event only to replace one.
@@ -93,7 +97,7 @@ extension depending on an optional one. The core layers, lowest first, each depe
 9. sidebar: the sidebar and the @ultimate button, the UI that brings the core together.
 
 Where a lower extension needs something a higher one knows, it declares the contract and the higher one fills it:
-server extension points (`conversations.trees` and `conversations.release` from conversations, `workspaces.handoff`
+server extension points (`conversations.trees` and `conversations.release` from conversations, `workspaces.branches`
 from workspaces), web points (`conversations.phase`, `conversations.task`, `conversations.unsummarized`,
 `messages.answers`, `lineage.memory-header`, `workspaces.review`), or durable events (`workspaces.landed`,
 `models.login-changed`). Optional extensions plug into the core the same way: phase, plan and questions provide
@@ -114,11 +118,6 @@ the dependency instead, since the provider may load later, and the missing provi
 and wants, the missing providers and the dependency cycles (each a sorted group of extensions that depend on each
 other in a cycle).
 
-Tools share one namespace per agent, composed in install order, so two enabled extensions that declare the same tool
-name would silently leave one of them unused. The registry says so instead: one notice and one extension diagnostic
-per collision, naming the tool, both extensions and which one wins (the last installed). Nothing renames or drops a
-tool; the fix is a user or project override with its own tool name.
-
 An **extension point** is how a lower extension calls up without depending on a higher one: it declares the contract
 in its own `api.ts` as `defineApi<Service>()('<folder>.<point>')` (for example `conversations.trees`) and `want`s it;
 the higher extension imports that token and `implement`s it. The catalogue counts every edge toward the contract's
@@ -138,7 +137,6 @@ so lint (`lint/ultimate.ts`) keeps them small and documented:
   `defineEvent('<folder>.<event>')` and `actionRef('<folder>', name)`.
 - `api-only-imports`: a server-side `.ts` file imports another extension's runtime code only from its `api.ts`, a
   browser `.tsx` file only from its `ui.tsx`; types come with `import type`, pure helpers from `lib/`.
-- `no-raw-services`: no `host.provide` or `host.use` in `extensions/`.
 
 `api.ts` type-imports server code, so the browser never imports it. The browser's contract is two more files:
 

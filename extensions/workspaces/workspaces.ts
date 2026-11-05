@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
-import { lstat, mkdir, realpath, rm } from 'node:fs/promises'
-import { join } from 'node:path'
+import { lstat, mkdir, readdir, realpath, rm } from 'node:fs/promises'
+import { isAbsolute, join, relative, sep } from 'node:path'
 import type { Context } from '@earendil-works/chord'
 import {
   configure,
@@ -12,13 +12,21 @@ import {
 } from '@earendil-works/pi-durable'
 import type { ConversationId, Cursor, TaskId, Tx } from '@earendil-works/pi-durable'
 import { exec } from '../../lib/exec.ts'
-import { fastForward, git, isolatable } from '../../lib/git.ts'
+import { git, isolatable } from '../../lib/git.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ConversationsApi } from '../conversations/api.ts'
-import { samePath, worktreePath } from './paths.ts'
+import { Branches } from './api.ts'
 import { WorkspacesDoc } from './refs.ts'
 import { setup } from './setup.ts'
-import { createLander, landerAgent, landerCheckout, landerPath, log } from './lander.ts'
+import {
+  addCheckout,
+  clearCheckout,
+  hasAddCommand,
+  removeCheckout,
+  treeName,
+  treePath,
+} from './tree.ts'
+import { contains, createLander, landerCheckout, landerPath, log } from './lander.ts'
 import type {
   LandResult,
   SubmitResult,
@@ -77,15 +85,13 @@ type Host = Pick<
   | 'home'
   | 'ultimateRoot'
   | 'projectRoot'
-  | 'userHome'
-  | 'modelRuntime'
-  | 'settings'
   | 'projectSettings'
   | 'need'
   | 'want'
   | 'resource'
   | 'extensions'
   | 'metadata'
+  | 'doc'
   | 'notice'
   | 'emit'
 >
@@ -118,42 +124,57 @@ async function onDisk(path: string) {
   )
 }
 /**
- * The work a recorded checkout folder holds. A registered checkout has its changes and commits; a folder Git no longer
- * lists as a worktree (ignored files left after `git worktree remove`) is not a repository to inspect, so only its
- * branch's unlanded commits count, and those live in the source.
+ * The work only a checkout folder holds, which removing it would lose: uncommitted changes, and commits on its HEAD that
+ * neither its branch nor the target has (detached work). Commits on its branch stay in the source with the branch, and
+ * recreating the checkout checks that branch out again. A folder Git no longer lists as a worktree (ignored files left
+ * after `git worktree remove`) is not a repository to inspect, and holds none.
  */
-async function held(
+async function atRisk(
+  id: ConversationId,
+  workspace: Pick<WorkspaceIndex['items'][string], 'path' | 'branch' | 'target'>,
+): Promise<KeptWork> {
+  const branch = (await git(workspace.path, 'branch', '--list', workspace.branch))
+    ? [workspace.branch]
+    : []
+  return {
+    id,
+    uncommitted: (await git(workspace.path, 'status', '--porcelain')).split('\n').filter(Boolean)
+      .length,
+    unlanded: Number(
+      await git(
+        workspace.path,
+        'rev-list',
+        '--count',
+        'HEAD',
+        '--not',
+        workspace.target,
+        ...branch,
+      ),
+    ),
+  }
+}
+const held = (
   id: ConversationId,
   workspace: WorkspaceIndex['items'][string],
   registered: boolean,
-): Promise<KeptWork> {
-  if (registered) return changes(id, workspace)
-  const branch =
-    (await onDisk(workspace.source)) &&
-    Boolean(await git(workspace.source, 'branch', '--list', workspace.branch))
-  return {
-    id,
-    uncommitted: 0,
-    unlanded: branch
-      ? Number(
-          await git(
-            workspace.source,
-            'rev-list',
-            '--count',
-            `${workspace.target}..${workspace.branch}`,
-          ),
-        )
-      : 0,
-  }
-}
+): Promise<KeptWork> =>
+  registered ? atRisk(id, workspace) : Promise.resolve({ id, uncommitted: 0, unlanded: 0 })
 /** Whether the source lists the path as a worktree; throws when the source cannot tell, so callers never guess. */
 async function listedBySource(workspace: WorkspaceIndex['items'][string]) {
   return (await git(workspace.source, 'worktree', 'list', '--porcelain'))
     .split('\n\n')
-    .some((entry) => {
-      const entryPath = worktreePath(entry)
-      return entryPath !== undefined && samePath(entryPath, workspace.path)
-    })
+    .some((entry) => entry.split('\n').includes(`worktree ${workspace.path}`))
+}
+/** Whether the folder at the path holds only what the source's ignore rules ignore, such as `.vite/` or `node_modules/`. */
+async function onlyIgnored(workspace: WorkspaceIndex['items'][string]) {
+  const entries = await readdir(workspace.path, { withFileTypes: true })
+  if (!entries.length) return true
+  const paths = entries.map((entry) => (entry.isDirectory() ? `${entry.name}/` : entry.name))
+  const ignored = await git(workspace.source, 'check-ignore', '--no-index', '--', ...paths).catch(
+    () => '',
+  )
+  const matched = new Set(ignored.split('\n'))
+  return paths.every((path) => matched.has(path))
 }
 async function registeredCheckout(workspace: WorkspaceIndex['items'][string]) {
   if (!(await onDisk(workspace.path))) return false
@@ -161,10 +182,9 @@ async function registeredCheckout(workspace: WorkspaceIndex['items'][string]) {
     // A folder Git cannot inspect is not a usable registered checkout.
     () => '',
   )
-  return listed.split('\n\n').some((entry) => {
-    const entryPath = worktreePath(entry)
-    return entryPath !== undefined && samePath(entryPath, workspace.path)
-  })
+  return listed
+    .split('\n\n')
+    .some((entry) => entry.split('\n').includes(`worktree ${workspace.path}`))
 }
 export function workspaces(host: Host) {
   const queues = host.resource('workspaces.land', () => new Map<string, Promise<unknown>>())
@@ -187,7 +207,12 @@ export function workspaces(host: Host) {
     'workspaces.disk',
     (): { last?: WorkspaceDisk; running?: Promise<WorkspaceDisk> } => ({}),
   )
-  const Lander = createLander(host, Workspaces, serial)
+  const Lander = createLander(host, Workspaces, serial, {
+    starter: async (id, context) => host.want(Branches)?.starter(id, context),
+    working: async (tx, id) => (await host.want(Branches)?.working(tx, id)) ?? false,
+    conclude: (tx, id) => host.need(ConversationsApi).concludeIn(tx, [id]),
+    release: (id, context) => release([id], context),
+  })
   /** Start the lander task of `source` in its lander conversation. Call only after `landerIdle`, before any write. */
   const startLander = async (tx: Tx, index: WorkspaceIndex, source: string) => {
     // Not background: the task is the lander conversation's work, so it shows as working while it lands.
@@ -231,8 +256,7 @@ export function workspaces(host: Host) {
     return lander
   }
   /**
-   * Make sure the project's checkout has its lander conversation, configured from the effective `lander` definition;
-   * every lander conversation follows the definition as it is now. Idempotent; a project that cannot be isolated (outside
+   * Make sure the project's checkout has its lander conversation. Idempotent; a project that cannot be isolated (outside
    * Git, or before its first commit) has none until it can.
    */
   async function standLander(context: Context) {
@@ -244,9 +268,9 @@ export function workspaces(host: Host) {
     }, context)
     const checkout = await isolatable(host.projectRoot)
     const { source, target } = 'source' in checkout ? checkout : {}
-    const { change } = await landerAgent(host, context)
     // The conversation's cwd exists from the start, at the target tip, so it can answer before any submission.
-    const path = source && target && (await landerCheckout(host.home, source))
+    const path =
+      source && target && (await landerCheckout(host.home, source, await host.projectSettings()))
     await host.harness().commit(async (tx) => {
       const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
       const landers: ConversationId[] = []
@@ -256,11 +280,9 @@ export function workspaces(host: Host) {
         const own = await ensureLander(tx, index, source, target, path)
         if (!landers.includes(own)) landers.push(own)
       }
-      for (const id of landers) {
-        await configure(tx, id, change)
-        // A lander keeps its `@lander` title: no automatic summaries.
+      // A lander keeps its `@lander` title: no automatic summaries.
+      for (const id of landers)
         await host.need(ConversationsApi).setAutomaticSummaries(tx, id, false)
-      }
     }, context)
   }
   /**
@@ -287,28 +309,6 @@ export function workspaces(host: Host) {
     }, context)
     if (restarted) host.harness().resume()
   }
-  /**
-   * Why a tool call in conversation `id` must not run: it is a lander conversation whose task owns the checkout for a
-   * submission, and the call is not part of that task's own run on the submission's failure.
-   */
-  async function landerOwnsCheckout(id: ConversationId, context: Context) {
-    const harness = host.harness()
-    const index = await harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
-    const source = Object.entries(index?.landerConversations ?? {}).find(
-      ([, lander]) => lander === id,
-    )?.[0]
-    const entry = index?.queue.find((item) => item.source === source && item.state === 'landing')
-    if (!entry) return undefined
-    if (entry.agent)
-      for (const input of (await harness.snapshot(LiveDoc, id, context))?.run?.inputs ?? [])
-        if (
-          (
-            await (await harness.submission(input, context))?.status(context)
-          )?.requestId?.startsWith(`lander-agent:${entry.id}:`)
-        )
-          return undefined
-    return `The lander is landing #${entry.conversationId}; ask again when it is idle`
-  }
   const get = async (id: ConversationId, context: Context) =>
     (await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context))?.items[String(id)]
   const Preparation = defineTask<
@@ -327,13 +327,25 @@ export function workspaces(host: Host) {
           // Git reads every `.git/worktrees/<name>` on list and add, and fails on one a concurrent add has only half
           // written ("failed to read .git/worktrees/<name>/locked"), so preparations of one source take turns.
           await serial(workspace.source, async () => {
-            const registered = (await git(workspace.source, 'worktree', 'list', '--porcelain'))
-              .split('\n\n')
-              .find((entry) => {
-                const entryPath = worktreePath(entry)
-                return entryPath !== undefined && samePath(entryPath, workspace.path)
-              })
+            const list = async () =>
+              (await git(workspace.source, 'worktree', 'list', '--porcelain'))
+                .split('\n\n')
+                .find((entry) => entry.split('\n').includes(`worktree ${workspace.path}`))
+            let registered = await list()
             const resumed = await runtime.memo<boolean>('started', context)
+            const settings = await host.projectSettings()
+            // A crash during a configured add command can leave its half-made checkout. It is this preparation's own:
+            // `started` is recorded only after the path was found free. Clear it and run the command again.
+            if (
+              resumed &&
+              hasAddCommand(settings) &&
+              (registered
+                ? !registered.split('\n').includes(`branch refs/heads/${workspace.branch}`)
+                : await onDisk(workspace.path))
+            ) {
+              await clearCheckout(workspace.source, workspace.path)
+              registered = await list()
+            }
             if (registered) {
               if (
                 !resumed ||
@@ -359,18 +371,14 @@ export function workspaces(host: Host) {
               }
               await runtime.memo('started', true, context)
               created = true
-              await git(
+              await addCheckout(
+                settings,
                 workspace.source,
-                'worktree',
-                'add',
-                ...(task.input.preserve
-                  ? [workspace.path, workspace.branch]
-                  : [
-                      task.input.reset ? '-B' : '-b',
-                      workspace.branch,
-                      workspace.path,
-                      workspace.base,
-                    ]),
+                workspace.path,
+                treeName(workspace.branch),
+                task.input.preserve
+                  ? [workspace.branch]
+                  : [task.input.reset ? '-B' : '-b', workspace.branch, workspace.base],
               )
             }
           })
@@ -392,17 +400,19 @@ export function workspaces(host: Host) {
             // Remove only the registered checkout created for this record, never an existing path.
             const registered = (await git(workspace.source, 'worktree', 'list', '--porcelain'))
               .split('\n\n')
-              .find((entry) => {
-                const entryPath = worktreePath(entry)
-                return (
-                  entryPath !== undefined &&
-                  samePath(entryPath, workspace.path) &&
-                  entry.split('\n').includes(`branch refs/heads/${workspace.branch}`)
-                )
-              })
+              .find(
+                (entry) =>
+                  entry.split('\n').includes(`worktree ${workspace.path}`) &&
+                  entry.split('\n').includes(`branch refs/heads/${workspace.branch}`),
+              )
             if (created) {
               if (registered)
-                await git(workspace.source, 'worktree', 'remove', workspace.path).catch(
+                await removeCheckout(
+                  await host.projectSettings(),
+                  workspace.source,
+                  workspace.path,
+                  treeName(workspace.branch),
+                ).catch(
                   // Best-effort rollback: the preparation error is recorded below and must not be replaced.
                   () => undefined,
                 )
@@ -441,8 +451,8 @@ export function workspaces(host: Host) {
       return 'Conversation has queued input; wait or cancel it first'
     return undefined
   }
-  async function idle(id: ConversationId, context: Context, own = false) {
-    const reason = !own && (await busy(id, context))
+  async function idle(id: ConversationId, context: Context) {
+    const reason = await busy(id, context)
     if (reason) throw new Error(reason)
   }
   async function candidates(ids: number[], context: Context) {
@@ -513,8 +523,9 @@ export function workspaces(host: Host) {
     const result: KeptWork[] = []
     for (const id of (await candidates(ids, context)).ids) {
       const checkout = await recordedCheckout(id, context)
-      if (!checkout) continue
-      const item = await held(id, checkout.workspace, checkout.registered)
+      // Concluding keeps a branch's commits; the warning still names them, since they have not landed.
+      if (!checkout?.registered) continue
+      const item = await changes(id, checkout.workspace)
       if (item.uncommitted || item.unlanded) result.push(item)
     }
     return result
@@ -528,23 +539,27 @@ export function workspaces(host: Host) {
     let item: KeptWork = { id, uncommitted: 0, unlanded: 0 }
     try {
       if (await listedBySource(workspace)) {
-        item = await changes(id, workspace)
+        item = await atRisk(id, workspace)
         if (item.uncommitted || item.unlanded) {
           await host.harness().commit(async (tx) => {
             ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)].state = 'ready'
           }, context)
           return item
         }
-        if (
-          (await git(workspace.path, 'rev-parse', 'HEAD')) !==
-          (await git(workspace.source, 'rev-parse', workspace.branch))
-        )
-          throw new Error(`Workspace #${id} no longer checks out its recorded branch tip`)
         // Never force: Git refuses uncommitted changes made since the status check.
-        await git(workspace.source, 'worktree', 'remove', workspace.path)
-      } else if (await onDisk(workspace.path))
-        // Release clears the leftover folder of its own checkout first; any other folder there is not ours to remove.
-        throw new Error(`Workspace path is not a registered checkout: ${workspace.path}`)
+        await removeCheckout(
+          await host.projectSettings(),
+          workspace.source,
+          workspace.path,
+          treeName(workspace.branch),
+        )
+      } else if (await onDisk(workspace.path)) {
+        // A process left running in the released checkout (a dev server) can re-create ignored state there; any
+        // other folder at the path is not ours to remove.
+        if (!(await onlyIgnored(workspace)))
+          throw new Error(`Workspace path is not a registered checkout: ${workspace.path}`)
+        await rm(workspace.path, { recursive: true, force: true })
+      }
       if (await git(workspace.source, 'branch', '--list', workspace.branch)) {
         const merged = await git(
           workspace.source,
@@ -648,13 +663,71 @@ export function workspaces(host: Host) {
     }
     return kept
   }
-  async function land(id: ConversationId, context: Context, own = false): Promise<LandResult> {
+  /**
+   * Remove checkouts in `<home>/worktrees` that no record of this chapter knows: an earlier chapter made them, and its
+   * concluded list is gone with it. Each must be a clean, registered worktree whose branch keeps its commits; one with
+   * uncommitted changes or detached commits stays. Configured checkout paths are left to their owner.
+   */
+  async function sweep(context: Context, signal?: AbortSignal) {
+    const directory = join(host.home, 'worktrees')
+    const names = await readdir(directory).catch((error: NodeJS.ErrnoException) => {
+      // No worktree was ever made in this home.
+      if (error.code === 'ENOENT') return []
+      throw error
+    })
+    if (!names.length) return []
+    const checkout = await isolatable(host.projectRoot)
+    if ('reason' in checkout) return []
+    const { source, target } = checkout
+    const index = await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
+    // Recorded checkouts and every source's lander checkout, which a configured layout may put in this folder.
+    const known = new Set([
+      ...Object.values(index?.items ?? {}).map((workspace) => workspace.path),
+      ...(await Promise.all(
+        [...new Set([source, ...Object.keys(index?.landerConversations ?? {})])].map(
+          async (lander) => landerPath(host.home, lander, await host.projectSettings()),
+        ),
+      )),
+    ])
+    const root = await realpath(directory)
+    const kept: string[] = []
+    for (const name of names) {
+      if (signal?.aborted) break
+      const path = join(root, name)
+      if (known.has(path)) continue
+      await serial(source, async () => {
+        const record = (await git(source, 'worktree', 'list', '--porcelain'))
+          .split('\n\n')
+          .map((lines) => lines.split('\n'))
+          .find((lines) => lines[0] === `worktree ${path}`)
+        // Not a worktree of this project: not ours to judge.
+        if (!record) return
+        const branch = record
+          .find((line) => line.startsWith('branch refs/heads/'))
+          ?.slice('branch refs/heads/'.length)
+        // A detached checkout counts its HEAD's commits not on the target as work only it holds.
+        const work = await atRisk(0 as ConversationId, { path, branch: branch ?? '', target })
+        if (work.uncommitted || work.unlanded) {
+          kept.push(path)
+          return
+        }
+        await git(source, 'worktree', 'remove', path)
+        if (branch && (await contains(source, branch, target)))
+          await git(source, 'branch', '-D', branch)
+      })
+    }
+    if (kept.length)
+      host.notice(`Kept ${kept.length} unrecorded worktrees with changes: ${kept.join(', ')}`)
+    return kept
+  }
+  /** Fast-forward subagent `id`'s source (its owner's worktree) to its tip; `subagent land` calls it. */
+  async function land(id: ConversationId, context: Context): Promise<LandResult> {
     const record = await get(id, context)
     if (!record) throw new Error('Conversation has no workspace')
     return serial(record.source, async () => {
       const workspace = (await get(id, context))!
       const source = workspace.source
-      await idle(id, context, own)
+      await idle(id, context)
       if (workspace.state !== 'ready') throw new Error(`Workspace is ${workspace.state}`)
       const dirty = await git(workspace.path, 'status', '--porcelain')
       if (dirty) throw new Error(`Worktree is dirty:\n${dirty}`)
@@ -677,8 +750,6 @@ export function workspaces(host: Host) {
         paths: [],
         files: [],
       }
-      /** Uncommitted work the fast-forward wrote over, if any; the landing still counts. */
-      let absorbed: string[] = []
       if (!integrated) {
         if (
           !(await git(source, 'merge-base', '--is-ancestor', head, tip).then(
@@ -703,8 +774,7 @@ export function workspaces(host: Host) {
         const needsRestart =
           (await realpath(source)) === (await realpath(host.ultimateRoot)) &&
           files.some(({ path }) => /^(server|shared)\//.test(path))
-        const landed = await fastForward(source, head, tip)
-        absorbed = landed.absorbed
+        await git(source, 'merge', '--ff-only', tip)
         result = {
           text: `Landed commits:\n${commits.join('\n')}\nChanged files:\n${files.map((file) => `${file.path} +${file.added} -${file.removed}`).join('\n')}${needsRestart ? '\nNeeds restart.' : ''}`,
           landed: tip,
@@ -714,14 +784,9 @@ export function workspaces(host: Host) {
           ...(needsRestart ? { needsRestart: true } : {}),
         }
       }
-      // The commit is on the branch either way, so record it first and only then report what it ran over.
       await host.harness().commit(async (tx) => {
         ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)].landed = tip
       }, context)
-      if (absorbed.length)
-        throw new Error(
-          `Landed, but the fast-forward wrote over uncommitted work in:\n${absorbed.join('\n')}\nRestore it and commit the restoration; the commit is already on ${workspace.target}.`,
-        )
       return result
     })
   }
@@ -743,8 +808,7 @@ export function workspaces(host: Host) {
     if ((await git(workspace.path, 'symbolic-ref', '--short', 'HEAD')) !== workspace.branch)
       throw new Error('Workspace branch changed')
     const tip = await git(workspace.path, 'rev-parse', 'HEAD')
-    const path = await landerPath(host.home, workspace.source)
-    const { change } = await landerAgent(host, context)
+    const path = await landerPath(host.home, workspace.source, await host.projectSettings())
     const subject = await host.need(ConversationsApi).subject(id, context)
     const result = await host.harness().commit(async (tx) => {
       const row = await tx.conversation(id)
@@ -773,7 +837,6 @@ export function workspaces(host: Host) {
         ...(subject ? { subject } : {}),
         steps: [],
       }
-      await configure(tx, lander, change)
       if (!queued) {
         await log(tx, lander, entry, { step: 'queued' })
         index.queue.push(entry)
@@ -786,7 +849,7 @@ export function workspaces(host: Host) {
         id: entry.id,
         position: position + 1,
         lander,
-        text: `Submitted ${tip.slice(0, 7)} as ${entry.id}, position ${position + 1} in the ${target} queue. The lander (conversation #${lander}) reports back here when it lands or fails; keep working.`,
+        text: `Submitted ${tip.slice(0, 7)} as ${entry.id}, position ${position + 1} in the ${target} queue. A failure comes back here; a landing reaches whoever started you and concludes you unless work is still under way. Log: lander conversation #${lander}.`,
       }
     }, context)
     host.harness().resume()
@@ -802,6 +865,12 @@ export function workspaces(host: Host) {
       workspace = (await get(id, context))!
       if (workspace.state === 'failed')
         return `Workspace setup failed: ${workspace.error}; fix the cause, then call a tool again to retry the setup`
+    }
+    if (workspace.state === 'removed') {
+      // A released checkout comes back on its first tool call, also mid-run.
+      const kept = await ready(id, context)
+      if (kept) return `Workspace is removed: ${kept.reason ?? 'its checkout keeps changes'}`
+      workspace = (await get(id, context))!
     }
     if (workspace.state !== 'ready')
       return `Workspace is ${workspace.state}: ${workspace.error ?? 'checkout is not ready; send a new input to retry'}`
@@ -924,7 +993,6 @@ export function workspaces(host: Host) {
     Lander,
     resume,
     standLander,
-    landerOwnsCheckout,
     started,
     get,
     unavailable,
@@ -933,6 +1001,7 @@ export function workspaces(host: Host) {
     pending,
     progress,
     release,
+    sweep,
     async create(tx: Tx, id: ConversationId, cwd: string) {
       if (
         !host.extensions().some((extension) => extension.name === 'workspaces' && extension.enabled)
@@ -943,17 +1012,28 @@ export function workspaces(host: Host) {
       const { source, target } = checkout
       const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
       if (index.items[String(id)]) throw new Error('Conversation already has a workspace')
-      await mkdir(join(host.home, 'worktrees'), { recursive: true })
-      const parent = await realpath(join(host.home, 'worktrees'))
+      const branch = `ultimate/${createHash('sha256').update(host.home).digest('hex').slice(0, 6)}-${id}`
+      let path = await treePath(await host.projectSettings(), treeName(branch))
+      if (!path) {
+        await mkdir(join(host.home, 'worktrees'), { recursive: true })
+        path = join(await realpath(join(host.home, 'worktrees')), String(id))
+      }
       index.items[String(id)] = {
-        path: join(parent, String(id)),
-        branch: `ultimate/${createHash('sha256').update(host.home).digest('hex').slice(0, 6)}-${id}`,
+        path,
+        branch,
         base: await git(source, 'rev-parse', `refs/heads/${target}`),
         source,
         target,
         state: 'preparing',
       }
-      await configure(tx, id, { cwd: index.items[String(id)].path })
+      // A project in a subfolder of its repository opens in the same subfolder of its checkout.
+      const below = relative(source, await realpath(cwd))
+      await configure(tx, id, {
+        cwd:
+          below === '..' || below.startsWith(`..${sep}`) || isAbsolute(below)
+            ? path
+            : join(path, below),
+      })
       await tx.createTask(
         Preparation,
         { id },
@@ -988,7 +1068,12 @@ export function workspaces(host: Host) {
       if (workspace.state === 'preparing') throw new Error('Workspace is preparing')
       if (workspace.state !== 'removed') {
         if (await listedBySource(workspace))
-          await git(workspace.source, 'worktree', 'remove', workspace.path)
+          await removeCheckout(
+            await host.projectSettings(),
+            workspace.source,
+            workspace.path,
+            treeName(workspace.branch),
+          )
         await host.harness().commit(async (tx) => {
           ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)].state = 'removed'
         }, context)

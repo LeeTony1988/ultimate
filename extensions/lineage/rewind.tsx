@@ -2,7 +2,7 @@
  * Going back to an entry in the browser: the "Go back to here" message action and its confirm dialog, the note card
  * the go-back leaves, and the marker on conversations that built on the set-aside path.
  */
-import { CornerUpLeftIcon, FileIcon, GitCommitIcon, GitForkIcon, UndoDotIcon } from 'lucide-react'
+import { FileIcon, GitCommitIcon, GitForkIcon, HistoryIcon } from 'lucide-react'
 import { useState } from 'react'
 import { MessageResponse } from '@/components/ai/message'
 import { Button } from '@/components/ui/button'
@@ -64,9 +64,7 @@ function Dependents({ dependents }: { dependents: readonly RewindDependent[] }) 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="mt-4">
-      <p className="mb-1.5 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase">
-        {title}
-      </p>
+      <p className="mb-1.5 section-label">{title}</p>
       {children}
     </div>
   )
@@ -189,7 +187,7 @@ export function GoBackAction({ entry }: { entry: EntryRecord }) {
         title="Go back to here"
         type="button"
       >
-        <CornerUpLeftIcon />
+        <HistoryIcon />
       </button>
       {open && <GoBackDialog entry={entry} onClose={() => setOpen(false)} />}
     </>
@@ -215,7 +213,7 @@ export function Rewound({ entry }: { entry: EntryRecord }) {
       card={entry.id}
       summary={
         <>
-          <UndoDotIcon className="size-3 shrink-0 text-brand" />
+          <HistoryIcon className="size-3 shrink-0 text-brand" />
           <span className="shrink-0">
             Went back to #{entry.conversationId}/{at} · {files.length} file
             {files.length === 1 ? '' : 's'} changed
@@ -225,7 +223,7 @@ export function Rewound({ entry }: { entry: EntryRecord }) {
     >
       <Card data-lineage-rewound={at}>
         <header className="flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
-          <UndoDotIcon className="size-3.5 shrink-0 text-brand" />
+          <HistoryIcon className="size-3.5 shrink-0 text-brand" />
           <span className="shrink-0 text-foreground">
             Went back to #{entry.conversationId}/{at}
           </span>
@@ -295,7 +293,7 @@ export function RewoundDependent({ entry }: { entry: EntryRecord }) {
       type="button"
     >
       <span className="flex max-w-[80%] min-w-0 items-center gap-1.5">
-        <UndoDotIcon className="size-3 shrink-0" />
+        <HistoryIcon className="size-3 shrink-0" />
         <span className="shrink-0">Built on a rewound path ·</span>
         <ConversationRef id={from} />
         <span className="shrink-0">went back to /{at}</span>

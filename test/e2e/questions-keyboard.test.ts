@@ -1,5 +1,6 @@
 // Answers a three-question card in a real browser with only the keyboard: letter keys choose, ↑/↓ move between
 // questions, Enter sends; the reply reaches @ultimate in the message's own numbering, with the note field's text after it.
+// Leaving the page inside the undo window still sends the answer.
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
@@ -49,7 +50,7 @@ afterEach(async () => {
   for (const close of cleanup.splice(0).toReversed()) await close()
 })
 
-it('answers a decisions card with letters, arrows and Enter', async () => {
+async function openCard() {
   const home = await temp('ultimate-questions-keys-')
   cleanup.push(() => removeTemp(home))
   const server = await fauxServer({
@@ -96,6 +97,11 @@ it('answers a decisions card with letters, arrows and Enter', async () => {
   await page.goto(`${server.url}/?conversation=${ultimate}`)
   const card = page.locator(`[data-questions-card="message:${asked.id}"]`)
   await card.locator('fieldset').nth(2).waitFor()
+  return { conversation, log, ask, asked, page, card }
+}
+
+it('answers a decisions card with letters, arrows and Enter', async () => {
+  const { conversation, log, ask, asked, page, card } = await openCard()
   // The composer takes focus on desktop and keeps its keys; the card takes them once the user leaves it.
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
   // Question 1: b; down to 2: a; down to 3: b; back up twice and change 1 to c.
@@ -151,4 +157,16 @@ it('answers a decisions card with letters, arrows and Enter', async () => {
     (await log())?.messages.find((m) => m.re === second.id && m.from === 'user')
   await until(async () => !!(await picked()))
   expect((await picked())!.text).toMatch(/^1a\. .+\n\n2a\. .+\n\n3a\. Land it: yes$/)
+})
+
+it('sends a held answer when the page is left inside the undo window', async () => {
+  const { log, asked, page, card } = await openCard()
+  await card.getByRole('button', { name: 'Accept picks' }).click()
+  await card.getByRole('button', { name: 'Send', exact: true }).click()
+  await card.getByRole('button', { name: 'Undo' }).waitFor()
+  await page.goto('about:blank')
+  const answer = async () =>
+    (await log())?.messages.find((m) => m.re === asked.id && m.from === 'user')
+  await until(async () => !!(await answer()))
+  expect((await answer())!.text).toMatch(/^1a\. .+\n\n2a\. .+\n\n3a\. Land it: yes$/)
 })

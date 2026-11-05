@@ -6,27 +6,21 @@ Start a subagent with `isolate: "worktree"` (the worker default) to give its too
 
 ### Main-agent final integration
 
-Coordinator branches started by @ultimate are isolated in their own worktrees by default.
+Coordinator branches started by @ultimate are isolated in their own worktrees by default: under `<home>/worktrees`, or
+where the project's `isolates.worktree.path` says, made by its `add` and `remove` commands when set
+(`extensions/workspaces/README.md`). A branch started in a subfolder of the repository works in that subfolder.
 `workspace status` shows its tip and the original checkout's tip.
 Read worker reports and diffs; rerun checks only for missing or thin evidence, reported failures, changes crossing
 workers, `server/` or `shared/` changes, or surprises in the diff, then land and call `workspace submit`.
-The lander is the final gate: it runs every configured check (here `pnpm check`, then `pnpm test` and `pnpm test:e2e` in parallel) on the merged result
-and reports back, landed or not, with findings.
-It fixes small failures when the project configures it to; on success it fast-forwards the branch and pushes to
-`lander.push` (here `origin`), so keep working while it runs.
-Its progress shows live on the submit tool card, with expandable steps, and its report as an outcome card, both in
-the submitting conversation; the source's @lander conversation, pinned in the sidebar's agents group, keeps
-the full log and shows as working in the Agents tab while it lands. It runs the `lander` agent
-definition: here `.ultimate/agents/lander.md` with `onFailure: fix`, so a conflict or a twice-failing check is
-resolved and committed by its model, every check runs again, and only then does it land and push. Talk to it in its
-conversation about the queue and recent landings.
-
-On this Windows host the lander cannot run the project's gate (`pnpm test` broad-fails and exceeds its check
-timeout). Land with the `wsl-gate` skill (`skills/wsl-gate/SKILL.md`): a clean ext4 clone in WSL, the full gate at
-the base and after every merge, a Git bundle, then a fast-forward and push from Windows. Never push from WSL.
-
-`workspace land` is the synchronous alternative: it only fast-forwards, refuses moved or diverged targets, and never
-rebases or pushes. Unrelated dirty files in the original checkout block neither.
+The lander is the final gate and the only way to main: code, no model. It runs every configured check (here
+`pnpm check`, then `pnpm test` and `pnpm test:e2e` in parallel) on the merged result, a failing check once more, then
+fast-forwards the branch and pushes to `lander.push` (here `origin`), so keep working while it runs.
+A conflict or a check that failed twice comes back to the submitter as a waking report: fix it in the workspace (a
+flaky test at its cause, or delete it) and submit again. A landing is the end of the branch's work: its report is a
+note in the branch, the branch is concluded unless work is still under way (a subagent, a reply it waits for, queued
+input), whoever started it wakes with the landing card, and the concluded branch's checkout is freed.
+Its progress shows live on the submit tool card, with expandable steps, and its report as an outcome card; the
+source's @lander conversation, pinned in the sidebar's agents group, keeps the full log and takes no input.
 For `server/` or `shared/` changes, an authorized `restart` works once the running clone is clean at the landed commit.
 
 ### Standing permission to push this repository
@@ -34,8 +28,8 @@ For `server/` or `shared/` changes, an authorized `restart` works once the runni
 The user authorizes the top-level agent to commit verified changes, land them, and push the destination branch
 (normally `main`) to this repository's GitHub remote, `origin` (`HazAT/ultimate`), without asking again. This permission
 applies to this repository whether public or private, not to other repositories. `workspace submit` covers this: the
-lander pushes after its checks because `lander.push` is set. After a synchronous `workspace land`, which never pushes,
-push the landed branch explicitly (for example, `git -C <clone> push origin main`). Subagents commit and report; only the top-level agent pushes after verification and integration.
+lander pushes after its checks because `lander.push` is set. Subagents commit and report; only the top-level agent
+submits.
 
 Use normal, non-force pushes only. Remote advancement or a non-fast-forward rejection is normal: fetch, inspect the
 incoming log and diff, and merge non-destructively in an isolated workspace, preserving both histories. Rerun checks,

@@ -1,4 +1,11 @@
-import { BrainIcon, CheckIcon, KeyRoundIcon, LogInIcon, TerminalIcon } from 'lucide-react'
+import {
+  BrainIcon,
+  CheckIcon,
+  KeyRoundIcon,
+  LayersIcon,
+  LogInIcon,
+  TerminalIcon,
+} from 'lucide-react'
 import { Fragment, useMemo, useState } from 'react'
 import {
   Command,
@@ -10,7 +17,18 @@ import {
 } from '@/components/ui/command'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Kbd } from '@/components/ui/kbd'
-import { cn, errorMessage, useDialog, useUltimate } from '@/sdk'
+import { api, cn, errorMessage, useDialog, useUltimate } from '@/sdk'
+import { familyTitle } from '../../lib/families.ts'
+import {
+  agentsPanel,
+  FamilyDot,
+  familyOf,
+  modelIdOf,
+  runsOn,
+  thinkingOf,
+  useFamilies,
+} from './families.tsx'
+import type { FamilyView } from './refs.ts'
 import {
   authLabel,
   dialogs,
@@ -57,6 +75,7 @@ export function ModelRow({
         </span>
       )}
       <span className="ml-auto flex shrink-0 items-center gap-3 pl-3 text-[11px] text-muted-foreground tabular-nums">
+        {model.provider === 'anthropic' && <span className="text-warning/80">paid API</span>}
         {model.reasoning ? (
           <span
             className="flex items-center gap-1"
@@ -83,7 +102,8 @@ export function ModelRow({
 export function ModelPicker() {
   const [open, setOpen] = useDialog(dialogs.picker)
   const actions = useUltimate()
-  const { id, ref, models, loading } = useCurrentModel(usePickerTarget())
+  const { id, ref, thinking, models, loading } = useCurrentModel(usePickerTarget())
+  const families = useFamilies()
   const [query, setQuery] = useState('')
   const [error, setError] = useState<string>()
   const providers = useMemo(
@@ -94,9 +114,15 @@ export function ModelPicker() {
     const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
     const all = models?.models ?? []
     // Without a query: what can run now. With one: everything that matches, runnable and direct matches first
-    // (`claude-opus-4-8` before a reseller's `eu.anthropic.claude-opus-4-8`).
+    // (`claude-opus-4-8` before a reseller's `eu.anthropic.claude-opus-4-8`). A Claude model Claude Code also offers
+    // lists it before the paid Anthropic API even while logged out, so Enter never picks the paid one by accident.
+    const claude = new Set(
+      all.filter((model) => model.provider === 'claude-code').map((model) => model.id),
+    )
+    const twin = (model: ModelInfo) => claude.has(model.id)
     const rank = (model: ModelInfo) =>
-      (model.available ? 0 : 2) +
+      (model.available || (model.provider === 'claude-code' && terms.length) ? 0 : 2) +
+      (model.provider === 'anthropic' && twin(model) ? 0.5 : 0) +
       (terms.length && !model.id.toLowerCase().startsWith(terms[0]) ? 1 : 0)
     const found = (
       terms.length
@@ -107,6 +133,12 @@ export function ModelPicker() {
       .slice(0, LIMIT)
     return [...Map.groupBy(found, (model) => model.provider)]
   }, [models, query])
+  const current = familyOf(families, ref, thinking)
+  const shownFamilies = (families?.families ?? []).filter((family) => {
+    const haystack = `${family.name} ${runsOn(family) ?? ''} ${thinkingOf(family) ?? ''}`
+    const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
+    return runsOn(family) && terms.every((term) => haystack.toLowerCase().includes(term))
+  })
   const total = models?.models.length ?? 0
 
   function choose(model: ModelInfo) {
@@ -125,6 +157,23 @@ export function ModelPicker() {
       () => setOpen(false),
       (failure: unknown) => setError(errorMessage(failure)),
     )
+  }
+
+  /** A family's model and thinking level for this conversation; a model without a login opens its login first. */
+  function chooseFamily(family: FamilyView) {
+    const name = runsOn(family)!
+    const [provider, modelId] = [name.slice(0, name.indexOf('/')), modelIdOf(name)]
+    const model = models?.models.find((m) => m.provider === provider && m.id === modelId)
+    if (loading) return
+    if (model && !model.available) return choose(model)
+    setError(undefined)
+    const level = thinkingOf(family)
+    api
+      .configure({ model: { provider, modelId }, ...(level ? { thinkingLevel: level } : {}) }, id)
+      .then(
+        () => setOpen(false),
+        (failure: unknown) => setError(errorMessage(failure)),
+      )
   }
 
   return (
@@ -148,7 +197,7 @@ export function ModelPicker() {
           setup; other models you are not logged in for open the login.
         </DialogDescription>
         <Command
-          className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10.5px] [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:uppercase"
+          className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:section-label"
           defaultValue={ref ? `${ref.provider}/${ref.modelId}` : undefined}
           shouldFilter={false}
         >
@@ -162,6 +211,29 @@ export function ModelPicker() {
             <CommandEmpty className="py-6 text-center text-[12px] text-muted-foreground">
               No model matches. Log in to a provider to see its models.
             </CommandEmpty>
+            {shownFamilies.length > 0 && (
+              <CommandGroup heading="Families">
+                {shownFamilies.map((family) => (
+                  <CommandItem
+                    className="gap-2 py-1 font-mono text-[12px]"
+                    key={family.name}
+                    onSelect={() => chooseFamily(family)}
+                    value={`family/${family.name}`}
+                  >
+                    <CheckIcon
+                      className={cn('size-3.5', current === family ? 'text-brand' : 'opacity-0')}
+                    />
+                    <FamilyDot color={family.color} />
+                    <span className="shrink-0 font-sans text-foreground">
+                      {familyTitle(family.name)}
+                    </span>
+                    <span className="ml-auto truncate pl-3 text-[11px] text-muted-foreground">
+                      {[modelIdOf(runsOn(family)!), thinkingOf(family)].filter(Boolean).join(' · ')}
+                    </span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            )}
             {groups.map(([provider, items]) => (
               <Fragment key={provider}>
                 <CommandGroup
@@ -179,6 +251,20 @@ export function ModelPicker() {
               </Fragment>
             ))}
             <CommandGroup heading="Accounts">
+              <CommandItem
+                className="gap-2 py-1 font-mono text-[12px]"
+                onSelect={() => {
+                  setOpen(false)
+                  actions.openPanel(agentsPanel)
+                }}
+                value="families"
+              >
+                <LayersIcon className="size-3.5" />
+                Model families…
+                <span className="ml-auto text-[11px] text-muted-foreground">
+                  each agent's family and model
+                </span>
+              </CommandItem>
               <CommandItem
                 className="gap-2 py-1 font-mono text-[12px]"
                 onSelect={() => openLogin({ ...actions, conversationId: id })}
@@ -221,22 +307,20 @@ function ProviderHeading({ id, provider }: { id: string; provider: ProviderInfo 
     <span className="flex items-center gap-2">
       {id}
       {provider && provider.name !== id && (
-        <span className="truncate tracking-normal normal-case text-muted-foreground/60">
-          {provider.name}
-        </span>
+        <span className="truncate text-muted-foreground/60">{provider.name}</span>
       )}
       {label ? (
-        <span className="ml-auto tracking-normal normal-case text-success/80">
+        <span className="ml-auto text-success/80">
           ✓ {label}
           {provider?.isUsingSubscription ? ' · subscription' : ''}
         </span>
       ) : id === 'claude-code' ? (
-        <span className="ml-auto flex items-center gap-1 tracking-normal normal-case text-warning/80">
+        <span className="ml-auto flex items-center gap-1 text-warning/80">
           <TerminalIcon className="size-3" />
           external setup · ↵ opens setup
         </span>
       ) : (
-        <span className="ml-auto flex items-center gap-1 tracking-normal normal-case text-warning/80">
+        <span className="ml-auto flex items-center gap-1 text-warning/80">
           <KeyRoundIcon className="size-3" />
           not logged in · ↵ logs in
         </span>

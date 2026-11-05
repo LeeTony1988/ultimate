@@ -3,92 +3,40 @@ for @ultimate and the dream branch, is in [DREAM.md](DREAM.md); this file is the
 
 ## Flow
 
-1. The user presses **Dream** (Memory surface header or ⌘K "Dream…"). The modal shows what blocks a start, live from the
-   conversation list and `dream.sessions`: conversations at work besides @ultimate, or a session still open. The
-   session's started card has End session until its journal is filed, so a dream that stopped early never blocks the
-   next one.
-2. User-only `start` refuses the same way (and while a request already waits), records a handoff request as
-   `waiting` in `dream.sessions` on conversation 1 and asks @ultimate for its handoff with a `dream.handoff` input
-   (below, "Dream before compaction"). Once the handoff is recorded (or 30 minutes passed) and nothing else works, the
-   request's wait records session N and submits a `dream.started` input to @ultimate (request id `dream.started:N`, a
-   follow-up when it is busy). Each input goes through a `dream.deliver` task created in the commit of the state it
-   announces, so a crash cannot strand a request or a session.
-3. @ultimate starts one branch that runs the six passes (memory, failures, tools, corrections, codify, project) as
-   `dream-pass` subagents (`agents/dream-pass.md`), reporting each with `pass`. Its first report names it the
-   session's `dreamer`.
-4. The branch files the journal with `journal`: exactly three `learned` lines, Markdown `text` and the proposals. It
-   writes once per session: a second call, even after the session ended, returns the filed journal. A passive
-   `dream.journal` entry (request id `dream.journal:N`, delivered the same way) goes into @ultimate's conversation;
-   its model text lists the proposal ids.
-5. The branch answers @ultimate with a `Decisions:` block. @ultimate records each decision with `decide`: `approved`
-   with the branch doing it, `applied` (a memory change it made with `remember`), `rejected`, or `landed` with the
-   commit `sha` when the branch landed outside the lander.
-6. Reactor `dream/landed` marks approved proposals `landed` with the sha when their branch's submission lands. A
-   session ends once its journal is filed and no proposal is open or approved; the user can `end` it earlier.
+A dream is ordinary work; code keeps only which branch is the dream, so its end can show the user Fall asleep:
 
-The session flow does not edit code or memory. Once its journal is filed and every proposal is settled, the user can
-call `asleep { session, name? }` to start a new chapter. The name defaults to the journal's proposed `chapter`.
+1. **Asked for.** The user tells @ultimate to dream, presses **Dream** (Memory surface header or ⌘K "Dream…"; user-only
+   `start` gives @ultimate a `dream.requested` input), or a built-in automation fires (below).
+2. **Dreamed.** In that turn @ultimate writes its handoff into the prompt of one dream branch, which runs the six
+   passes as `dream-pass` subagents (`agents/dream-pass.md`) and answers with its journal and a `Decisions:` block.
+   The `dream-branch` reactor reads each `lineage.branched` event, from the start of the log: a branch @ultimate
+   started in a turn that answered a `dream.requested` entry newer than the last dream's (its stamp's entry, read back
+   to the turn's start) becomes `dream.next.dream { branch, requested, at }`.
+3. **Decided.** @ultimate weighs in and the dream branch asks the user with a questions card; approved ones become ordinary branches or
+   `remember` batches.
+4. **Woke.** Once the dream branch is concluded, the sidebar (`awake.tsx`) and the status line show "The dream is
+   done" with **Fall asleep…**, until a chapter is prepared after it or the user dismisses it (user-only `dismiss`).
+   Fall asleep calls user-only `ready`, which wakes @ultimate with a `dream.ready` input asking it to prepare.
+5. **Prepared.** @ultimate calls `prepare {chapter, learned, handoff}`: the chapter's name, three learned lines and a fresh handover (at most 12,000 characters). It is kept in
+   `dream.next` on conversation 1 and shows as the `dream.prepared` card in @ultimate's conversation, pinned in the
+   status line until it is slept into. A second `prepare` replaces it.
+6. **Asleep.** The user presses Fall asleep on the card (`asleep`, below).
 
-## Dream before compaction
+### Built-in triggers
 
-When @ultimate's context passes 70%, it writes a handoff while it still remembers everything, and then a dream starts
-by itself (`before-compaction.ts`). Dream ships the trigger as an ordinary context automation, **Dream before
-compaction** (`condition {metric: 'context', of: '@ultimate', above: 70}`, subscriber @ultimate), made once per
-chapter when the harness opens or @ultimate first starts; its id is kept in `dream.after-compaction` on conversation 1
-(the kind keeps its first name). It shows in the Automations panel like any other: the threshold is edited there,
-pausing it stops the dreams, deleting it is remembered (dream does not make it again), and a new chapter makes it
-again only as the seed carried it (`builtIn`; paused stays paused). As any condition it fires once, re-arms 10 points
-below the threshold and waits an hour between fires. `@ultimate` resolves to @ultimate's conversation, so it follows
-@ultimate across chapters.
+Dream ships two ordinary context automations that subscribe @ultimate (`built-ins.ts`): **Dream before compaction**
+(`condition {metric: 'context', of: '@ultimate', above: 70}`) and **Dream after a pause** (`above: 50, idleFor:
+8 h`; at 8 hours keep-warm has just renewed the prompt cache, so the handoff reads it instead of rewriting it). Each
+is made once per chapter when the harness opens or @ultimate first starts; their ids are kept in
+`dream.after-compaction` and `dream.after-pause` on conversation 1. They show in the Automations panel like any other:
+thresholds are edited there, pausing one stops its dreams, deleting one is remembered (dream does not make it again),
+and a new chapter makes them again as the seed carried them (`builtIn`, `builtInPause`; paused stays paused). A lost
+create's receipt is found by name and trigger target, never by threshold or subscribers, so none is made twice. As
+any condition, each fires once, re-arms 10 points below its threshold and waits an hour between fires.
 
-Beside it dream ships **Dream after a pause** (`condition {metric: 'context', of: '@ultimate', above: 50, idleFor:
-8 h}`), kept the same way in `dream.after-pause` and carried as the seed's `builtInPause`. It dreams while the user is
-away: at 8 hours keep-warm has just renewed the prompt cache, so the handoff reads @ultimate's context instead of
-rewriting it, and the user's next message goes to a lean chapter instead of re-reading half a million tokens on every
-request. Its fire records the pause (`waiting.automation.pause`, then `beforeCompaction.pause`, ms); once its session
-settles it always asks (`result: 'ask'`, whatever `dream.asleepAfter` says), and the settled card leads with "A good
-moment for a fresh chapter" and "Dreamed while you were away 9 h". The user taps Fall asleep themselves.
-
-The automation from before this feature, **Dream after compaction** (an event on `conversations.compacted where
-conversation=@ultimate`), is migrated in place by `ensureAutomation` through automations' `update`, which may now
-switch a schedule, event or condition to another of these: same id, enabled state and subscribers. A lost
-receipt is found by name and trigger target (the new name with a condition on `@ultimate`, or the old name and exact
-event), never by threshold or subscribers, so it is never made twice.
-
-- **Handoff.** Reactor `dream/after-compaction` sees `automations.fired` of that automation only (its id in dream's own
-  document) and, unless a request already waits, a session is open, a sleep is under way or a chapter change holds the
-  lock, records `waiting {at, task, automation}` in `dream.sessions` and a durable `dream.handoff-wait` task in one
-  commit with a `dream.handoff` entry for @ultimate (request id `dream.handoff:<task>`). The fire's own
-  `automations.fired` input wakes @ultimate, so this entry is a passive write read in that run: the handoff costs one
-  turn (a second input would start a second run). The user's Dream button takes the same path without `automation`,
-  and there the `dream.handoff` entry is the input that wakes @ultimate. A wait saved by the old event trigger
-  (`dream.after-compaction` task) ends at once; stored sessions migrate `afterCompaction` to `beforeCompaction`
-  (`dream.sessions` version 2). @ultimate records the
-  handoff with `handoff {text}` (nonempty, at most 12,000 characters; a later call replaces it while the request
-  waits).
-- **Start.** The wait looks every 15 seconds. It starts the session through `startDreamIn` once the handoff is
-  recorded, or 30 minutes after the request without one, and no top-level conversation other than @ultimate works
-  (every refusal of the Dream button applies). The session records `handoff {task, text, at}` or `{task, missing}`
-  and, for the automation, `beforeCompaction {automation, name, at}`; the `dream.started` input and card
-  say whether the handoff came. Two hours after the request the wait gives up (`waiting.gaveUp`, kept until the note
-  is left, so a crash in between leaves it on the next look) and leaves @ultimate a quiet note through lineage's
-  `leaveNote`; a paused or deleted automation ends it. The user decided this read-only analysis runs by default; the
-  user-only `start` stays user-only.
-- **Deciding.** The user decides the proposals, as for any dream; only during a hands-off goal does @ultimate decide
-  them in the user's place, recording each with `decide {…, reason}` (the journal shows it). The rule lives in
-  DREAM.md and `agents/ultimate.md`.
-- **Worth a fresh chapter?** When the session settles (the journal filed and every proposal rejected, applied or
-  landed; through `journal`, `decide` or a landing), a `dream.settled` task counts its changes: proposals `landed` or
-  `applied`. Below `dream.asleepAfter` (settings, project over user, default **5**) we stay in this chapter, and a
-  normal compaction comes later. At or above it, @ultimate is asked to ask the user, and the `dream.settled` card
-  carries the Fall asleep section. The outcome is kept as `beforeCompaction.outcome`; only `ask` wakes @ultimate,
-  `stay` is a passive entry. A session the user ended early never settles this way. Nothing here switches chapters
-  without the user's tap.
-- **Continuing.** The seed of a session that asked for a handoff carries it as `continues.handoff`; without one (the
-  30 minutes passed) it carries @ultimate's newest compaction summary as `continues.summary` (Pi's wrapper and the
-  project memory lineage appends stripped, cut at 12,000 characters). Either is at most 12,000 characters, about 3k
-  tokens, beside the 6,000-token memory brief; a handoff is never cut, its limit is enforced when recorded. The new
-  chapter's wake-up entry quotes it and tells @ultimate to continue that work.
+A fire's own input wakes @ultimate; reactor `dream/requested` adds a passive `dream.requested` entry beside it (request
+id `dream.requested:<automation>:<fire>`), which says what a dream is and where its workflow lives, so the fire costs
+one turn.
 
 ## Chapters
 
@@ -112,57 +60,59 @@ made active again (`lib/chapters.ts`).
 
 ### Seed
 
-`seed.ts` builds a JSON manifest with `buildSeed(host, session)` and atomically writes it with
-`writeSeed(chapterDir, seed)` to `seed.json`. It carries the journal and proposal statuses, every root's memories
-(slug collisions keep the newest `updated`, including `about-*`), open to-dos and questions, and enabled automations
-and scripts, with counts for the later gate. The built-in Dream before compaction automation is not among them: the seed
-says only whether it was enabled (`builtIn`), and the new chapter makes its own. Conversation docs are read through the host's exported tokens;
-both trigger kinds are read through the single automations list action. Enabled schedule records keep name, optional prompt, schedule and run profile, but no subscribers: conversation ids do not survive a chapter. Schedules without a prompt become recreation to-dos.
+`seed.ts` builds a JSON manifest with `buildSeed(host, prepared)` and atomically writes it with
+`writeSeed(chapterDir, seed)` to `seed.json`. It carries the prepared learned lines and handover (`continues`), every
+root's memories (slug collisions keep the newest `updated`; a lost `about-*` memory fails the seed), open to-dos and
+questions, and enabled automations and scripts, with counts. The built-in dream automations are not among them: the
+seed says only whether each was enabled, and the new chapter makes its own. Conversation docs are read through the
+host's exported tokens; both trigger kinds are read through the single automations list action. Enabled schedule
+records keep name, optional prompt, schedule and run profile, but no subscribers: conversation ids do not survive a
+chapter. Schedules without a prompt become recreation to-dos.
 
 On open, dream applies a chapter's seed in one commit with `dream.seed.applied` on conversation 1: memories keep
 their sources, to-dos get fresh ids, questions become user-owned to-dos naming the old chapter and message id, and a
-`dream.deliver` task writes one passive `dream.chapter` entry into @ultimate's conversation. Its text names the old
-chapter's read APIs, the three learned lines and the carried counts. Reopening does not reapply those documents.
+`dream.deliver` task wakes @ultimate with one `dream.chapter` input (the morning card). Its text names the old
+chapter's read APIs, the three learned lines, the carried counts and the handover, and tells @ultimate to continue
+that work. Reopening does not reapply those documents.
 
 Automations are recreated through their create action after the commit, with per-name receipts in `dream.seed`.
 A seed carries at most one enabled automation per name: building rejects duplicates. The destination starts empty;
 before each create, dream checks existing names, so a create committed just before a crash is not repeated when its
-receipt is missing. Seed application must finish before users create unrelated automations with matching names.
-Project scripts are rediscovered, stopped, from trusted `.ultimate/automations` manifests by automations'
-own open hook. There is no user-script adoption path: each enabled user script becomes an
-@ultimate-owned “Recreate script” to-do rather than a fabricated ledger record.
+receipt is missing. Project scripts are rediscovered, stopped, from trusted `.ultimate/automations` manifests by
+automations' own open hook; each enabled user script becomes an @ultimate-owned "Recreate script" to-do.
 
 ### Fall asleep and switch
 
-`asleep` refuses without a journal, with open or approved proposals, or while other top-level conversations besides
-@ultimate are busy. Names use `chapterName`; an existing name must use `switch`, never overwrite its seed. Chapter
-changes are serialized. Each progress update commits separately on the session as `sleep`: `seeding`, `checking`,
-`backing up`, `switching`, or `failed`, with the gate checks, backup id or skip reason, error, and timestamp.
+User-only `asleep { name? }` refuses without a prepared chapter, while any top-level conversation is busy (@ultimate
+included: a switch parks whatever is live, and parked work keeps the chapter left behind from being switched back to),
+or when the name (default: the prepared one) already exists; an existing chapter is reached with `switch`. Chapter
+changes are serialized. Each step commits as `sleep` in `dream.next`: `seeding`, `backing up`, `switching`, or
+`failed`, with the backup id or skip reason, error and timestamp.
 
-The gate writes a real seed and switch journal in a temporary home, starts it through optional `InstanceApi`, and
-reads its HTTP actions without a model: root memories, open to-dos (including questions and user scripts),
-automations, @ultimate's `dream.chapter` entry, and the memory brief's tokens. Passive delivery gets up to ten
-seconds to settle. Lineage only publishes `briefTokens` once a root has branched, so the gate uses `estimateTextTokens`
-on the fresh root's index and read instructions (the `memoryBrief` format, with no recent landings); a regression test
-compares the formats. Memory briefs have no lineage cap, so the gate uses **6000 tokens**, matching lineage's tally
-catch-up envelope. The instance always stops and the scratch home is removed. A failed gate gets exactly one seed rebuild and recheck; two failures stay in the current chapter.
+After the seed is built, optional `CloudApi` takes a final non-forced backup of the current chapter. Missing, off or
+local-only cloud records why it was skipped; a configured backup failure aborts. Idleness is checked again, the seed
+is written in the destination, the switch journaled and the host restarted; the restart's approval checks idleness
+once more and holds the scheduler. A restart failure removes the pending journal and records `failed`; the seed stays
+for a retry. No action performs a real switch in its caller. On open, a sleep left `switching` becomes `asleep` when
+its chapter exists, else `failed`; one a restart stopped earlier becomes `failed`.
 
-After the gate passes, optional `CloudApi` takes a final non-forced backup of the current chapter. Missing, off or
-local-only cloud records why it was skipped; a configured backup failure aborts. Only then is the seed written in
-the real destination, the switch journal requested, and the host restarted. A restart failure removes the pending
-journal and records `failed`; the seed remains available to retry. No action performs a real switch in its caller.
+Once the new chapter has applied its seed, its open starts the chapter's first cloud backup in the background, when
+`CloudApi` reports backups on (not off, satellite or local-only) and the chapter has no backup yet: none recorded in
+its `cloud-backup.json`, none in the Worker's register (a backup registered just before a restart). Every open of a
+seeded chapter checks again, so a backup a restart cut short runs on the next open, and one @ultimate already took
+stands in for it; cloud's one-at-a-time lock refuses a second concurrent upload. Failures arrive as cloud's own notice.
+
+If the new chapter is off, the morning card's Discard path offers **Back to** the previous chapter, which stays as it
+was left.
 
 `chapters` returns `{ active, number, newest, chapters: [{ name, number, createdAt? }] }`. User-only `switch { chapter }`
 refuses active or unknown names, busy conversations here, and targets with work in flight (`requestChapter`). It
-journals and restarts without building a seed or backing up. A failed restart removes its pending journal and throws.
-A successful restart never returns: the new host opens the requested chapter.
+backs up and restarts without building a seed. A failed restart removes its pending journal and throws. A successful
+restart never returns: the new host opens the requested chapter.
 
 ## Actions
 
-`refs.ts` holds the documents and actions: `start`, `end`, `asleep`, `switch` (user-only), `chapters`, `pass`, `journal`, `decide` (status plus `branch`, `sha` for a landing outside the lander, and an optional one-line `reason`),
-and `stats`, which reads tool calls from `<home>/trace.sqlite` read-only: calls, failures and mean duration per tool,
-the 20 most frequent errors, and enabled tools never called in the trace's window (7 days or 200k rows). A deferred
-tool is left out of `unused`: `tool_search` hides it until it loads it, so not calling it says nothing.
-
-On open, a sleep a restart stopped during its gates (`seeding`, `checking`, `backing up`) becomes `failed`: nothing
-switched, and Fall asleep can be tried again.
+`refs.ts` holds the document and actions: `start`, `ready`, `dismiss`, `asleep`, `switch` (user-only), `prepare`,
+`chapters`, and `stats`,
+which reads tool calls from `<home>/trace.sqlite` read-only: calls, failures and mean duration per tool, the 20 most
+frequent errors (each with its two newest calls as `#<conversation>/<entry>` and the start of its args), and enabled tools never called in the trace's window (7 days or 200k rows).

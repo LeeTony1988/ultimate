@@ -4,14 +4,20 @@ import { createApi } from '../../web/src/sdk/api.ts'
 import { createStore } from '../../web/src/sdk/store.ts'
 import { createTestHook } from '../../web/src/sdk/test-hook.ts'
 import type { ConversationSummary } from '../../shared/protocol.ts'
-import { FakeSource } from './fake-source.ts'
+import { FakeSource, fakeSubscriptions } from './fake-source.ts'
 
-beforeEach(() => vi.useFakeTimers())
+beforeEach(() => {
+  vi.useFakeTimers()
+  sessionStorage.clear()
+})
 afterEach(() => vi.useRealTimers())
 
 function setup() {
   const sources: FakeSource[] = []
-  const fetch = vi.fn<typeof globalThis.fetch>(async () => Response.json({ submissionId: 9 }))
+  const server = fakeSubscriptions(sources)
+  const fetch = vi.fn<typeof globalThis.fetch>(
+    async (path, init) => server.handle(path as string, init) ?? Response.json({ submissionId: 9 }),
+  )
   const store = createStore({
     eventSource: (url) => {
       const source = new FakeSource(url)
@@ -24,7 +30,7 @@ function setup() {
   const hook = createTestHook(store, createApi(store, { fetch }))
   const main = sources[0]
   main.open()
-  main.send('view', {
+  server.of()!.send('view', {
     conversation: { id: 1 },
     entries: [],
     docs: {},
@@ -58,6 +64,22 @@ it('until idle waits for the sent turn, not the idle state before it starts', as
   expect(await waiting).toEqual({ conversation: 1 })
 })
 
+it('a page reloaded after a send still waits for the sent turn, without sending again', async () => {
+  const first = setup()
+  await first.hook.send('hello')
+  // The reload: a new store and hook, with only sessionStorage carried over.
+  const { hook, list, fetch } = setup()
+  let done = false
+  const waiting = hook.until('idle').then(() => (done = true))
+  list(false)
+  await vi.advanceTimersByTimeAsync(10)
+  expect(done).toBe(false)
+  list(true)
+  list(false)
+  await waiting
+  expect(fetch).not.toHaveBeenCalledWith('/api/conversations/1/submit', expect.anything())
+})
+
 it('until idle counts a turn too short to show busy by its answer, and times out naming what is busy', async () => {
   const { hook, list } = setup()
   await hook.send('quick')
@@ -70,4 +92,14 @@ it('until idle counts a turn too short to show busy by its answer, and times out
   const late = hook.until('idle', { timeoutMs: 1000 }).catch((error: unknown) => error)
   await vi.advanceTimersByTimeAsync(1000)
   expect(String(await late)).toContain('Timed out after 1s: #1 is still busy')
+})
+
+it('exposes the page api, so a driven page sets up state with one call', async () => {
+  const { hook, fetch } = setup()
+  await hook.api.configure({ model: { provider: 'openai-codex', modelId: 'gpt-6.1-sol' } }, 1)
+  const [url, init] = fetch.mock.calls.at(-1)!
+  expect(url).toBe('/api/conversations/1/configure')
+  expect(JSON.parse(init?.body as string)).toEqual({
+    model: { provider: 'openai-codex', modelId: 'gpt-6.1-sol' },
+  })
 })

@@ -57,6 +57,7 @@ export async function createSystem(
   notice: (message: string) => void = () => {},
   processInfo: { activationError?: string } = {},
   origins: () => string[] = () => [],
+  web: () => SystemInfo['web'] = () => ({ id: '', changed: [] }),
 ) {
   const startedAt = new Date().toISOString()
   let coreStale = false
@@ -135,6 +136,7 @@ export async function createSystem(
       },
       execution: { kind: 'node-local', defaultCwd: host.projectRoot },
       code,
+      web: web(),
       extensions: registry(),
       extensionDiagnostics: registry.diagnostics(),
       ...skillInfo(projectSkills(host)),
@@ -143,7 +145,13 @@ export async function createSystem(
         agentDir: join(host.userHome, '.ultimate'),
       }).map((file) => file.path),
     }
-    const json = JSON.stringify(value)
+    // Free memory and database sizes change all the time: new streams get them fresh, but alone they broadcast nothing,
+    // since every tab re-renders whatever reads the system info on each broadcast.
+    const json = JSON.stringify({
+      ...value,
+      machine: { ...value.machine, freeMemory: 0 },
+      persistence: { ...value.persistence, sizeBytes: 0, walBytes: 0 },
+    })
     if (json !== previous) {
       previous = json
       emit(value)

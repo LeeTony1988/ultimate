@@ -4,17 +4,21 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { StreamedView } from '../../shared/protocol.ts'
 import { actionRef, docRef } from '../../shared/extension-api.ts'
-import { FakeSource } from './fake-source.ts'
+import { FakeSource, fakeSubscriptions } from './fake-source.ts'
 
 const harness = vi.hoisted(() => ({
   sources: [] as FakeSource[],
+  server: undefined as ReturnType<typeof fakeSubscriptions> | undefined,
   effects: [] as EffectCallback[],
   submit: undefined as (() => void) | undefined,
   change: undefined as ((event: { target: { value: string } }) => void) | undefined,
   keyDown: undefined as ((event: object) => void) | undefined,
   stop: undefined as (() => void) | undefined,
   cancel: undefined as (() => void) | undefined,
-  fetch: vi.fn<typeof fetch>(async () => Response.json({ ok: true })),
+  fetch: vi.fn<typeof fetch>(
+    async (path, init): Promise<Response> =>
+      harness.server?.handle(path as string, init) ?? Response.json({ ok: true }),
+  ),
 }))
 // Server rendering supplies real React context but has no commit phase. Run captured effects explicitly, and read
 // external-store snapshots directly, to exercise scopes and composer callbacks without a DOM or a new dependency.
@@ -82,6 +86,7 @@ import {
   useUltimate,
 } from '../../web/src/sdk/hooks.ts'
 
+harness.server = fakeSubscriptions(harness.sources)
 const counter = docRef<{ n: number }>('test.counter')
 const effects: (() => void)[] = []
 const storage = new Map<string, string>()
@@ -100,10 +105,12 @@ beforeEach(() => {
   }))
   harness.fetch.mockClear()
   harness.sources.length = 0
+  harness.server!.subscriptions.length = 0
   harness.effects.length = 0
   storage.clear()
   store.show(undefined)
   store.start()
+  harness.sources[0].open()
 })
 afterEach(() => {
   for (const release of effects.splice(0)) release()
@@ -118,13 +125,8 @@ function commitEffects() {
   }
 }
 const tick = () => vi.advanceTimersByTimeAsync(10)
-function source(id: number) {
-  return harness.sources.findLast(
-    (stream) =>
-      !stream.closed &&
-      new URL(stream.url, 'http://local').searchParams.get('conversation') === String(id),
-  )!
-}
+/** The open subscription of a conversation (undefined: the root) on the tab's stream. */
+const source = (id?: number) => harness.server!.of(id)!
 function view(id: number, text: string, busy = false): StreamedView {
   return {
     conversation: { id },
@@ -161,12 +163,13 @@ function renderScopes() {
 }
 
 it('keeps two scoped snapshots, ops, transcripts and documents independent of the shown conversation', async () => {
-  harness.sources[0].send('view', view(1, 'shown'))
+  source().send('view', view(1, 'shown'))
   renderScopes()
   commitEffects()
   await tick()
-  expect(source(7).url).toBe('/api/events?conversation=7&docs=test.counter')
-  expect(source(9).url).toBe('/api/events?conversation=9&docs=test.counter')
+  expect(harness.sources).toHaveLength(1)
+  expect(source(7)).toMatchObject({ docs: [counter.kind], view: true })
+  expect(source(9)).toMatchObject({ docs: [counter.kind], view: true })
   source(7).send('view', view(7, 'seven'))
   source(9).send('view', view(9, 'nine'))
   source(7).send('ops', [['a', ['entries', 0, 'model', 0, 'content'], ' updated']])
@@ -202,12 +205,13 @@ it('shares scopes, reconnects from a snapshot, ignores stale streams, and releas
   const again = store.watchConversation(7)
   await tick()
   const first = source(7)
-  expect(harness.sources.filter((stream) => stream.url.includes('conversation=7'))).toHaveLength(1)
+  expect(harness.server!.subscriptions.filter((item) => item.conversation === 7)).toHaveLength(1)
   first.send('ops', [['s', ['older'], 1]])
   expect(store.getState().viewsOf[7]).toBeUndefined()
   first.send('view', view(7, 'initial'))
-  first.drop(true)
-  await tick()
+  // A new stream after a drop subscribes again.
+  harness.sources[0].drop()
+  harness.sources[0].open()
   const reopened = source(7)
   expect(reopened).not.toBe(first)
   reopened.send('view', view(7, 'fresh'))
@@ -244,7 +248,7 @@ it('renders <ConversationScope><Conversation/></ConversationScope> and sends, st
   const release = store.watchConversation(17)
   effects.push(release)
   await tick()
-  harness.sources[0].send('view', view(1, 'other transcript'))
+  source().send('view', view(1, 'other transcript'))
   source(17).send('view', view(17, 'side transcript'))
   const render = () => renderToStaticMarkup(scoped(17, h(Conversation)))
   let html = render()
@@ -311,7 +315,49 @@ it('renders <ConversationScope><Conversation/></ConversationScope> and sends, st
   expect(harness.fetch).toHaveBeenLastCalledWith('/api/conversations/17/abort', expect.anything())
 })
 
-it('adds a view to a document-only stream and keeps documents after the scope releases', async () => {
+it('sends on Cmd or Ctrl+Enter on a coarse pointer, but not on plain Enter or while composing', async () => {
+  // iPadOS reports a coarse primary pointer even with a Magic Keyboard attached.
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: query === '(pointer: coarse)',
+    addEventListener() {},
+    removeEventListener() {},
+  }))
+  effects.push(store.watchConversation(19))
+  await tick()
+  source(19).send('view', view(19, 'ipad transcript'))
+  const render = () => renderToStaticMarkup(scoped(19, h(Conversation)))
+  render()
+  async function enter(text: string, keys: object, nativeEvent = {}) {
+    harness.change!({ target: { value: text } })
+    render()
+    let prevented = false
+    harness.keyDown!({
+      key: 'Enter',
+      shiftKey: false,
+      altKey: false,
+      metaKey: false,
+      ctrlKey: false,
+      ...keys,
+      nativeEvent,
+      preventDefault: () => (prevented = true),
+    })
+    await tick()
+    return prevented
+  }
+  const sent = () =>
+    harness.fetch.mock.calls.flatMap(([path, init]) =>
+      path === '/api/conversations/19/submit' ? [JSON.parse(init!.body as string).text] : [],
+    )
+  // Plain Return on a touch keyboard keeps its newline; Return that commits an IME candidate never sends.
+  expect(await enter('plain', {})).toBe(false)
+  expect(await enter('composing', { metaKey: true }, { isComposing: true })).toBe(false)
+  expect(sent()).toEqual([])
+  expect(await enter('cmd', { metaKey: true })).toBe(true)
+  expect(await enter('ctrl', { ctrlKey: true })).toBe(true)
+  expect(sent()).toEqual(['cmd', 'ctrl'])
+})
+
+it('adds a view to a document-only subscription, keeps documents after the scope releases, and watches the view again from a snapshot', async () => {
   const releaseDoc = store.watchDocOf(23, counter.kind)
   effects.push(releaseDoc)
   await tick()
@@ -327,10 +373,26 @@ it('adds a view to a document-only stream and keeps documents after the scope re
   both.send('doc', { kind: counter.kind, value: { n: 2 } })
   releaseView()
   await tick()
-  expect(both.closed).toBe(false)
+  // Documents only again: the value stays until the new subscription's snapshot.
+  expect(both.closed).toBe(true)
   expect(store.getState().viewsOf[23]).toBeUndefined()
-  both.send('docOps', { kind: counter.kind, ops: [['s', ['n'], 3]] })
+  expect(store.getState().docsOf[23]?.[counter.kind]).toEqual({ n: 2 })
+  const only = source(23)
+  expect(only.view).toBe(false)
+  only.send('doc', { kind: counter.kind, value: { n: 2 } })
+  only.send('docOps', { kind: counter.kind, ops: [['s', ['n'], 3]] })
   expect(store.getState().docsOf[23]?.[counter.kind]).toEqual({ n: 3 })
+
+  // Watched again, the view comes from a new subscription's snapshot, and its ops apply to it.
+  effects.push(store.watchConversation(23))
+  await tick()
+  expect(only.closed).toBe(true)
+  const again = source(23)
+  again.send('view', view(23, 'back'))
+  again.send('ops', [['a', ['entries', 0, 'model', 0, 'content'], ' again']])
+  expect(store.getState().viewsOf[23]?.entries[0].model?.[0]).toMatchObject({
+    content: 'back again',
+  })
 })
 
 function Action() {

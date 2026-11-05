@@ -22,6 +22,9 @@ import {
   api,
   cn,
   defineWebExtension,
+  ErrorReport,
+  insertIntoComposer,
+  provide,
   Provided,
   useConversation,
   useConversationSummary,
@@ -35,10 +38,12 @@ import type { ToolCallView } from '@/sdk'
 import { ConversationTask } from '../conversations/ui.tsx'
 import { stateLabel, useWorkspaces } from '../workspaces/ui.tsx'
 import type { Workspace as Isolate, LandResult } from '../workspaces/types.ts'
-import { DefinitionDialog, Definitions } from './definitions.tsx'
+import { agentsPanel } from '../models/ui.tsx'
+import { DefinitionDialog } from './definitions.tsx'
+import { AgentsOverview } from './overview.tsx'
 import { Tag } from './parts.tsx'
 import { AgentInbox, AgentInput, AgentMessages } from './messages.tsx'
-import { openAgentSource, talkToUltimate } from './ui.tsx'
+import { openAgentSource, RunName, talkToUltimate } from './ui.tsx'
 import { StandingAction, StandingDoc } from './refs.ts'
 import { landing } from './landing.ts'
 
@@ -102,7 +107,10 @@ function SubagentCall({ call }: { call: ToolCallView }) {
   const title: ReactNode =
     action === 'start' ? (
       <>
-        <span className="text-brand">{agent ?? '…'}</span> {instruction}
+        <span className="text-brand">
+          <RunName id={childId} label={agent || '…'} />
+        </span>{' '}
+        {instruction}
       </>
     ) : action === 'list' ? (
       'list children'
@@ -171,7 +179,7 @@ function SubagentCall({ call }: { call: ToolCallView }) {
         {!finished && call.status !== 'interrupted' && (
           <ToolSection>
             <Shimmer className="text-[12px]">
-              {child?.busy ? `${agent ?? 'subagent'} is working…` : 'starting…'}
+              {child?.busy ? `${agent || 'subagent'} is working…` : 'starting…'}
             </Shimmer>
           </ToolSection>
         )}
@@ -244,10 +252,10 @@ function Landed({ output }: { output: string }) {
       )}
       {files.length > 0 && (
         <ToolSection>
-          <div className="flex items-center gap-2 text-[10px] tracking-wider text-muted-foreground/80 uppercase">
+          <div className="flex items-center gap-2 section-label">
             {files.length} changed file{files.length === 1 ? '' : 's'}
             {result.files && (
-              <span className="normal-case">
+              <span>
                 <span className="text-diff-add">+{added}</span>{' '}
                 <span className="text-diff-del">−{removed}</span>
               </span>
@@ -297,13 +305,33 @@ function ChildList({ output }: { output: string }) {
           type="button"
         >
           {row.busy ? <BusyDot /> : <span className="size-1.5" />}
-          <span className="text-brand">{row.agent}</span>
+          <span className="text-brand">
+            <RunName id={row.conversationId} label={row.agent} />
+          </span>
           <span className="text-muted-foreground/70">#{row.conversationId}</span>
           {row.background && <Tag>bg</Tag>}
         </button>
       ))}
     </ToolSection>
   )
+}
+
+/** An error card's report goes into @ultimate's draft, unsent, beside whatever the user had typed there. */
+function useErrorReport() {
+  const { switchConversation, showSurface, focusComposer } = useUltimate()
+  return {
+    title: 'Debug with @ultimate',
+    send: (report: string) =>
+      void api
+        .action(StandingAction, { name: 'ultimate' })
+        .then((id) => {
+          insertIntoComposer(id, report)
+          showSurface('agent')
+          switchConversation(id)
+          requestAnimationFrame(focusComposer)
+        })
+        .catch((error: unknown) => console.error('Could not open @ultimate', error)),
+  }
 }
 
 /** With no conversation chosen, show @ultimate's (see `landing`). */
@@ -327,9 +355,12 @@ function LandOnUltimate() {
 
 export default defineWebExtension({
   tools: { subagent: SubagentCall },
-  panels: [{ id: 'agents', title: 'Agents', icon: NetworkIcon, component: Definitions, order: 3 }],
+  panels: [
+    { id: agentsPanel, title: 'Agents', icon: NetworkIcon, component: AgentsOverview, order: 3 },
+  ],
   entries: { 'subagents.instruction': AgentInput, 'subagents.report': AgentInput },
   inbox: AgentInbox,
+  provides: [provide(ErrorReport, useErrorReport)],
   slots: { overlay: [DefinitionDialog, LandOnUltimate], 'header.right': [AgentMessages] },
   commands: [
     {
@@ -341,7 +372,7 @@ export default defineWebExtension({
     {
       id: 'subagents.open',
       title: 'Show agent definitions',
-      run: (context) => context.openPanel('agents'),
+      run: (context) => context.openPanel(agentsPanel),
     },
   ],
 })

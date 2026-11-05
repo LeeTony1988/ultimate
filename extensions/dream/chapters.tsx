@@ -103,12 +103,12 @@ export async function switchChapter(label: string, name: string, pid?: number) {
 }
 
 /**
- * Fall asleep into new chapter `name`: resolves with a refusal, or undefined once the session's `sleep` says how it
- * went (a failed check returns) or the restart cut the request off (it switched; the veil takes over).
+ * Fall asleep into new chapter `name`: resolves with a refusal, or undefined once `sleep` says how it went (a failed
+ * step returns) or the restart cut the request off (it switched; the veil takes over).
  */
-export async function fallAsleep(session: number, label: string, name: string, pid?: number) {
+export async function fallAsleep(label: string, name: string, pid?: number) {
   try {
-    await api.action(AsleepAction, { session, name })
+    await api.action(AsleepAction, { name })
     return undefined
   } catch (error) {
     if (!cutOff(error)) return errorMessage(error)
@@ -119,14 +119,14 @@ export async function fallAsleep(session: number, label: string, name: string, p
 
 /**
  * Over everything while the server restarts into another chapter: a quiet night screen, then a reload once the new
- * process serves. A Fall asleep in any tab shows it too, from its session's `switching` phase.
+ * process serves. A Fall asleep in any tab shows it too, from its `switching` phase.
  */
 export function SwitchVeil() {
   const ours = usePending()
   const system = useSystem()
   const connection = useConnection()
-  const sessions = useDocOf(1, DreamDoc)?.sessions
-  const sleep = sessions?.find((item) => item.sleep?.phase === 'switching')?.sleep
+  const doc = useDocOf(1, DreamDoc)
+  const sleep = doc?.sleep?.phase === 'switching' ? doc.sleep : undefined
   const current = useChapters()
   const now = useNow(1000, ours !== undefined)
   const pid = system?.process.pid
@@ -141,9 +141,9 @@ export function SwitchVeil() {
   }, [sleep, current, pid])
   useEffect(() => {
     // A restart refused before it began leaves the same process serving and the session failed.
-    if (pending?.verb === 'asleep' && pending.pid === pid && sessions && !sleep)
+    if (pending?.verb === 'asleep' && pending.pid === pid && doc !== undefined && !sleep)
       setPending(undefined)
-  }, [sessions, sleep, pid])
+  }, [doc, sleep, pid])
   useEffect(() => {
     if (!pending || pid === undefined || pending.pid === undefined || pending.failed) return
     const error = system?.process.activationError

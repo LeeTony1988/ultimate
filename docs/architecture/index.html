@@ -741,8 +741,9 @@
             <h3>Calling up: an extension point</h3>
             <p>
               The lower layer owns the contract and wants it; the higher one implements it.
-              workspaces (4) does <code>want(Handoff)</code>, messages (7) does
-              <code>implement(Handoff)</code>, through <code>workspaces.handoff</code>.
+              workspaces (4) does <code>want(Branches)</code>, messages (7) does
+              <code>implement(Branches)</code>, through <code>workspaces.branches</code>: the lander
+              asks who started a branch and whether work is still under way.
             </p>
           </div>
           <div>
@@ -803,28 +804,25 @@
             <text class="s" x="140" y="240">in order, each with its own cursor</text>
             <g>
               <rect class="in" x="64" y="258" width="228" height="76" rx="10" />
-              <text class="mt" x="80" y="284">lineage/conclude-landed</text>
-              <text class="s" x="80" y="305">concludes the branch once</text>
-              <text class="s" x="80" y="322">its report run is idle</text>
+              <text class="mt" x="80" y="284">lineage/landing-notes</text>
+              <text class="s" x="80" y="305">puts the landing into the</text>
+              <text class="s" x="80" y="322">root's tally (its context)</text>
               <rect class="in" x="304" y="258" width="228" height="76" rx="10" />
-              <text class="mt" x="320" y="284">lineage/landing-notes</text>
-              <text class="s" x="320" y="305">puts the landing into the</text>
-              <text class="s" x="320" y="322">root's tally (its context)</text>
+              <text class="mt" x="320" y="284">lineage/memorize</text>
+              <text class="s" x="320" y="305">distils the root's memory</text>
+              <text class="s" x="320" y="322">in a background task</text>
               <rect class="in" x="544" y="258" width="232" height="76" rx="10" />
-              <text class="mt" x="560" y="284">lineage/memorize</text>
-              <text class="s" x="560" y="305">distils the root's memory</text>
-              <text class="s" x="560" y="322">in a background task</text>
+              <text class="mt" x="560" y="284">update/install-landed</text>
+              <text class="s" x="560" y="305">pnpm install when packages</text>
+              <text class="s" x="560" y="322">changed in the host checkout</text>
               <rect class="in" x="64" y="346" width="228" height="76" rx="10" />
-              <text class="mt" x="80" y="372">update/install-landed</text>
-              <text class="s" x="80" y="393">pnpm install when packages</text>
-              <text class="s" x="80" y="410">changed in the host checkout</text>
+              <text class="mt" x="80" y="372">dream/requested</text>
+              <text class="s" x="80" y="393">asks @ultimate to dream</text>
+              <text class="s" x="80" y="410">on a built-in's fire</text>
               <rect class="in" x="304" y="346" width="228" height="76" rx="10" />
-              <text class="mt" x="320" y="372">dream/landed</text>
-              <text class="s" x="320" y="393">settles approved proposals</text>
-              <rect class="in" x="544" y="346" width="232" height="76" rx="10" />
-              <text class="mt" x="560" y="372">automations/events</text>
-              <text class="s" x="560" y="393">fires event-triggered</text>
-              <text class="s" x="560" y="410">automations</text>
+              <text class="mt" x="320" y="372">automations/events</text>
+              <text class="s" x="320" y="393">fires event-triggered</text>
+              <text class="s" x="320" y="410">automations</text>
             </g>
 
             <!-- Browser feed -->
@@ -883,13 +881,13 @@
             <rect class="n" x="480" y="30" width="160" height="48" rx="24" />
             <text class="t" x="560" y="60" text-anchor="middle">You</text>
             <path class="ln" d="M560 80 V126" marker-end="url(#a)" marker-start="url(#a)" />
-            <text class="s" x="576" y="108">only @ultimate talks to you</text>
+            <text class="s" x="576" y="108">@ultimate and branches ask you</text>
 
             <!-- @ultimate -->
             <rect class="u-hero" x="420" y="128" width="280" height="88" rx="14" />
             <text class="hero-t ult-t" x="440" y="160">@ultimate</text>
             <text class="s" x="440" y="183">standing agent: starts, steers,</text>
-            <text class="s" x="440" y="201">relays decisions</text>
+            <text class="s" x="440" y="201">weighs in on decisions</text>
 
             <!-- Root -->
             <rect class="u" x="40" y="118" width="280" height="160" rx="14" />

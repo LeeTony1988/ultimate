@@ -1,11 +1,7 @@
 import type { JsonObject } from '@earendil-works/pi-durable'
 import { exec } from '../../lib/exec.ts'
-import { shell } from '../../lib/shell.ts'
 
-/**
- * Run the project's `isolates.worktree.setup` commands in a new worktree at `path`, branched from `source`. Each runs in
- * the host's shell (`bash -c`, or PowerShell on Windows) with `ULTIMATE_SOURCE` set to the source checkout.
- */
+/** Run the project's `isolates.worktree.setup` commands in a new worktree at `path`, branched from `source`. */
 export async function setup(
   source: string,
   path: string,
@@ -20,8 +16,7 @@ export async function setup(
     signal.throwIfAborted()
     try {
       // exec closes the command's input, so one that reads it gets EOF.
-      const { program, args } = shell.argv(command, ['ULTIMATE_SOURCE'])
-      await exec(program, args, {
+      await exec('sh', ['-c', command], {
         cwd: path,
         env: { ...process.env, ULTIMATE_SOURCE: source },
         signal,

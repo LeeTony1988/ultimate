@@ -68,6 +68,7 @@ export function Line({ text, className }: { text: string; className?: string }) 
     <span className={className} title={text.replaceAll('`', '')}>
       {text.split('`').map((part, index) =>
         index % 2 ? (
+          // oxlint-disable-next-line react/no-array-index-key -- Code span positions in split text.
           <code className="font-mono text-[0.92em] text-foreground/75" key={index}>
             {part}
           </code>
@@ -79,7 +80,7 @@ export function Line({ text, className }: { text: string; className?: string }) 
   )
 }
 
-/** A small uppercase heading with a meta value on the right, as in the Agents and Info panels. */
+/** A small section heading with a meta value on the right, as in the Agents and Info panels. */
 export function Heading({
   children,
   meta,
@@ -90,17 +91,10 @@ export function Heading({
   className?: string
 }) {
   return (
-    <div
-      className={cn(
-        'flex items-center gap-2 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase',
-        className,
-      )}
-    >
+    <div className={cn('flex items-center gap-2 section-label', className)}>
       {children}
       {meta !== undefined && (
-        <span className="ml-auto truncate pl-2 tracking-normal normal-case text-muted-foreground/70">
-          {meta}
-        </span>
+        <span className="ml-auto truncate pl-2 text-muted-foreground/70">{meta}</span>
       )}
     </div>
   )

@@ -1,7 +1,8 @@
-import { GitBranchIcon, ListTreeIcon, MessageSquareIcon } from 'lucide-react'
+import { ChevronRightIcon, GitBranchIcon, ListTreeIcon, MessageSquareIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ToolStatusIcon } from '@/components/ai/tool'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
   cn,
   defineWebExtension,
@@ -9,7 +10,7 @@ import {
   provide,
   RunStart,
   useAction,
-  useConversation,
+  useDocOf,
   useNow,
   useTasks,
   useUltimate,
@@ -17,21 +18,28 @@ import {
 } from '@/sdk'
 import type { TaskGraph, TaskGraphNode } from '@/sdk'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
-import { useWorkspaceConversations as useConversations } from '../workspaces/ui.tsx'
+import {
+  useWorkspaceConversations as useConversations,
+  useWorkspaceIndex,
+} from '../workspaces/ui.tsx'
 import { FeatureTag, hiddenConversationIds, useOverview } from '../conversations/ui.tsx'
+import { Address, MessagesDoc } from '../messages/ui.tsx'
 import { TaskChip, useTaskOf } from '../plan/ui.tsx'
-import { StartedAction } from './refs.ts'
+import { groups, meaning } from './kinds.ts'
+import type { Group, Meaning } from './kinds.ts'
+import { DescribeAction, StartedAction } from './refs.ts'
+import type { TaskFacts } from './refs.ts'
 
 interface Tree {
   /** Live tasks by owner task id. */
   children: Map<number, TaskGraphNode[]>
-  /** Conversation-owned tasks by conversation id. */
+  /** Conversation-owned running work by conversation id: the tree the Running group draws. */
   roots: Map<number, TaskGraphNode[]>
   summaries: Map<number, ConversationSummary>
-  /** Tool names of the shown conversation's tool tasks. */
-  tools: Map<number, string>
   /** When each task first ran, in wall-clock milliseconds. */
   started: Record<string, number>
+  /** What each task means, by task id. */
+  meanings: Map<number, Meaning>
   /** Feature tags of top-level conversations. */
   features: Map<number, string>
   now: number
@@ -160,17 +168,16 @@ function Guides({ depth, rails = [], last = true }: Place) {
   const line = 'pointer-events-none absolute border-muted-foreground/35 border-dashed'
   return (
     <span aria-hidden>
-      {rails
-        .slice(0, depth - 1)
-        .map((on, level) =>
-          on ? (
-            <span
-              className={cn(line, 'inset-y-0 border-l')}
-              key={level}
-              style={{ left: axis(level) }}
-            />
-          ) : null,
-        )}
+      {rails.slice(0, depth - 1).map((on, level) =>
+        on ? (
+          <span
+            className={cn(line, 'inset-y-0 border-l')}
+            // oxlint-disable-next-line react/no-array-index-key -- Guide columns are addressed by tree depth.
+            key={level}
+            style={{ left: axis(level) }}
+          />
+        ) : null,
+      )}
       <span
         className={cn(line, 'top-0 border-l', last ? 'h-1/2' : 'bottom-0')}
         style={{ left: axis(depth - 1) }}
@@ -191,10 +198,64 @@ const places = (count: number, { depth, rails = [], last = true }: Place) =>
     last: index === count - 1,
   }))
 
+/** The root conversation: the project itself, never shown as a conversation of its own. */
+const ROOT = 1
+
+/** Ten minutes: a running task or chore older than this shows in warning colour, so a stuck one stands out. */
+const LONG = 10 * 60_000
+
+/** Raw facts for hover: kind, id, phase and marks, as the graph has them. */
+const rawTitle = (task: TaskGraphNode) =>
+  [
+    `${task.kind} #${task.id}`,
+    'phase' in task.state ? `phase ${task.state.phase}` : task.state.status,
+    task.state.status,
+    task.background ? 'background' : undefined,
+    `owned by #${task.owner ?? task.conversationId}`,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
+/** Who a meaning names: a conversation by its name, the user, another project. */
+function Who({ who }: { who: Meaning['who'] }) {
+  if (who === undefined) return null
+  return (
+    <span className="min-w-0 truncate font-sans text-[12px] text-foreground/90">
+      <Address id={who} />
+    </span>
+  )
+}
+
+/** How long it has run, or when it wakes for a scheduled one; warning colour past `LONG` where that matters. */
+function Clock({ task, tree, plain }: { task: TaskGraphNode; tree: Tree; plain?: boolean }) {
+  const until = tree.meanings.get(task.id)?.until
+  if (until !== undefined)
+    return (
+      <span
+        className="shrink-0 text-[10.5px] text-muted-foreground/70 tabular-nums"
+        title={`Wakes ${new Date(until).toLocaleString()}`}
+      >
+        in {formatDuration(Math.max(0, until - tree.now))}
+      </span>
+    )
+  const started = tree.started[task.id]
+  if (started === undefined || task.blocked) return null
+  return (
+    <span
+      className={cn(
+        'shrink-0 text-[10.5px] tabular-nums',
+        !plain && tree.now - started >= LONG ? 'text-warning' : 'text-muted-foreground/70',
+      )}
+      title={`Running since ${new Date(started).toLocaleString()}`}
+    >
+      {formatDuration(tree.now - started)}
+    </span>
+  )
+}
+
 export function TaskRow({ task, tree, ...place }: { task: TaskGraphNode; tree: Tree } & Place) {
   const { text, tone, icon } = status(task)
-  const kind = task.kind.replace(/^pi\./, '')
-  const tool = tree.tools.get(task.id)
+  const named = tree.meanings.get(task.id)
   const children = tree.children.get(task.id) ?? []
   const below = places(children.length + task.conversations.length, place)
   return (
@@ -202,34 +263,31 @@ export function TaskRow({ task, tree, ...place }: { task: TaskGraphNode; tree: T
       <div
         className="relative flex min-w-0 items-center gap-1.5 py-1.5 pr-3 font-mono text-[11.5px]"
         style={{ paddingLeft: EDGE + place.depth * INDENT }}
+        title={rawTitle(task)}
       >
         <Guides {...place} />
         <ToolStatusIcon className="size-3" state={icon} />
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-foreground/90">{tool ?? kind}</span>
+          <span className="flex min-w-0 items-center gap-1.5 overflow-hidden text-foreground/90">
+            <span className="shrink-0">{named?.text ?? task.kind}</span>
+            <Who who={named?.who} />
+          </span>
           <span className="flex min-w-0 items-center gap-1.5 text-[10.5px] text-muted-foreground/60">
-            <span className="shrink-0">#{task.id}</span>
-            <span className={cn('truncate', tone)}>{text}</span>
+            {named?.detail && !task.blocked ? (
+              <>
+                {named.by !== undefined && (
+                  <span className="shrink-0 text-muted-foreground/80">
+                    <Address id={named.by} />
+                  </span>
+                )}
+                <span className="truncate">{named.detail}</span>
+              </>
+            ) : (
+              <span className={cn('truncate', tone)}>{text}</span>
+            )}
           </span>
         </span>
-        {task.background && (
-          <span className="shrink-0 rounded-sm border border-border/80 px-1 text-[10px] text-muted-foreground">
-            bg
-          </span>
-        )}
-        {tree.started[task.id] !== undefined && !task.blocked && (
-          <span
-            className={cn(
-              'shrink-0 text-[10.5px] tabular-nums',
-              tree.now - tree.started[task.id] >= 10 * 60_000
-                ? 'text-warning'
-                : 'text-muted-foreground/70',
-            )}
-            title={`Running since ${new Date(tree.started[task.id]).toLocaleString()}`}
-          >
-            {formatDuration(tree.now - tree.started[task.id])}
-          </span>
-        )}
+        <Clock plain={named?.group === 'waiting'} task={task} tree={tree} />
         {task.abortRequested && (
           <span className="shrink-0 text-[10.5px] text-warning">aborting</span>
         )}
@@ -296,48 +354,145 @@ function ConversationRow({ id, tree, ...place }: { id: number; tree: Tree } & Pl
   )
 }
 
+/** Facts a value never changes for, asked once per id: start times, what a task's input says. */
+function useOnce<T>(
+  ref: Parameters<typeof useAction<{ ids: number[] }, Record<string, T>>>[0],
+  ids: number[],
+) {
+  const [known, setKnown] = useState<Record<string, T>>({})
+  const missing = ids.filter((id) => !(id in known))
+  const { data } = useAction(ref, { ids: missing }, { enabled: missing.length > 0 })
+  useEffect(() => {
+    if (data) setKnown((previous) => ({ ...previous, ...data }))
+  }, [data])
+  return known
+}
+
+function Heading({ children, count }: { children: ReactNode; count?: number }) {
+  return (
+    <div className="flex items-center gap-2 px-3 pt-3 pb-1 section-label">
+      {children}
+      {count !== undefined && <span className="text-muted-foreground/60">{count}</span>}
+    </div>
+  )
+}
+
+/** Background chores, folded to a count; a blocked or long-running one stays out of the fold, so it is seen. */
+function Background({ tasks, tree }: { tasks: TaskGraphNode[]; tree: Tree }) {
+  const loud = (task: TaskGraphNode) =>
+    task.blocked !== undefined ||
+    (tree.started[task.id] !== undefined && tree.now - tree.started[task.id] >= LONG)
+  const shown = tasks.filter(loud)
+  const folded = tasks.filter((task) => !loud(task))
+  return (
+    <Collapsible className="group/bg">
+      <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-1.5 px-3 pt-3 pb-1 section-label hover:text-foreground">
+        <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/bg:rotate-90" />
+        Background
+        <span className="text-muted-foreground/60">{tasks.length}</span>
+      </CollapsibleTrigger>
+      {shown.map((task) => (
+        <TaskRow depth={0} key={task.id} task={task} tree={tree} />
+      ))}
+      <CollapsibleContent>
+        {folded.map((task) => (
+          <TaskRow depth={0} key={task.id} task={task} tree={tree} />
+        ))}
+      </CollapsibleContent>
+    </Collapsible>
+  )
+}
+
 function TasksPanel() {
   const graph = useTasks()
   const conversations = useConversations()
-  const { live } = useConversation()
   const [concluded] = useUiState<number[]>('ext.conversations.concluded', [])
-  const { tasks, top, ...rest } = build(graph, conversations, concluded)
+  const { tasks, children, roots, summaries } = build(graph, conversations, concluded)
+  const log = useDocOf(1, MessagesDoc)
   const overview = useOverview()
   const now = useNow(1000, tasks.length > 0)
-  // A start time never changes, so only tasks without one yet are asked for.
-  const [started, setStarted] = useState<Record<string, number>>({})
-  const missing = tasks.map((task) => task.id).filter((id) => !(id in started))
-  const { data } = useAction(StartedAction, { ids: missing }, { enabled: missing.length > 0 })
-  useEffect(() => {
-    if (data) setStarted((previous) => ({ ...previous, ...data }))
-  }, [data])
+  const ids = tasks.map((task) => task.id)
+  const started = useOnce(StartedAction, ids)
+  const facts = useOnce<TaskFacts>(DescribeAction, ids)
+  const states = new Map(log?.messages.map((message) => [message.id, message.state]))
+  const { queue } = useWorkspaceIndex()
+  // A lander works its queue one submission after another: the one it lands now names it.
+  const landing = (fact: TaskFacts | undefined) => {
+    const item = queue.find((entry) => entry.source === fact?.source && entry.state === 'landing')
+    return item ? { ...fact, conversation: item.conversationId } : fact
+  }
+  const meanings = new Map(
+    tasks.map((task) => {
+      const fact = task.kind === 'workspaces.lander' ? landing(facts[task.id]) : facts[task.id]
+      return [task.id, meaning(task, fact, fact?.message && states.get(fact.message.id))]
+    }),
+  )
+  const groupOf = (task: TaskGraphNode) => meanings.get(task.id)?.group ?? 'background'
+  // Running work stays a tree under its conversation; the rest is listed by meaning, whoever owns it. The root's
+  // running work (an automation run) is the project's: listed on its own, never under a conversation header.
+  const running = new Map(
+    [...roots].flatMap(([id, list]) => {
+      const kept = list.filter((task) => groupOf(task) === 'running')
+      return kept.length && id !== ROOT ? [[id, kept] as const] : []
+    }),
+  )
+  const owned = new Set<number>(tasks.flatMap((task) => task.conversations))
+  const top = [...running.keys()].filter((id) => !owned.has(id)).toSorted((a, b) => a - b)
+  const listed = (group: Group) =>
+    tasks.filter((task) => task.owner == null && groupOf(task) === group)
+  const project = (roots.get(ROOT) ?? []).filter((task) => groupOf(task) === 'running')
   const tree: Tree = {
-    ...rest,
+    children,
+    roots: running,
+    summaries,
     started,
+    meanings,
     now,
     features: new Map(
       Object.entries(overview).flatMap(([id, row]) =>
         row.feature ? [[Number(id), row.feature]] : [],
       ),
     ),
-    tools: new Map(
-      (live.tools ?? []).flatMap((slot) =>
-        slot.taskId === undefined ? [] : [[slot.taskId, slot.name]],
-      ),
-    ),
   }
   const busy = tasks.filter((task) => task.state.status === 'running' && !task.blocked).length
   return (
     <div className="py-2">
-      <div className="flex items-center gap-2 px-3 pb-2 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase">
+      <div className="flex items-center gap-2 px-3 pb-1 section-label">
         Task graph
-        <span className="ml-auto tracking-normal normal-case text-muted-foreground/70">
+        <span className="ml-auto text-muted-foreground/70">
           {tasks.length} live{busy > 0 && ` · ${busy} running`}
         </span>
       </div>
-      {top.map((id) => (
-        <ConversationRow depth={0} id={id} key={id} tree={tree} />
-      ))}
+      {groups.map(({ id, title }) => {
+        if (id === 'running')
+          return top.length || project.length ? (
+            <section data-group={id} key={id}>
+              <Heading>{title}</Heading>
+              {project.map((task) => (
+                <TaskRow depth={0} key={task.id} task={task} tree={tree} />
+              ))}
+              {top.map((conversation) => (
+                <ConversationRow depth={0} id={conversation} key={conversation} tree={tree} />
+              ))}
+            </section>
+          ) : null
+        const list = listed(id)
+        if (!list.length) return null
+        if (id === 'background')
+          return (
+            <section data-group={id} key={id}>
+              <Background tasks={list} tree={tree} />
+            </section>
+          )
+        return (
+          <section data-group={id} key={id}>
+            <Heading count={list.length}>{title}</Heading>
+            {list.map((task) => (
+              <TaskRow depth={0} key={task.id} task={task} tree={tree} />
+            ))}
+          </section>
+        )
+      })}
       {tasks.length === 0 && (
         <div className="px-3 py-6 text-center font-mono text-[11.5px] text-muted-foreground/70">
           idle · no live tasks

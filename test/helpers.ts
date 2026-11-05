@@ -171,12 +171,13 @@ export async function sourceCopy(parent: string) {
   await linkDependencies(root)
   const config = join(root, 'vite.config.ts')
   // Optimize on page requests, not fixture boot; React's plugin otherwise eagerly includes deps.
+  // This config is immutable after boot: ignore stale native events replayed from the initial copy.
   await writeFile(
     config,
     (await readFile(config, 'utf8'))
       .replace(
         'export default defineConfig({',
-        "export default defineConfig({ cacheDir: '.vite-cache', optimizeDeps: { entries: [] },",
+        "export default defineConfig({ cacheDir: '.vite-cache', optimizeDeps: { entries: [] }, server: { watch: { ignored: [(file) => file === fileURLToPath(import.meta.url)] } },",
       )
       .replace(
         'plugins: [react(), tailwindcss()],',
@@ -287,17 +288,21 @@ export async function post(server: string | { url: string }, path: string, data:
   })
   return { status: response.status, data: await response.json() }
 }
-export async function attach(server: string | { url: string }, query = '') {
+/** Read `/api/events`, subscribing each stream it opens as sub 0 to a conversation (the root by default) and its documents. */
+export async function attach(
+  server: string | { url: string },
+  subscription: { conversation?: number; docs?: string[]; view?: boolean } = {},
+) {
   const url = typeof server === 'string' ? server : server.url
   const controller = new AbortController()
-  const events: { name: keyof ServerEvents; data: unknown }[] = []
+  const events: { name: keyof ServerEvents; data: unknown; sub?: number }[] = []
   let system: SystemInfo | undefined
   let view: ConversationView | undefined
   let connections = 0
   const task = (async () => {
     while (!controller.signal.aborted) {
       try {
-        const response = await fetch(url + '/api/events' + query, { signal: controller.signal })
+        const response = await fetch(url + '/api/events', { signal: controller.signal })
         if (response.status !== 200) throw new Error(`SSE status ${response.status}`)
         connections++
         const reader = response.body!.getReader()
@@ -311,10 +316,20 @@ export async function attach(server: string | { url: string }, query = '') {
             const block = wire.slice(0, index)
             wire = wire.slice(index + 2)
             const name = /^event: (.+)$/m.exec(block)?.[1] as keyof ServerEvents | undefined
-            const data = /^data: (.+)$/m.exec(block)?.[1]
+            // A subscription's events carry its id on the first data line.
+            const lines = [...block.matchAll(/^data: (.+)$/gm)].map((match) => match[1])
+            const data = lines.at(-1)
             if (!name || !data) continue
             const parsed: unknown = JSON.parse(data)
-            events.push({ name, data: parsed })
+            events.push({ name, data: parsed, ...(lines.length > 1 && { sub: Number(lines[0]) }) })
+            if (name === 'stream')
+              void fetch(`${url}/api/events/${(parsed as { id: string }).id}/0`, {
+                method: 'POST',
+                headers: { Origin: url },
+                body: JSON.stringify(subscription),
+              }).catch(() => {
+                // The stream ended: its reconnect subscribes again.
+              })
             if (name === 'system') system = parsed as SystemInfo
             if (name === 'view') view = parsed as ConversationView
             if (name === 'ops' && view) view = applyImmutable(view, parsed as Op[])
@@ -328,7 +343,7 @@ export async function attach(server: string | { url: string }, query = '') {
       await yieldIO()
     }
   })()
-  await until(() => !!view)
+  await until(() => (subscription.view === false ? connections > 0 : !!view))
   return {
     events,
     system: () => system!,

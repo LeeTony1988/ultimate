@@ -1,11 +1,11 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
-import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import { LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { Conversation, ConversationId } from '@earendil-works/pi-durable'
 import { afterAll, expect, it } from 'vitest'
 import { onCommit } from '../lib/commits.ts'
-import { attach, fauxServer, post, prepareFauxServer, temp, until } from './helpers.ts'
+import { attach, fauxServer, held, post, prepareFauxServer, temp, until } from './helpers.ts'
 import type { ConversationSummary } from '../shared/protocol.ts'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
@@ -603,6 +603,7 @@ it.concurrent('conclude merges concurrent additions, deduplicates ids and return
         released.push(ids)
         return kept
       },
+      stop: async () => [],
     }),
   } as unknown as ExtensionHost
   const ctx = {
@@ -614,7 +615,7 @@ it.concurrent('conclude merges concurrent additions, deduplicates ids and return
     conversationActions.conclude({ ids: [first, first] }, ctx),
     conversationActions.conclude({ ids: [second] }, ctx),
   ])
-  expect(results[0]).toEqual({ concluded: [first], kept })
+  expect(results[0]).toEqual({ concluded: [first], stopped: [], previews: [], kept })
   expect(released).toEqual(expect.arrayContaining([[first], [second]]))
   expect((await server.host.uiState(context))['ext.conversations.concluded']).toEqual([
     first,
@@ -633,6 +634,46 @@ it.concurrent('conclude merges concurrent additions, deduplicates ids and return
     status: 500,
     data: { error: 'Expected conversation ids' },
   })
+})
+
+it.concurrent('concluding a busy conversation stops it and the subagents it runs', async () => {
+  const { server, create, action } = await launch()
+  const id = await create()
+  // The conversation starts a background worker, then both wait on answers that never come.
+  server.host.faux!.setResponses([
+    fauxAssistantMessage(
+      [
+        fauxToolCall('subagent', {
+          action: 'start',
+          agent: 'worker',
+          isolate: 'none',
+          background: true,
+          task: 'Keep working.',
+        }),
+      ],
+      { stopReason: 'toolUse' },
+    ),
+    held,
+    held,
+  ])
+  await post(server, `/api/conversations/${id}/submit`, { text: 'start a worker' })
+  const running = async (conversation: number) =>
+    (await server.harness.snapshot(LiveDoc, conversation as ConversationId, context))?.run
+  const child = () =>
+    server.api.conversations().find((item) => item.parentConversationId === id)?.id ?? 0
+  await until(async () => Boolean(child() && (await running(child())) && (await running(id))))
+
+  const result = await action('conclude', { ids: [id] })
+  expect(result).toMatchObject({
+    status: 200,
+    data: { result: { concluded: [id], stopped: [id, child()], previews: [] } },
+  })
+  expect(await running(id)).toBeUndefined()
+  expect(await running(child())).toBeUndefined()
+  const live = (await server.harness.inspect(context)).tasks.filter(({ record }) =>
+    [id, child()].includes(record.conversationId as number),
+  )
+  expect(live).toEqual([])
 })
 
 it.concurrent('refuses to conclude a root or a standing agent', async () => {

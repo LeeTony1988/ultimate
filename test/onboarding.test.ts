@@ -63,8 +63,7 @@ it.concurrent('gates project resources, remembers choices, and applies onboardin
     }
     const enabled = (name: string) =>
       server!.extensions.info().find((entry) => entry.name === name)?.enabled
-    const web = async () =>
-      Object.keys((await server!.vite.ssrLoadModule('virtual:ultimate/web-facets')).loaders)
+    const web = async () => server!.web.facets()
     const tools = async () => (await server!.root.agent(context)).tools.map((tool) => tool.name)
     for (const args of [
       {},
@@ -110,7 +109,7 @@ it.concurrent('gates project resources, remembers choices, and applies onboardin
     expect(log.summary).not.toBe('')
     expect(log.provides).toContain('messages')
     expect(log.needs).toContain('subagents')
-    expect(log.events).toEqual(expect.arrayContaining(['board.sent', 'board.triaged']))
+    expect(log.events).toEqual(expect.arrayContaining(['board.sent']))
     expect(
       server.extensions.info().find((entry) => entry.name === 'messages')?.server?.tools,
     ).toContainEqual({ name: 'message', description: expect.stringMatching(/\S/) })

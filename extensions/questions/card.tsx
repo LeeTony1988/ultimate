@@ -67,8 +67,12 @@ export function MessageQuestions({
       card={card}
       questions={questions}
       keys={questions.length > 0 && (keys ?? shown)}
-      submit={(answers, note) =>
-        api.action(AnswerAction, { messageId: message.id, answers, ...(note ? { note } : {}) })
+      submit={(answers, note, keepalive) =>
+        api.action(
+          AnswerAction,
+          { messageId: message.id, answers, ...(note ? { note } : {}) },
+          { keepalive },
+        )
       }
       reply={(text) => api.action(AnswerAction, { messageId: message.id, text })}
       dismiss={() => api.action(DismissAction, { messageId: message.id })}
@@ -78,13 +82,16 @@ export function MessageQuestions({
 }
 
 /** Sends the answer waiting out its undo window now, if one does. */
-function flushPending(pending: {
-  current?: { timer: ReturnType<typeof setTimeout>; fire: () => void }
-}) {
+function flushPending(
+  pending: {
+    current?: { timer: ReturnType<typeof setTimeout>; fire: (keepalive?: boolean) => void }
+  },
+  keepalive = false,
+) {
   const waiting = pending.current
   if (!waiting) return
   clearTimeout(waiting.timer)
-  waiting.fire()
+  waiting.fire(keepalive)
 }
 
 /** Where the card is: being answered, sent but still undoable, on its way, or settled into a summary. */
@@ -103,9 +110,10 @@ function Progress({ done }: { done: boolean[] }) {
     <span className="flex items-center gap-1" aria-hidden>
       {done.map((value, index) => (
         <span
+          // oxlint-disable-next-line react/no-array-index-key -- Progress dots correspond to fixed question positions.
           key={index}
           className={cn(
-            'h-1 rounded-full transition-all duration-300 ease-out',
+            'h-1 rounded-full transition-[width,background-color] duration-300 ease-out',
             value ? 'w-3 bg-brand' : 'w-1.5 bg-muted-foreground/30',
           )}
         />
@@ -139,6 +147,7 @@ function Summary({
         const answer = brief(question, index, drafts[index])
         return (
           <li
+            // oxlint-disable-next-line react/no-array-index-key -- Answers correspond to fixed question positions.
             key={index}
             className="flex min-w-0 items-baseline gap-2 motion-safe:animate-fade-in"
             style={{ animationDelay: `${index * 40}ms` }}
@@ -230,7 +239,7 @@ function Card({
   card: string
   questions: Question[]
   keys: boolean
-  submit: (answers: Answer[], note?: string) => Promise<unknown>
+  submit: (answers: Answer[], note?: string, keepalive?: boolean) => Promise<unknown>
   reply: (text: string) => Promise<unknown>
   dismiss: () => Promise<unknown>
   className?: string
@@ -244,7 +253,10 @@ function Card({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
   // The send waiting out its undo window, and the click that folds a chosen question away.
-  const pending = useRef<{ timer: ReturnType<typeof setTimeout>; fire: () => void }>(undefined)
+  const pending = useRef<{
+    timer: ReturnType<typeof setTimeout>
+    fire: (keepalive?: boolean) => void
+  }>(undefined)
   const advance = useRef<ReturnType<typeof setTimeout>>(undefined)
   const flush = () => flushPending(pending)
   const phone = useViewport() === 'phone'
@@ -257,13 +269,16 @@ function Card({
   const settled = phase !== 'answering'
 
   // Leaving the page inside the undo window sends what was sent: only Undo takes it back.
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    // Only this send is keepalive: keepalive bodies share a budget of about 64 KiB, and a note can be longer.
+    const leave = () => flushPending(pending, true)
+    window.addEventListener('pagehide', leave)
+    return () => {
+      window.removeEventListener('pagehide', leave)
       clearTimeout(advance.current)
       flush()
-    },
-    [],
-  )
+    }
+  }, [])
 
   const focusField = (index: number) =>
     requestAnimationFrame(() =>
@@ -332,11 +347,11 @@ function Card({
     const extra = note.trim()
     if ((!list.length && !extra) || pending.current || phase !== 'answering') return
     clearTimeout(advance.current)
-    const fire = () => {
+    const fire = (keepalive = false) => {
       pending.current = undefined
       setPhase('sending')
       setError(undefined)
-      submit(list, extra || undefined).then(
+      submit(list, extra || undefined, keepalive).then(
         () => setPhase('sent'),
         (failure: unknown) => {
           setPhase('answering')
@@ -540,6 +555,7 @@ function Card({
       </div>
       <div className="space-y-0.5 px-1.5">
         {questions.map((question, index) => (
+          // oxlint-disable-next-line react/no-array-index-key -- Questions and their drafts are addressed by index.
           <div key={index} data-question={index}>
             <QuestionItem
               question={question}

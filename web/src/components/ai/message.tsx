@@ -3,12 +3,18 @@
 // the extensions' `link` renderers.
 import { cn } from 'cn'
 import type { ComponentProps, HTMLAttributes, ReactNode } from 'react'
-import { memo } from 'react'
-import { defaultComponents, defaultRemarkPlugins, Streamdown } from 'streamdown'
-import type { ExtraProps } from 'streamdown'
+import { memo, useMemo } from 'react'
+import {
+  CodeBlock,
+  CodeBlockCopyButton,
+  defaultComponents,
+  defaultRemarkPlugins,
+  Streamdown,
+} from 'streamdown'
+import type { CustomRendererProps, ExtraProps } from 'streamdown'
 import { ExtensionBoundary } from '../../app/boundary.tsx'
 import { useExtensions } from '../../sdk/hooks.ts'
-import { linkRenderers } from '../../sdk/registry.ts'
+import { codeBlockLanguages, codeBlockRenderers, linkRenderers } from '../../sdk/registry.ts'
 import { codePlugin } from './code-block.tsx'
 import { mentionHref, parseMention, remarkMentions, splitMentions } from './mentions.ts'
 
@@ -73,6 +79,7 @@ export function MentionText({ text }: { text: string }) {
     typeof part === 'string' ? (
       part
     ) : (
+      // oxlint-disable-next-line react/no-array-index-key -- Mention positions in split text; mentions may repeat.
       <Link href={mentionHref(part.conversation, part.entry)} key={index}>
         {part.text}
       </Link>
@@ -83,23 +90,52 @@ export function MentionText({ text }: { text: string }) {
 const components = { a: Link }
 // After GFM, so autolinked URLs are links already and keep their `#fragment`.
 const remarkPlugins = [...Object.values(defaultRemarkPlugins), remarkMentions]
-const plugins = { code: codePlugin }
+
+/** A fenced code block as the `codeBlocks` renderers of its language compose it, starting with the core block. */
+function ExtensionCodeBlock({ code, language, isIncomplete }: CustomRendererProps) {
+  const renderers = codeBlockRenderers(useExtensions(), language)
+  const core = (
+    <CodeBlock code={code} isIncomplete={isIncomplete} language={language} lineNumbers={false}>
+      <CodeBlockCopyButton />
+    </CodeBlock>
+  )
+  return renderers.reduce<ReactNode>(
+    (inner, { extension, version, component: Renderer }) => (
+      <ExtensionBoundary extension={extension} fallback={inner} key={extension} version={version}>
+        <Renderer code={code} core={inner} incomplete={isIncomplete} language={language} />
+      </ExtensionBoundary>
+    ),
+    core,
+  )
+}
 const controls = { code: { copy: true, download: false }, table: false, mermaid: false } as const
 
 /** Markdown that may still be streaming. */
 export const MessageResponse = memo(
-  ({ className, ...props }: ComponentProps<typeof Streamdown>) => (
-    <Streamdown
-      className={cn('markdown min-w-0', className)}
-      components={components}
-      controls={controls}
-      lineNumbers={false}
-      plugins={plugins}
-      remarkPlugins={remarkPlugins}
-      shikiTheme={codePlugin.getThemes()}
-      {...props}
-    />
-  ),
+  ({ className, ...props }: ComponentProps<typeof Streamdown>) => {
+    const languages = codeBlockLanguages(useExtensions()).join(' ')
+    const plugins = useMemo(
+      () => ({
+        code: codePlugin,
+        renderers: languages
+          ? [{ language: languages.split(' '), component: ExtensionCodeBlock }]
+          : [],
+      }),
+      [languages],
+    )
+    return (
+      <Streamdown
+        className={cn('markdown min-w-0', className)}
+        components={components}
+        controls={controls}
+        lineNumbers={false}
+        plugins={plugins}
+        remarkPlugins={remarkPlugins}
+        shikiTheme={codePlugin.getThemes()}
+        {...props}
+      />
+    )
+  },
   (previous, next) =>
     previous.children === next.children && previous.isAnimating === next.isAnimating,
 )

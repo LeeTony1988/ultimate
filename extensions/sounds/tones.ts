@@ -1,62 +1,33 @@
 import type { Sound } from './cues.ts'
+import type { Note } from './engine.ts'
 
-/** A note as [start in seconds, frequency in Hz, length in seconds]. */
-export type Note = readonly [number, number, number]
+export type { Note } from './engine.ts'
 
-/** Soft bells, synthesized, no audio files. */
-const tunes: Record<Sound, Note[]> = {
-  // A fifth up, asking: D5, A5.
-  input: [
-    [0, 587.33, 0.5],
-    [0.16, 880, 0.9],
-  ],
-  // A rising major chord, resolved: C5, E5, G5.
-  finished: [
-    [0, 523.25, 0.45],
-    [0.09, 659.25, 0.45],
-    [0.18, 783.99, 1],
-  ],
-  // A low minor third down: E4, C♯4.
-  failed: [
-    [0, 329.63, 0.5],
-    [0.2, 277.18, 1],
-  ],
+let volume = 1
+let loaded: Promise<typeof import('./engine.ts')> | undefined
+
+/** The Tone.js engine, loaded on first sound: loading it opens an AudioContext. */
+export const engine = () =>
+  (loaded ??= import('./engine.ts').then((tone) => {
+    tone.setVolume(volume)
+    return tone
+  }))
+
+/** Sets the volume of every sound from 0 to 1, without loading the engine for it. */
+export function setVolume(value: number) {
+  volume = value
+  loaded
+    ?.then((tone) => tone.setVolume(value))
+    .catch((error: unknown) => console.warn('Volume failed', error))
 }
-
-/** Partials over the fundamental as [ratio, gain]: a sine with a little shimmer, like a small bell. */
-const partials = [
-  [1, 1],
-  [2, 0.12],
-  [3, 0.04],
-] as const
-
-let context: AudioContext | undefined
 
 /** Plays `sound`; a browser lets a page play once someone has clicked or typed in it. */
-export const play = (sound: Sound) => playNotes(tunes[sound])
+export const play = async (sound: Sound) => (await engine()).play(sound)
+
+/** Says a narrator line after `sound`: `pcm` is the voice, or absent for the browser's own. */
+export const say = async (sound: Sound, text: string, pcm?: ArrayBuffer) =>
+  (await engine()).say(sound, text, pcm)
 
 /** Plays `notes` as bells at `volume` (the notification sounds use 0.18); the same rule on clicks applies. */
-export async function playNotes(notes: readonly Note[], volume = 0.18) {
-  context ??= new AudioContext()
-  if (context.state === 'suspended') await context.resume()
-  const now = context.currentTime + 0.02
-  const out = context.createGain()
-  out.gain.value = volume
-  out.connect(context.destination)
-  for (const [start, frequency, length] of notes) {
-    for (const [ratio, level] of partials) {
-      const oscillator = context.createOscillator()
-      const gain = context.createGain()
-      oscillator.frequency.value = frequency * ratio
-      const at = now + start
-      // Higher partials fade sooner, so each note softens as it rings.
-      const end = at + length / ratio
-      gain.gain.setValueAtTime(0, at)
-      gain.gain.linearRampToValueAtTime(level, at + 0.006)
-      gain.gain.exponentialRampToValueAtTime(0.0001, end)
-      oscillator.connect(gain).connect(out)
-      oscillator.start(at)
-      oscillator.stop(end)
-    }
-  }
-}
+export const playNotes = async (notes: readonly Note[], level = 0.18) =>
+  (await engine()).playNotes(notes, level)

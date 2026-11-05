@@ -8,13 +8,13 @@ const files = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'ut
   .split('\0')
   .filter(Boolean)
 
+// Each entry names its file first ("- `path` — …"); backticks later in the prose are not paths.
 const borrowed = reference
   .split('## Borrowed from Pi\n')[1]
   .split('\n## ')[0]
   .split('\n')
-  .filter((line) => line.startsWith('- '))
-  .join('\n')
-for (const [, file] of borrowed.matchAll(/`([^`]+)`/g)) {
+  .flatMap((line) => line.match(/^- `([^`]+)`/)?.[1] ?? [])
+for (const file of new Set(borrowed)) {
   it(`${file}: listed Pi coupling is tracked and marked`, () => {
     expect(files, `${file}: remove stale docs/pi-upstream.md entry`).toContain(file)
     expect(readFileSync(new URL(file, root), 'utf8')).toMatch(/Pi upstream: @earendil-works\//)
@@ -33,7 +33,7 @@ for (const file of files) {
       expect(version, `${file}: recheck Pi upstream before updating the marker`).toBe(
         installed.version,
       )
-      expect(borrowed, `${file}: document the coupling`).toContain(`\`${file}\``)
+      expect(borrowed, `${file}: document the coupling`).toContain(file)
     })
   }
 }

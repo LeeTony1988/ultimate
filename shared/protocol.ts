@@ -93,7 +93,8 @@ export interface ExtensionInfo {
     sections: string[]
     hooks: number
     docs: string[]
-    secrets?: { name: string; description: string; url?: string }[]
+    /** `provider`: a model provider whose configured auth stands in for the secret. */
+    secrets?: { name: string; description: string; url?: string; provider?: string }[]
     error?: string
   }
 }
@@ -144,6 +145,18 @@ export interface SystemInfo {
     settingsError?: string
   }
   code: { ultimateRoot: string; branch: string; sha: string; dirty: boolean; coreStale?: boolean }
+  /**
+   * The web bundle served now; a page on another id reloads onto it. `changed` lists the sources that changed since the
+   * previous bundle, relative to the Ultimate root when inside it. `building` is set while a rebuild runs; the last
+   * build's `left` names facets left out with their errors, `error` a build that failed as a whole and kept `id`.
+   */
+  web: {
+    id: string
+    changed: string[]
+    building?: boolean
+    left?: { file: string; error: string }[]
+    error?: string
+  }
   extensionDiagnostics: string[]
   extensions: ExtensionInfo[]
   /**
@@ -198,7 +211,13 @@ export interface UiUpdateResponse {
   ok: true
   rev: number
 }
+/**
+ * Events of `GET /api/events`, one stream per browser tab. `stream` comes first with the id that
+ * `POST /api/events/<stream>/<sub>` (`{ conversation?, docs?, view? }`) and `DELETE` use to open and close a subscription
+ * of a conversation; `view`, `ops`, `doc` and `docOps` belong to one, whose id is their first data line.
+ */
 export interface ServerEvents {
+  stream: { id: string }
   system: SystemInfo
   conversations: ConversationSummary[]
   view: StreamedView

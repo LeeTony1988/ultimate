@@ -32,9 +32,9 @@ export function Field({
 }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="flex items-center gap-2 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase">
+      <div className="flex items-center gap-2 section-label">
         {label}
-        {aside && <span className="ml-auto tracking-normal normal-case">{aside}</span>}
+        {aside && <span className="ml-auto">{aside}</span>}
       </div>
       {children}
       {hint && <p className="text-[11.5px] leading-snug text-muted-foreground/80">{hint}</p>}
@@ -202,7 +202,7 @@ export function ModelField({
       </PopoverTrigger>
       <PopoverContent align="start" className="w-[min(34rem,90vw)] p-0">
         <Command
-          className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10.5px] [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:uppercase"
+          className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:section-label"
           defaultValue={value ? `${value.provider}/${value.modelId}` : 'inherit'}
           shouldFilter={false}
         >

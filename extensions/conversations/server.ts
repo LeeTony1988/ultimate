@@ -9,7 +9,7 @@ import {
   ROOT_CONVERSATION_ID,
   section,
 } from '@earendil-works/pi-durable'
-import type { ConversationId, Tx } from '@earendil-works/pi-durable'
+import type { ConversationId, Cursor, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ConversationSubject } from './types.ts'
 // oxlint-disable-next-line no-restricted-imports -- conversations publishes the core UI state document
@@ -32,7 +32,7 @@ import { Overview, overviewBehavior } from './overview.ts'
 import { activityBehavior } from './activity.ts'
 import { compactionEvents } from './compactions.ts'
 import { contextBehavior } from './context.ts'
-import { ContextUsageDoc, ConversationsApi, Release, Trees } from './api.ts'
+import { ContextUsageDoc, ConversationsApi, Marks, Previews, Release, Trees } from './api.ts'
 import {
   ConcludeAction,
   RenameAction,
@@ -53,7 +53,7 @@ const Fixed = defineDoc<{ fixed?: true }>({
   initial: () => ({}),
 })
 
-export const docs = [Summaries, Overview, Fixed, ContextUsageDoc]
+export const docs = [Summaries, Overview, Fixed, ContextUsageDoc, Marks]
 
 /** A fork needs its own identity; a new context head (compaction or reset) needs it again. */
 const SeenIdentity = defineDoc<{ head?: number }>({
@@ -132,8 +132,9 @@ export const order = 100
 
 /** Called by the sidebar; each acts on a top-level conversation by id. */
 export const actions = {
-  conclude: implementAction(ConcludeAction, async (args, { host }) =>
-    conclude(host, conversationIds(args)),
+  // An agent's call names its conversation; the browser's names only the one it shows, never the caller.
+  conclude: implementAction(ConcludeAction, async (args, { host, conversationId, device }) =>
+    conclude(host, conversationIds(args), device ? undefined : conversationId),
   ),
   resume: implementAction(ResumeAction, async (args, { host }) => {
     const ids = conversationIds(args)
@@ -186,11 +187,55 @@ export const actions = {
   }),
 }
 
-/** Conclude top-level conversations `ids` in one transaction, then free what they hold; returns the work kept. */
-async function conclude(host: ExtensionHost, ids: ConversationId[], caller: Context = context) {
-  await host.harness().commit((tx) => concludeIn(host, tx, ids), caller)
-  const kept = (await host.want(Release)?.release(ids, caller)) ?? []
-  return { concluded: ids, kept }
+/**
+ * Conclude top-level conversations `ids` in one transaction, stop what they and their subagents run, then free what
+ * they hold. Only this explicit conclude stops work; automatic ones (a landed branch) wait until it is idle. An agent
+ * concluding its own tree (`from`) is not stopped, since it would wait for itself; its worktree is then kept as busy.
+ */
+async function conclude(host: ExtensionHost, ids: ConversationId[], from?: number) {
+  const harness = host.harness()
+  const { tree, inside } = await harness.commit(async (tx) => {
+    await concludeIn(host, tx, ids)
+    const owned = await ownedTree(tx, ids)
+    return { tree: owned, inside: from !== undefined && owned.has(from as ConversationId) }
+  }, context)
+  const stopped: number[] = []
+  if (!inside) {
+    const busy = new Set(
+      (await harness.inspect(context)).tasks.flatMap(({ record: task }) =>
+        task.conversationId !== undefined && !task.background ? [task.conversationId] : [],
+      ),
+    )
+    stopped.push(...[...tree].filter((id) => busy.has(id)).toSorted((a, b) => a - b))
+    // Background too: a subagent hangs off a background anchor, and its reporter is background work.
+    for (const id of ids)
+      await (await harness.conversation(id, context))?.abort(context, { background: true })
+  }
+  const previews = (await host.want(Previews)?.stop([...tree], context)) ?? []
+  const kept = (await host.want(Release)?.release(ids, context)) ?? []
+  return { concluded: ids, stopped, previews, kept }
+}
+/** `ids` and every conversation they own, transitively (subagents and theirs). */
+async function ownedTree(tx: Tx, ids: ConversationId[]) {
+  const tree = new Set(ids)
+  const owners = new Map<ConversationId, ConversationId>()
+  let cursor: Cursor | undefined
+  do {
+    const page = await tx.scanConversations({}, 256, cursor)
+    for (const row of page.items) if (row.owner) owners.set(row.id, row.owner.conversationId)
+    cursor = page.next
+  } while (cursor !== undefined)
+  for (const id of owners.keys()) {
+    const chain: ConversationId[] = []
+    for (let at: ConversationId | undefined = id; at !== undefined; at = owners.get(at)) {
+      if (tree.has(at)) {
+        for (const below of chain) tree.add(below)
+        break
+      }
+      chain.push(at)
+    }
+  }
+  return tree
 }
 /** Add top-level conversations `ids` to the concluded list inside `tx`; throws for unknown, owned or fixed ones. */
 export async function concludeIn(host: Pick<ExtensionHost, 'doc'>, tx: Tx, ids: ConversationId[]) {
@@ -205,6 +250,13 @@ export async function concludeIn(host: Pick<ExtensionHost, 'doc'>, tx: Tx, ids: 
   ui['ext.conversations.concluded'] = [
     ...new Set([...(Array.isArray(previous) ? previous : []), ...ids]),
   ]
+  // When each was last concluded, kept on resume: a report from before it stays settled (messages' open.tsx).
+  const at = ui['ext.conversations.concludedAt']
+  const now = Date.now()
+  ui['ext.conversations.concludedAt'] = {
+    ...(at && typeof at === 'object' && !Array.isArray(at) ? at : {}),
+    ...Object.fromEntries(ids.map((id) => [id, now])),
+  }
 }
 
 function conversationIds(args: ActionInput<{ ids: number[] }>): ConversationId[] {
@@ -274,6 +326,7 @@ export default (host: ExtensionHost) => {
   // Extension points this extension declares, resolved where they are called; declared here for the catalogue.
   host.want(Trees)
   host.want(Release)
+  host.want(Previews)
   host.implement(ConversationsApi, {
     subject: (id, caller) => subject(host, id, caller),
     concludeIn: (tx, ids) => concludeIn(host, tx, ids),

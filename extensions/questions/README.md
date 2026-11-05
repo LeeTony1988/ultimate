@@ -1,9 +1,9 @@
 # Questions
 
-Answer cards for @ultimate's questions to the user. One thing asks: a reply-expected message to the user that carries
-`questions`. @ultimate's `message { to: 'user', text, questions }` declares them; messages validates them at the tool
+Answer cards for questions to the user from @ultimate and branches. One thing asks: a reply-expected message to the user
+that carries `questions`. The asker's `message { to: 'user', text, questions }` declares them; messages validates them at the tool
 boundary (`extensions/messages/questions.ts`) and stores them on the message, and the card renders exactly what was
-declared. No model reads the text, and nothing is extracted. Final answers never ask: @ultimate's instructions put
+declared. No model reads the text, and nothing is extracted. Final answers never ask: the agents' instructions put
 every decision in such a message.
 
 ```ts
@@ -28,17 +28,19 @@ or keys, an option that is "Something else"/"Other" (the card adds it), a scale 
 10 steps, and repeated question texts or refs. Fields that do not apply to a kind are dropped, text is trimmed.
 `questions` goes only with a reply-expected message to `user`.
 
-A question stays open until the user answers it (its card, or a Reply to that message) or dismisses it. Typed input,
+A question stays open until the user answers it (its card, or a Reply to that message) or dismisses it, or @ultimate
+settles it for them from what they said in its chat (messages' `settle`; the card then reads "@ultimate answered for
+you"). Typed input,
 answers to other messages and agent messages leave it open. While it is open, messages starts each of the asker's runs
 with a line listing it by its questions (see [Messages](../messages/README.md)).
 
 ## Card
 
-Under the outgoing `message` card in @ultimate's transcript, through messages’ `MessageAnswers` point. One question is
+Under the outgoing `message` card in the asker's transcript, through messages’ `MessageAnswers` point. One question is
 open at a time; the others fold to a line with their answer (`1b drop them`) or “not answered”, and a dot per question
 shows progress. Kinds: `choice` (one option), `multi` (any), `confirm` (Yes/No), `scale` (numbered steps with end
 labels) and `text` (a field); options offer “Something else…” with an inline field, and an option's Markdown `preview`
-shows beside the options for the hovered or chosen one. Recommended options carry a “my pick” chip. Under the questions,
+shows beside the options for the hovered or chosen one. Recommended options (@ultimate's picks, also on a branch's card) carry a “my pick” chip. Under the questions,
 a note field is always there: whatever it holds goes after the answer lines, or on its own (“Send note”), and never
 changes a pick. **Accept picks** chooses every pick still open; Send sends what is answered (“Send 2 of 5”). Sending
 opens a 3 s window with Undo before the answer goes out, then the card settles into the summary of what was sent, the
@@ -54,7 +56,7 @@ card, on another control or in the panel, whose cards take no global keys.
 
 The To-dos tab lists every message that waits on the user at its top, newest first, named by its first question; a
 row opens the asking conversation at the message, where this card answers or dismisses it. ⌘K “Show open
-questions” opens the tab; meanwhile @ultimate's mark is amber.
+questions" opens the tab; meanwhile @ultimate's mark is amber, and an asking branch's row says `waits on you`.
 
 ## Actions
 

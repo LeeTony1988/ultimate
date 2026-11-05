@@ -2,11 +2,12 @@ import {
   ChevronRightIcon,
   CircleAlertIcon,
   CopyPlusIcon,
+  KeyRoundIcon,
   LoaderCircleIcon,
   ReplaceIcon,
   TriangleAlertIcon,
 } from 'lucide-react'
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode, Ref } from 'react'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
@@ -15,8 +16,10 @@ import {
   cn,
   elidePath,
   errorMessage,
+  events,
   shortenPath,
   useAction,
+  useEvent,
   useExtensionUiState,
   useExtensions,
   Provided,
@@ -36,6 +39,8 @@ import {
 import { ExtensionDetails } from './ui.tsx'
 import { AdoptProjectSetupAction, DecideAction, DetailsAction, SetExtensionAction } from './refs.ts'
 import { switchScope } from './choices.tsx'
+import { ListAction } from '../secrets/ui.tsx'
+import type { Secret } from '../secrets/refs.ts'
 
 type Scope = 'project' | 'user'
 
@@ -200,6 +205,100 @@ function ProjectSetup({ system }: { system: SystemInfo }) {
   )
 }
 
+const openSecrets = (name?: string) => events.emit('secrets:open', name ? { name } : {})
+
+/**
+ * Every declared or stored secret, metadata only; re-read when one is saved or deleted and when an extension turns on
+ * or off, which changes who declares it.
+ */
+function useSecrets(system: SystemInfo | undefined) {
+  // A failure only hides the secret lines; the Secrets panel shows it.
+  const secrets = useAction(ListAction, null, { onError: () => {} })
+  const { refetch } = secrets
+  const signature = JSON.stringify(
+    system?.extensions.map((extension) => [extension.name, extension.enabled]),
+  )
+  const seen = useRef(signature)
+  useEffect(() => {
+    if (signature === seen.current) return
+    seen.current = signature
+    // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined rather than rejecting.
+    void refetch()
+  }, [signature, refetch])
+  useEvent('secrets:changed', () => void refetch())
+  return secrets.data
+}
+
+/** One line to the full Secrets panel, with how many declared secrets are still missing. */
+function SecretsLine({ secrets }: { secrets: readonly Secret[] | undefined }) {
+  const missing = secrets?.filter(
+    (secret) => !secret.set && !secret.via && secret.declaredBy.length > 0,
+  ).length
+  return (
+    <button
+      className="group flex w-full items-center gap-2 border-b border-border/60 px-3 py-2 text-left outline-none hover:bg-muted/40 focus-visible:bg-muted/40"
+      onClick={() => openSecrets()}
+      type="button"
+    >
+      <Heading className="flex-1 group-hover:text-foreground">
+        <KeyRoundIcon className="size-3" />
+        Secrets
+      </Heading>
+      {missing ? (
+        <span className="flex items-center gap-1.5 font-mono text-[11px] text-warning">
+          <span className="size-1.5 rounded-full bg-warning" />
+          {missing} missing
+        </span>
+      ) : (
+        secrets?.length !== undefined && (
+          <span className="font-mono text-[11px] text-muted-foreground/70">
+            {secrets.length ? 'all set' : 'none needed'}
+          </span>
+        )
+      )}
+      <ChevronRightIcon className="size-3 text-muted-foreground/60 group-hover:text-foreground" />
+    </button>
+  )
+}
+
+/** The secrets an extension declares, set or missing, each opening the Secrets panel at its row. Never a value. */
+function RowSecrets({ secrets }: { secrets: readonly Secret[] }) {
+  if (secrets.length === 0) return null
+  return (
+    <ul className="mt-1 flex flex-col gap-0.5 pl-[18px]">
+      {secrets.map((secret) => (
+        <li className="flex items-center gap-1.5 font-mono text-[11px]" key={secret.name}>
+          <KeyRoundIcon className="size-3 shrink-0 text-muted-foreground/60" />
+          <span className="min-w-0 truncate text-foreground/80" title={secret.description}>
+            {secret.name}
+          </span>
+          <span
+            className={cn(
+              'flex shrink-0 items-center gap-1',
+              secret.set || secret.via ? 'text-muted-foreground/70' : 'text-warning',
+            )}
+          >
+            <span
+              className={cn(
+                'size-1.5 rounded-full',
+                secret.set || secret.via ? 'bg-success' : 'bg-warning',
+              )}
+            />
+            {secret.set ? 'set' : secret.via ? `via ${secret.via}` : 'missing'}
+          </span>
+          <button
+            className="ml-auto shrink-0 text-[11px] text-brand outline-none hover:underline focus-visible:underline"
+            onClick={() => openSecrets(secret.name)}
+            type="button"
+          >
+            {secret.set ? 'Replace' : 'Add'}
+          </button>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 /** One labelled line of an open row; empty values are left to the caller's `none` line. */
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -233,7 +332,6 @@ function Details({ extension }: { extension: ExtensionInfo }) {
         ['composer', web?.composer],
         ['links', web?.link],
         ['compact', web?.compact],
-        ['intro', web?.intro],
       ] as const
     )
       .filter(([, value]) => value)
@@ -333,8 +431,10 @@ function Row({
   note,
   onToggle,
   switchRef,
+  secrets,
 }: {
   extension: ExtensionInfo
+  secrets: readonly Secret[]
   line: string
   open: boolean
   onOpen: (open: boolean) => void
@@ -398,6 +498,12 @@ function Row({
               {sources[extension.source]}
               <span className="text-muted-foreground/60"> · {label}</span>
             </span>
+            {secrets.some((secret) => !secret.set && !secret.via) && (
+              <span className="flex shrink-0 items-center gap-1 self-center text-[10.5px] text-warning">
+                <TriangleAlertIcon className="size-3" />
+                secret missing
+              </span>
+            )}
           </span>
           <Line
             className={cn(
@@ -437,6 +543,7 @@ function Row({
           />
         </span>
       </div>
+      <RowSecrets secrets={secrets} />
       {open && <Details extension={extension} />}
       {failure && (
         <p className="mt-1 line-clamp-3 font-mono text-[11px] leading-snug break-words whitespace-pre-wrap text-error/85">
@@ -471,6 +578,7 @@ export function ExtensionsPanel() {
   const [notes, setNotes] = useState<Record<string, string>>({})
   // Read by screen readers once a toggle has applied, since the row has moved.
   const [announcement, setAnnouncement] = useState('')
+  const secrets = useSecrets(system)
   const root = useRef<HTMLDivElement>(null)
   const switches = useRef(new Map<string, HTMLButtonElement>())
   // A toggle moves its row between On and Available, which remounts its switch; focus follows the row there.
@@ -541,6 +649,7 @@ export function ExtensionsPanel() {
       </p>
       <Diagnostics messages={system.extensionDiagnostics} />
       <ProjectSetup system={system} />
+      <SecretsLine secrets={secrets} />
       <div className="sticky top-0 z-10 border-b border-border/60 bg-sidebar/95 px-3 py-2 backdrop-blur-sm">
         <div className="flex items-center gap-2">
           <Heading className="flex-1">Changes apply</Heading>
@@ -595,6 +704,9 @@ export function ExtensionsPanel() {
                 pending={pending[extension.name]}
                 replaces={replaces(extension.name)}
                 scope={scope}
+                secrets={
+                  secrets?.filter((secret) => secret.declaredBy.includes(extension.name)) ?? []
+                }
                 switchRef={(node) => {
                   if (node) switches.current.set(extension.name, node)
                   return () => {

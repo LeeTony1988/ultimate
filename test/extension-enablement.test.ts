@@ -104,9 +104,10 @@ it.concurrent('orders facets by source so a project bash tool and renderer win r
 
 const serviceFacet = (detail: string, fail = false) => `
 import { defineExtension } from '@earendil-works/pi-durable'
-export const actions = { lookup: async (_args, { host }) => host.use('service-test') }
+const Api = { name: 'service-test' }
+export const actions = { lookup: async (_args, { host }) => ({ detail: host.want(Api)?.detail }) }
 export default (host) => {
-  host.provide('service-test', { detail: '${detail}' })
+  host.implement(Api, { detail: '${detail}' })
   ${fail ? "throw new Error('failed service installation')" : ''}
   host.onOpen(async () => {})
   return defineExtension({ name: 'service-test' })
@@ -140,7 +141,7 @@ it.concurrent('keeps the provider on a failed reload, replaces it on reload and 
     join(consumer, 'server.ts'),
     `
     import { defineExtension } from '@earendil-works/pi-durable'
-    export const actions = { lookup: async (_args, { host }) => host.use('service-test') ?? null }
+    export const actions = { lookup: async (_args, { host }) => host.want({ name: 'service-test' })?.detail ?? null }
     export default defineExtension({ name: 'service-consumer' })
   `,
   )
@@ -195,10 +196,49 @@ it.concurrent('keeps the replacement provider available while the old cleanup is
   expect(await lookup()).toEqual({ detail: 'replacement' })
 })
 
+it.concurrent('refuses a tool name another extension of the same layer already provides', async () => {
+  const { home, projectRoot, server } = await fixture('{}')
+  const facet = (name: string, version = '') => `
+    import { obj } from '@earendil-works/pi-schema'
+    import { defineExtension, defineTool } from '@earendil-works/pi-durable'
+    export default defineExtension({ name: '${name}', tools: [defineTool({
+      name: 'clash_tool', description: '${name}${version}', parameters: obj({}),
+      execute: async () => ({})
+    })] })`
+  const files: Record<string, string> = {}
+  for (const name of ['aaa-clash', 'bbb-clash']) {
+    const folder = join(projectRoot, '.ultimate/extensions', name)
+    await mkdir(folder, { recursive: true })
+    files[name] = join(folder, 'server.ts')
+    await writeFile(files[name], facet(name))
+  }
+  const info = (name: string) => server.extensions.info().find((e) => e.name === name)
+  const clash = async () =>
+    (await server.root.agent(context)).tools.find((tool) => tool.name === 'clash_tool')?.description
+  await until(() => !!info('bbb-clash')?.server)
+  expect(info('bbb-clash')?.server?.error).toBe(
+    'Error: clash_tool is already provided by aaa-clash',
+  )
+  expect(await clash()).toBe('aaa-clash')
+  // A reload of the holder does not clash with its own name.
+  await writeFile(files['aaa-clash'], facet('aaa-clash', ' v2'))
+  server.vite.watcher.emit('change', files['aaa-clash'])
+  await until(async () => (await clash()) === 'aaa-clash v2')
+  expect(info('aaa-clash')?.server?.error).toBeUndefined()
+  // Once the holder is disabled, the other extension's next reload takes the name.
+  await writeFile(
+    join(home, '.ultimate/settings.json'),
+    JSON.stringify({ extensions: { disable: ['aaa-clash'] } }),
+  )
+  await until(() => info('aaa-clash')?.enabled === false)
+  server.vite.watcher.emit('change', files['bbb-clash'])
+  await until(async () => (await clash()) === 'bbb-clash')
+  expect(info('bbb-clash')?.server?.error).toBeUndefined()
+})
+
 const tools = async (server: Awaited<ReturnType<typeof fauxServer>>) =>
   (await server.root.agent(context)).tools.map((tool) => tool.name).toSorted()
-const web = async (server: Awaited<ReturnType<typeof fauxServer>>) =>
-  Object.keys((await server.vite.ssrLoadModule('virtual:ultimate/web-facets')).loaders)
+const web = async (server: Awaited<ReturnType<typeof fauxServer>>) => server.web.facets()
 
 it.concurrent('layers settings live, installs and uninstalls tools and web facets, and notices unknown names once', async () => {
   const { home, projectRoot, server } = await fixture()

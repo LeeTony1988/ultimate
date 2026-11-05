@@ -8,10 +8,10 @@ chats). The conversations the `sidebar.unlisted` point names (side-chat names ev
 other list (`listed.ts`).
 
 Every standing agent's row leads with its mark (conversations' `AgentMark`): a small tinted tile with a glyph — a brand
-`U` for @ultimate (the title bar's wordmark), a green merge for the lander,
-a bot for any other resident — with a presence dot in its corner (pulsing while it works or lands, amber while it
-waits on you). Then a fixed display name (`Ultimate`, `Lander`, else the name capitalised) with
-`@name` small and muted. The same mark sits in the title bar's button and before standing senders in chat bubbles.
+`U` for @ultimate (the title bar's wordmark, or its definition `title`'s first letter), a green merge for the lander,
+its definition's `icon` and `tint` for any other resident, else a bot — with a presence dot in its corner (pulsing while it works or lands, amber while it
+waits on you). Then its display name (its definition's `title`, else the ULTIMATE wordmark for @ultimate, `Lander`, or
+the name capitalised) with `@name` small and muted. The same mark sits in the title bar's button and before standing senders in chat bubbles.
 
 The **project** heads the sidebar: its path from home (or `<project> #<worktree>`, the full path on hover) with a quiet
 `History #id` on the right, and its root's **Memory** row under it, as one block. Clicking the path opens the root's
@@ -29,7 +29,7 @@ answer when that asks you questions), and the age of its latest
 message. Clicking it opens @ultimate on the Agent surface through `subagents.standing {name: 'ultimate'}`, also before
 its conversation exists. Below it, an Agents group lists the lander first, then the other ownerless top-level standing
 agents (label `agent`) by ID. These rows are never concluded or hidden and show no summary or feature:
-@lander shows its state (`landing`, `fixing`, `diagnosing`, `working` or `idle`), `queue N` while submissions wait,
+@lander shows its state (`landing` or `idle`), `queue N` while submissions wait,
 and the age of its latest landing (what landed is its Landed section's first row); other agents show `working` or `idle` and the age. Their menu only
 compacts the context; they are never renamed, cleared or concluded.
 
@@ -53,7 +53,7 @@ section of the `sidebar.top` slot draws the same heading. Top to bottom:
   landing (`CommitCount` from workspaces). The first five show; `+N more` unfolds the rest
   (`ext.conversations.landedAll`). Landings are read again whenever a root's token count changes, which every new
   entry does.
-- **Memory**: one row per root (`MemoryRow`, `root.tsx`) with a brain mark, the brief's size (what every new branch
+- **Memory** (inside the project block): one row per root (`MemoryRow`, `root.tsx`) with a brain mark, the brief's size (what every new branch
   starts from; the whole context's while it has no memories) and its memories counted by kind (`4 decisions · 5 facts
   · 3 lessons`). Clicking it opens lineage's **Memory** surface, grouped into decisions, facts and lessons (empty
   until @ultimate remembers something), and the row shows selected while it is open. The project path above it opens the root's tally, the browsable history (every
@@ -71,7 +71,10 @@ section of the `sidebar.top` slot draws the same heading. Top to bottom:
   its target, opening `branch:<name>` in Review, and `+ N edits` (uncommitted changed paths), opening
   `uncommitted:<id>`. A fresh worktree, or a branch without one, shows nothing. All rows are read in one call, again
   only when an agent commits (`coding-tools.committed`), a worktree's state changes or a branch's run starts or ends;
-  never on a timer. Its subagents follow, one line each at any depth (`SubagentLine`, `rows.tsx`): their mark, plan
+  never on a timer. When its coordinator works its current epic itself (no task linked to a subagent), a line
+  `E1 · <title>` comes first (`EpicLine`, `rows.tsx`, from plan's `conversations.epic` point): its dot pulses while
+  the coordinator runs, it reads `idle` between runs and `done` with a check once the epic is, and a click opens the
+  epic in the plan panel. Its subagents follow, one line each at any depth (`SubagentLine`, `rows.tsx`): their mark, plan
   chip, role and `#id`, and their state word, with the latest activity or plan task on hover.
 
 Landed branches and older conversations that are neither roots nor branches live in the collapsed "Earlier · N" group,
@@ -86,7 +89,7 @@ lagging title/timestamp list.
 A solid purple dot means an unread reply, not ongoing work; only the pulsing dot means working.
 
 Every row reads one state from messages’ `conversationState`, the same the System surface shows: working;
-**waits on you** (only the primary agent, @ultimate: an open question to the user);
+**waits on you** (@ultimate or a branch with an open question to the user);
 **awaiting @ultimate** (amber question mark, never on a subagent: an open reply-expected message the conversation sent
 the primary agent); **done** (green check, subagents only: it answered, and its answer went to its parent);
 **failed** (red cross: its latest input ended unanswered); else idle. Working includes queued input. Standing rows,

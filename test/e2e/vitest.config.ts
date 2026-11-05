@@ -8,5 +8,7 @@ export default defineConfig({
     include: ['test/e2e/**/*.test.ts'],
     testTimeout: 60_000,
     maxWorkers: 4,
+    // Like vite.config.ts: under an agent Vitest's minimal reporter is silent for passing files.
+    reporters: ['default'],
   },
 })

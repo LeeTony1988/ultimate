@@ -40,8 +40,9 @@ address in the general `remotes` user setting ([Discovery and settings](../../do
 before the register.
 
 `api.ts` exposes optional `CloudApi`: `status()` returns `off`, `local`, `satellite` or `on`, and `backup()` performs the same
-non-forced backup of the active chapter as the user action. Dream uses it for the final backup before falling asleep;
-missing, off, local-only or satellite cloud is skipped explicitly. Cloud still ships disabled by default.
+non-forced backup of the active chapter as the user action; `lastBackup()` returns the chapter's last backup from
+`cloud-backup.json`, else from the Worker's register. Dream uses them for the final backup before falling asleep and
+the new chapter's first backup after it; missing, off, local-only or satellite cloud is skipped explicitly. Cloud still ships disabled by default.
 
 ## Cloud backups
 

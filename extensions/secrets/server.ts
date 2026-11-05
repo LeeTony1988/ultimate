@@ -30,7 +30,9 @@ export const actions: Record<string, ExtensionAction> = {
         name: string
         description?: string
         url?: string
+        provider?: string
         declaredBy: string[]
+        via?: string
         set: boolean
         updatedAt?: string
       }
@@ -49,6 +51,11 @@ export const actions: Record<string, ExtensionAction> = {
         ...metadata,
         declaredBy: items.get(metadata.name)?.declaredBy ?? [],
       })
+    }
+    for (const item of items.values()) {
+      if (item.provider && host.modelRuntime.getProviderAuthStatus(item.provider).configured)
+        item.via = item.provider
+      delete item.provider
     }
     return [...items.values()].toSorted((a, b) => a.name.localeCompare(b.name))
   }),

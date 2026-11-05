@@ -1,55 +1,55 @@
-/** A sender's quiet accent: a stripe on the side it writes from, a faint fill and the colour of its name. */
-export type Accent = { left: string; fill: string; name: string }
+/** A sender's quiet accent: a faint fill, a hairline edge in its colour and the colour of its name. */
+export type Accent = { fill: string; edge: string; name: string }
 
 const palette: readonly Accent[] = [
   {
-    left: 'border-l-sky-500/60',
     fill: 'bg-sky-500/5',
+    edge: 'border-sky-500/20',
     name: 'text-sky-700 dark:text-sky-300',
   },
   {
-    left: 'border-l-emerald-500/60',
     fill: 'bg-emerald-500/5',
+    edge: 'border-emerald-500/20',
     name: 'text-emerald-700 dark:text-emerald-300',
   },
   {
-    left: 'border-l-teal-500/60',
     fill: 'bg-teal-500/5',
+    edge: 'border-teal-500/20',
     name: 'text-teal-700 dark:text-teal-300',
   },
   {
-    left: 'border-l-rose-500/60',
     fill: 'bg-rose-500/5',
+    edge: 'border-rose-500/20',
     name: 'text-rose-700 dark:text-rose-300',
   },
   {
-    left: 'border-l-orange-500/60',
     fill: 'bg-orange-500/5',
+    edge: 'border-orange-500/20',
     name: 'text-orange-700 dark:text-orange-300',
   },
   {
-    left: 'border-l-lime-500/60',
     fill: 'bg-lime-500/5',
+    edge: 'border-lime-500/20',
     name: 'text-lime-700 dark:text-lime-300',
   },
 ]
 const user: Accent = {
-  left: 'border-l-brand/60',
   fill: 'bg-brand/5',
+  edge: 'border-brand/20',
   name: 'text-brand',
 }
 
 /** @ultimate, the same purple in every chapter, so its bubbles are always recognisable. */
 const ultimate: Accent = {
-  left: 'border-l-purple-500/70',
-  fill: 'bg-purple-500/10',
+  fill: 'bg-purple-500/[0.07]',
+  edge: 'border-purple-500/25',
   name: 'text-purple-700 dark:text-purple-300',
 }
 
 /** Another project's Ultimate: a violet the conversation palette never uses, bluer than @ultimate's purple. */
 const remote: Accent = {
-  left: 'border-l-violet-500/70',
-  fill: 'bg-violet-500/10',
+  fill: 'bg-violet-500/[0.07]',
+  edge: 'border-violet-500/25',
   name: 'text-violet-700 dark:text-violet-300',
 }
 

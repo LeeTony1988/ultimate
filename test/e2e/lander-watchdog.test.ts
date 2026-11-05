@@ -5,8 +5,8 @@ import { runLanderCheck } from '../../extensions/workspaces/lander.ts'
 import { context } from '../../server/harness.ts'
 import { removeTemp, temp } from '../helpers.ts'
 
-// This integration test specifically exercises POSIX process-group cleanup through /bin/sh and /proc, so it is gated
-// the way `process-group.test.ts` is: Windows has neither, and the run's own unit tests cover its limits there.
+// POSIX only: the case drives process-group cleanup through /bin/sh and reads `/proc`, and Windows has neither.
+// `process-group.test.ts` is gated the same way; the run's own unit tests cover its limits there.
 describe.skipIf(process.platform === 'win32')('POSIX process groups', () => {
   it('kills a silent process group on stall and a printing process on the total cap', async () => {
     const directory = await temp('ultimate-lander-watchdog-')

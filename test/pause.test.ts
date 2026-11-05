@@ -60,11 +60,14 @@ const streamTask = (released: Promise<void>) =>
   })
 
 /** A faux harness with the pause extension and a `work` tool that runs until the test releases it, as bash would. */
-async function fixture(home?: string) {
+async function fixture(home?: string, retry: { maxRetries?: number } = {}) {
   home ??= await temp('ultimate-pause-')
   // Pi's retry backoff in 1 ms, so a retry the pause held runs at once after Play.
   await mkdir(join(home, '.pi'), { recursive: true })
-  await writeFile(join(home, '.pi/settings.json'), JSON.stringify({ retry: { baseDelayMs: 1 } }))
+  await writeFile(
+    join(home, '.pi/settings.json'),
+    JSON.stringify({ retry: { baseDelayMs: 1, ...retry } }),
+  )
   const prepared = await prepareHarness({
     ultimateRoot: home,
     userHome: home,
@@ -420,6 +423,74 @@ it('pauses on the first rate-limited answer: the run waits in its retry, fails n
   expect(await cards()).toHaveLength(1)
 })
 
+it('does not pause again for the rate limit that ends its run: the failure reaches the watchdog without another Play', async () => {
+  const f = await fixture(undefined, { maxRetries: 1 })
+  let responses = 0
+  const limited = () => {
+    responses++
+    return fauxAssistantMessage('', { stopReason: 'error', errorMessage: limit })
+  }
+  f.prepared.faux!.setResponses([limited, limited])
+  const { root } = await f.open()
+  const submission = await root.submit({ type: 'input', content: 'go' }, context)
+  await until(async () => (await f.action('state')).limit !== undefined)
+  // Play spends Pi's last retry into the limit, which ends the run: nothing is left to hold.
+  await f.action('play')
+  expect(await submission.wait(context)).toMatchObject({
+    status: 'unanswered',
+    reason: 'model_error',
+  })
+  expect(responses).toBe(2)
+  for (let turn = 0; turn < 20; turn++) await new Promise((resolve) => setImmediate(resolve))
+  expect(f.paused()).toBe(false)
+  expect((await f.action('state')).paused).toBe(false)
+})
+
+it('tells a held parent which subagent hit the limit, once across re-pauses, and nothing after Play', async () => {
+  const f = await fixture()
+  const limitedResponse = () =>
+    fauxAssistantMessage('', { stopReason: 'error', errorMessage: limit })
+  f.prepared.faux!.setResponses([
+    // The parent calls a tool; while it runs, its subagent's first request hits the limit, twice across a Play.
+    () => fauxAssistantMessage([fauxToolCall('work', {})], { stopReason: 'toolUse' }),
+    limitedResponse,
+    limitedResponse,
+    () => fauxAssistantMessage([fauxText('child done')]),
+    () => fauxAssistantMessage([fauxText('parent done')]),
+  ])
+  const { root: parent, harness } = await f.open()
+  const parentRun = await parent.submit({ type: 'input', content: 'go' }, context)
+  await until(() => f.finish !== undefined)
+  const [tool] = (await harness.inspect(context)).tasks.filter(
+    ({ record }) => record.kind === 'pi.tool',
+  )
+  const child = await harness.commit(
+    (tx) => tx.createConversation({ ownership: { kind: 'task', taskId: tool.record.id } }),
+    context,
+  )
+  const childRun = await (await harness.conversation(child.id, context))!.submit(
+    { type: 'input', content: 'research' },
+    context,
+  )
+  const held = async () =>
+    (await parent.context(context)).entries.filter((entry) => entry.kind === 'pause.held')
+  await until(async () => (await held()).length === 1)
+  expect((await held())[0].data).toMatchObject({ child: child.id, provider: 'faux' })
+  // Play retries into the limit and pauses again: the same run, so no second note.
+  const { since } = await f.action('state')
+  await f.action('play')
+  await until(
+    async () =>
+      (await f.action('state')).since !== undefined && (await f.action('state')).since !== since,
+  )
+  expect(await held()).toHaveLength(1)
+  await f.action('play')
+  expect((await childRun.wait(context)).status).toBe('done')
+  f.finish!()
+  expect((await parentRun.wait(context)).status).toBe('done')
+  expect(await held()).toHaveLength(1)
+})
+
 it('leaves ordinary provider errors to Pi’s retry without pausing', async () => {
   const f = await fixture()
   f.prepared.faux!.setResponses([
@@ -564,7 +635,7 @@ it('keeps Pause, Play and the play-by-itself setting from agents, and checks the
 /** A task record as `running()` reads it: it decides by task kind and checkpoint phase only. */
 const at = (kind: string, phase: string) => ({ kind, state: { checkpoint: { phase } } })
 
-it('treats message deliveries as passive: their triage model call counts through the gate', () => {
+it('treats message deliveries and routes as passive waiters', () => {
   expect(passive(at('board.delivery', 'deliver'))).toBe(true)
   expect(passive(at('board.delivery', 'reply'))).toBe(true)
   expect(passive(at('ultimate.subagent-reporter', 'deliver'))).toBe(true)

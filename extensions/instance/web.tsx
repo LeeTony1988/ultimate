@@ -1,4 +1,4 @@
-import { ChevronRightIcon, ExternalLinkIcon } from 'lucide-react'
+import { ChevronDownIcon, ChevronRightIcon, ExternalLinkIcon } from 'lucide-react'
 import { useEffect, useSyncExternalStore } from 'react'
 import type { MouseEvent, ReactNode } from 'react'
 import { Shimmer } from '@/components/ai/shimmer'
@@ -14,7 +14,6 @@ import {
 import {
   cn,
   defineWebExtension,
-  ProjectChip,
   shortenPath,
   useAction,
   useConversations,
@@ -135,12 +134,10 @@ function InstanceCall({ call }: { call: ToolCallView }) {
         )}
         {done && action === 'logs' && typeof value === 'string' && (
           <Collapsible className="group/logs" defaultOpen>
-            <CollapsibleTrigger className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-[10px] tracking-wider text-muted-foreground/80 uppercase hover:text-foreground">
+            <CollapsibleTrigger className="flex w-full items-center gap-1.5 px-2.5 py-1.5 section-label hover:text-foreground">
               <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/logs:rotate-90" />
               Logs
-              <span className="tracking-normal normal-case text-muted-foreground/60">
-                {value.split('\n').length} lines
-              </span>
+              <span className="text-muted-foreground/60">{value.split('\n').length} lines</span>
             </CollapsibleTrigger>
             <CollapsibleContent>
               <pre className="max-h-80 overflow-auto bg-terminal px-3 py-2 leading-[1.55] whitespace-pre-wrap text-foreground/85">
@@ -286,36 +283,41 @@ function PreviewLink({
 const port = (url: string) => `:${new URL(url).port}`
 
 /**
- * The title bar's project chip with the previews `instance` runs as its menu: "This project" and each preview. A plain
- * chip while there are none; the list refreshes when the menu opens.
+ * The previews `instance` runs, as a chip after the project chip while any runs: its menu lists "This project" and
+ * each preview, and refreshes when it opens. It leaves the project chip itself to `titlebar.project`.
  */
 function Switcher() {
   const current = useShown()?.preview
   const data = usePreviews()?.filter((preview) => preview.running)
   const conversations = useConversations()
-  if (!data?.length) return <ProjectChip />
+  if (!data?.length) return null
   const title = (preview: Preview) =>
     conversations.find((conversation) => conversation.id === preview.conversationId)?.title
   return (
     <DropdownMenu modal={false} onOpenChange={(open) => open && refetch()}>
       <DropdownMenuTrigger asChild>
-        <ProjectChip className={cn(current && 'bg-brand/10')} menu>
+        <button
+          className={cn(
+            'flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 font-mono text-[11.5px] text-muted-foreground transition-colors outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-accent',
+            current && 'bg-brand/10',
+          )}
+          type="button"
+        >
           {current ? (
-            <span className="flex shrink-0 items-center gap-1.5 font-mono text-[11.5px] text-muted-foreground">
+            <>
               <span className="size-1.5 rounded-full bg-brand" />#{current.conversationId} ·{' '}
               {port(current.url)}
-            </span>
+            </>
           ) : (
-            <span className="shrink-0 font-mono text-[11.5px] text-muted-foreground max-md:hidden">
+            <span className="max-md:hidden">
               {data.length} {data.length === 1 ? 'preview' : 'previews'}
             </span>
           )}
-        </ProjectChip>
+          <ChevronDownIcon className="size-3.5 opacity-60" />
+        </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-80" sideOffset={4}>
-        <DropdownMenuLabel className="px-2 pt-1 pb-1.5 font-mono text-[10.5px] font-normal tracking-wider text-muted-foreground uppercase">
-          Instances
-        </DropdownMenuLabel>
+        <DropdownMenuLabel className="px-2 pt-1 pb-1.5 section-label">Instances</DropdownMenuLabel>
         <DropdownMenuItem className="gap-2 py-1.5" onSelect={() => show(undefined)}>
           <span className={cn('flex-1 text-[13px]', !current && 'text-brand')}>This project</span>
           <span className="font-mono text-[11px] text-muted-foreground">{port(location.href)}</span>
@@ -373,5 +375,5 @@ function Embedded() {
 export default defineWebExtension({
   tools: { instance: InstanceCall },
   link: PreviewLink,
-  slots: { 'titlebar.project': loopback ? [Switcher] : [], overlay: [Poll, Embedded] },
+  slots: { 'titlebar.left': loopback ? [Switcher] : [], overlay: [Poll, Embedded] },
 })

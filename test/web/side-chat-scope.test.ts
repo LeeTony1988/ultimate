@@ -3,7 +3,7 @@ import type { EffectCallback, ReactElement, ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { ModelsResponse, StreamedView } from '../../shared/protocol.ts'
-import { FakeSource } from './fake-source.ts'
+import { FakeSource, fakeSubscriptions } from './fake-source.ts'
 
 const harness = vi.hoisted(() => ({
   sources: [] as FakeSource[],
@@ -87,6 +87,7 @@ const modelList: ModelsResponse = {
     available: true,
   })),
 }
+const server = fakeSubscriptions(harness.sources)
 const effects: (() => void)[] = []
 beforeEach(() => {
   vi.useFakeTimers()
@@ -97,14 +98,18 @@ beforeEach(() => {
     removeEventListener() {},
   }))
   harness.fetch.mockReset()
-  harness.fetch.mockImplementation(async (url) =>
-    Response.json((url as string) === '/api/models' ? modelList : { rev: 1 }),
+  harness.fetch.mockImplementation(
+    async (url, init) =>
+      server.handle(url as string, init) ??
+      Response.json((url as string) === '/api/models' ? modelList : { rev: 1 }),
   )
   harness.sources.length = 0
+  server.subscriptions.length = 0
   harness.effects.length = 0
   harness.select.clear()
   store.show(undefined)
   store.start()
+  harness.sources[0].open()
 })
 afterEach(() => {
   for (const release of effects.splice(0)) release()
@@ -121,12 +126,8 @@ async function settle() {
     await vi.advanceTimersByTimeAsync(10)
   }
 }
-const stream = (id: number) =>
-  harness.sources.findLast(
-    (source) =>
-      !source.closed &&
-      new URL(source.url, 'http://local').searchParams.get('conversation') === String(id),
-  )!
+/** The open subscription of a conversation (undefined: the shown root) on the tab's stream. */
+const stream = (id?: number) => server.of(id)!
 function view(id: number, modelId: string, thinkingLevel: string): StreamedView {
   return {
     conversation: { id },
@@ -155,8 +156,12 @@ function find(node: ReactNode, key: string): ReactElement<{ onClick: () => void 
 }
 
 it('points the model and thinking controls inside a scope at the scoped conversation, not the shown one', async () => {
-  harness.sources[0].send('system', { process: { pid: 1, generation: 1 } } as never)
-  harness.sources[0].send('view', view(1, 'main-model', 'off'))
+  harness.sources[0].send('system', {
+    process: { pid: 1, generation: 1 },
+    code: { sha: 'abc' },
+    project: { settings: {} },
+  } as never)
+  stream().send('view', view(1, 'main-model', 'off'))
   const [ModelButton, ThinkingButton] = models.slots!['composer.toolbar'] as [
     () => ReactElement,
     () => ReactElement,
@@ -223,7 +228,7 @@ it('points the model and thinking controls inside a scope at the scoped conversa
 })
 
 it('makes main’s composer inert while a side chat is in front, with Back to main outside it', async () => {
-  harness.sources[0].send('view', view(44, 'main-model', 'off'))
+  stream().send('view', view(44, 'main-model', 'off'))
   const Composer = sideChat.composer!
   const core = h('textarea', { id: 'composer-input' })
   const render = () => renderToStaticMarkup(h(Composer, { core }))

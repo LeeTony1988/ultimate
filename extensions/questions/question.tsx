@@ -146,7 +146,7 @@ function Scale({
           const below = value !== undefined && index < value
           return (
             <button
-              key={index}
+              key={step.label}
               type="button"
               aria-pressed={chosen}
               aria-label={step.label}
@@ -244,6 +244,7 @@ export function QuestionItem({
         const chosen = choice.custom ? !!draft?.other : !!draft?.chosen.includes(number)
         return (
           <div
+            // oxlint-disable-next-line react/no-array-index-key -- Fixed options addressed by position in the draft.
             key={number}
             className={cn(choice.custom && question.kind === 'confirm' && 'col-span-2')}
           >

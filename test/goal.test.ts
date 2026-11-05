@@ -26,9 +26,12 @@ const overlay = <T extends object>(value: T): T =>
   })
 
 /** A transaction over overlaid documents and a few entries of @ultimate's conversation; @ultimate is conversation 5. */
-function fakeTx() {
+function fakeTx(
+  newer: { id: number; conversationId: number; kind?: string; model: object[] }[] = [],
+) {
   const docs = new Map<string, object>()
   const entries = [
+    ...newer,
     { id: 30, conversationId: ULTIMATE, model: [{ role: 'user', content: 'no images' }] },
     {
       id: 20,
@@ -62,14 +65,23 @@ function fakeTx() {
   } as unknown as Tx & { tasks: typeof tasks }
 }
 
-type Reminder = { id: string; name: string; enabled: boolean; subscribers?: number[] }
+type Reminder = {
+  id: string
+  name: string
+  enabled: boolean
+  subscribers?: (number | string)[]
+  key?: string
+}
 
 /** A host over `tx` with an automations ledger, and `sync()`, which runs the queued reminder tasks. */
 function fakeHost(tx: ReturnType<typeof fakeTx>) {
   const ledger = new Map<string, Reminder>()
   let next = 1
   const service = {
+    // As the real service: a repeated key returns the automation it made.
     create: async (args: Omit<Reminder, 'id' | 'enabled'>) => {
+      const made = [...ledger.values()].find((item) => args.key && item.key === args.key)
+      if (made) return made
       const id = `A${next++}`
       ledger.set(id, { id, ...args, enabled: true })
       return ledger.get(id)
@@ -166,6 +178,17 @@ it('records decisions with the screenshots of its own conversation only', async 
   ])
 })
 
+it('never takes an earlier turn\'s screenshot for images: "latest"', async () => {
+  const tx = fakeTx([{ id: 40, kind: 'pi.user', conversationId: ULTIMATE, model: [] }])
+  await start(tx, 'Goal', 0)
+  const decide = { action: 'decide', question: 'q', picked: 'p', reason: 'r' } as const
+  await expect(act(tx, ULTIMATE, { ...decide, images: 'latest' }, 1)).rejects.toThrow(
+    'no images in this turn',
+  )
+  await act(tx, ULTIMATE, { ...decide, images: 20 }, 2)
+  expect((await openGoal(tx))!.decisions).toMatchObject([{ images: 20 }])
+})
+
 it("notes the open goal on @ultimate's runs only, and lets only @ultimate keep it", async () => {
   const tx = fakeTx()
   const extension = goalExtension({
@@ -219,14 +242,23 @@ it('keeps a reminder while the goal is open: paused while waiting on the user, g
       undefined as never,
     )
   await actions.start({ text: 'Make it fast' }, { host } as never)
-  // Crashes after creating, before linking, left two; and the goal was paused meanwhile. One task run adopts one,
-  // deletes the other and pauses it.
-  await service.create({ name: 'Goal reminder · goal 1', subscribers: [ULTIMATE] })
-  await service.create({ name: 'Goal reminder · goal 1', subscribers: [ULTIMATE] })
+  // A crash after creating, before linking, left one; and the goal was paused meanwhile. The task run adopts it by
+  // its key instead of making a second one, and pauses it.
+  await service.create({
+    name: 'Goal reminder · goal 1',
+    subscribers: ['@ultimate'],
+    key: 'goal.reminder:1',
+  })
   ;(await openGoal(tx))!.waiting = { reason: 'Which account?', at: 0 }
   await sync()
   expect([...ledger.values()]).toEqual([
-    { id: 'A1', name: 'Goal reminder · goal 1', subscribers: [ULTIMATE], enabled: false },
+    {
+      id: 'A1',
+      name: 'Goal reminder · goal 1',
+      subscribers: ['@ultimate'],
+      key: 'goal.reminder:1',
+      enabled: false,
+    },
   ])
   expect((await openGoal(tx))!.reminder).toBe('A1')
   await run({ action: 'resume' })

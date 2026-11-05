@@ -7,9 +7,11 @@ Every built-in is already on; this setup adds how the repository is landed and r
 
 - `settings.json`: each worktree isolate installs its dependencies, and the lander runs `pnpm check`, then
   `pnpm test` and `pnpm test:e2e` in parallel, and pushes to `origin`.
-- `agents/lander.md`: the lander fixes a submission that fails to land, then lands it once every check passes again.
 - `agents/reviewer-*.md`: the review team (correctness, simplicity, architecture), each on its own model; the shipped
   `reviewer` starts them in parallel and returns one merged verdict.
+
+To adopt parts of this setup in another project, ask its @ultimate for a tour (the `adopt-ultimate-setup` skill);
+onboarding offers it too.
 
 ## How to work with it
 

@@ -24,14 +24,16 @@ import { store } from '@/sdk/client'
 import { MessagesDoc, conversationState, emptyMessages } from '../messages/ui.tsx'
 import {
   AgentMark,
-  agentTitle,
+  ConversationEpic,
   ConversationPhase,
   ConversationTask,
   FeatureTag,
   RenameAction,
+  useAgentTitle,
 } from '../conversations/ui.tsx'
 import type { Presence } from '../conversations/ui.tsx'
 import { Review } from '../workspaces/ui.tsx'
+import { RunName } from '../subagents/ui.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
 import type { OverviewRow } from '../conversations/types.ts'
 import type { ConversationState } from '../messages/ui.tsx'
@@ -39,6 +41,11 @@ import { SummaryHistory } from './summaries.tsx'
 
 /** What a row's mark and state word say for each settled state; `working` and `idle` show no icon. */
 const settled = {
+  waits: {
+    label: 'Waits on you',
+    word: 'Waits on you',
+    tone: 'text-amber-700 dark:text-amber-300',
+  },
   awaiting: {
     label: 'Awaiting @ultimate',
     word: 'Awaiting @ultimate',
@@ -82,7 +89,7 @@ function Mark({
             >
               {shown === 'done' ? (
                 <CircleCheckIcon className="size-3.5" />
-              ) : shown === 'awaiting' ? (
+              ) : shown === 'awaiting' || shown === 'waits' ? (
                 <CircleHelpIcon className="size-3.5" />
               ) : shown === 'failed' ? (
                 <CircleXIcon className="size-3.5" />
@@ -91,6 +98,7 @@ function Mark({
               ) : (
                 <span
                   className={cn('size-1.5 rounded-full bg-brand', working && 'animate-pulse-dot')}
+                  data-status={working ? 'working' : 'idle'}
                 />
               )}
             </span>
@@ -188,6 +196,8 @@ function PhasedRow({
         shown ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/50',
       )}
       data-conversation={conversation.id}
+      data-selected={shown || undefined}
+      data-ui="sidebar-row"
     >
       {editing ? (
         <div className="flex h-full min-w-0 flex-1 items-center gap-1.5 pr-1 pl-1.5">
@@ -380,6 +390,7 @@ export function StandingRow({
   onOpen: () => void
   children: ReactNode
 }) {
+  const { title, brand } = useAgentTitle(name)
   return (
     <div
       className={cn(
@@ -387,7 +398,9 @@ export function StandingRow({
         shown ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/50',
       )}
       data-conversation={conversation?.id}
+      data-selected={shown || undefined}
       data-standing={name}
+      data-ui="sidebar-row"
     >
       <button
         aria-current={shown ? 'true' : undefined}
@@ -398,14 +411,17 @@ export function StandingRow({
         <AgentMark name={name} presence={presence} />
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="flex min-w-0 items-baseline gap-1.5">
-            {name === 'ultimate' ? (
+            {brand ? (
               // The title bar's wordmark: Ultimate's own name is the brand.
-              <span className="truncate font-sans text-[11.5px] leading-5 font-semibold tracking-[0.28em] text-brand">
+              <span
+                className="truncate font-sans text-[11.5px] leading-5 font-semibold tracking-[0.28em] text-brand"
+                data-ui="wordmark"
+              >
                 ULTIMATE
               </span>
             ) : (
               <span className="truncate text-[13px] leading-5 font-semibold text-foreground">
-                {agentTitle(name)}
+                {title}
               </span>
             )}
             <span className="shrink-0 font-mono text-[10px] text-muted-foreground/70">@{name}</span>
@@ -500,6 +516,8 @@ function TaskedSubagentLine({
         shown && 'bg-sidebar-accent',
       )}
       data-child-conversation={conversation.id}
+      data-selected={shown || undefined}
+      data-ui="sidebar-row"
       onClick={() => actions.switchConversation(conversation.id)}
       style={{ paddingLeft: 20 + depth * 12 }}
       title={[
@@ -514,7 +532,7 @@ function TaskedSubagentLine({
       <Mark state={state} unseen={false} working={working ? 'self' : undefined} />
       {task?.chip}
       <span className="min-w-0 flex-1 truncate text-foreground/75">
-        {conversation.label ?? 'agent'}
+        <RunName id={conversation.id} label={conversation.label ?? 'agent'} />
         <span className="text-muted-foreground/60"> #{conversation.id}</span>
       </span>
       <span
@@ -526,6 +544,58 @@ function TaskedSubagentLine({
         {working ? 'working' : (known?.word.toLowerCase() ?? 'idle')}
       </span>
     </button>
+  )
+}
+
+/**
+ * The epic a branch's coordinator works itself, as the first line under its In flight row, styled like a subagent's:
+ * its dot pulses while the coordinator runs, and a done epic reads done. Click opens the epic in the plan panel.
+ */
+export function EpicLine({ id, working }: { id: number; working: boolean }) {
+  return (
+    <Provided input={id} point={ConversationEpic}>
+      {(epic) => {
+        if (!epic) return null
+        const done = epic.status === 'done'
+        return (
+          <button
+            className="mx-2 flex h-6 w-[calc(100%-1rem)] min-w-0 cursor-pointer items-center gap-1.5 rounded-md pr-2 pl-5 text-left font-mono text-[10.5px] outline-none hover:bg-sidebar-accent/50 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
+            data-epic-line={id}
+            data-ui="sidebar-row"
+            onClick={epic.open}
+            title={`${epic.key} · ${epic.title}\nWorked directly by #${id}`}
+            type="button"
+          >
+            <span className="w-2 shrink-0 text-muted-foreground/40">└</span>
+            <span className="flex size-3 shrink-0 items-center justify-center">
+              {done ? (
+                <CircleCheckIcon className="size-3.5 text-success" />
+              ) : (
+                <span
+                  className={cn(
+                    'size-1.5 rounded-full',
+                    working ? 'animate-pulse-dot bg-brand' : 'bg-muted-foreground/40',
+                  )}
+                  data-status={working ? 'working' : 'idle'}
+                />
+              )}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-foreground/75">
+              {epic.key}
+              <span className="text-muted-foreground/60"> · {epic.title}</span>
+            </span>
+            <span
+              className={cn(
+                'shrink-0 text-[10px]',
+                done ? 'text-success' : working ? 'text-brand' : 'text-muted-foreground/70',
+              )}
+            >
+              {done ? 'done' : working ? 'working' : 'idle'}
+            </span>
+          </button>
+        )
+      }}
+    </Provided>
   )
 }
 
@@ -568,6 +638,8 @@ function TaskedChildRow({
         shown && 'bg-sidebar-accent',
       )}
       data-child-conversation={conversation.id}
+      data-selected={shown || undefined}
+      data-ui="sidebar-row"
       onClick={() => actions.switchConversation(conversation.id)}
       title={conversation.title}
       type="button"
@@ -576,7 +648,8 @@ function TaskedChildRow({
         <Mark state={state} unseen={false} working={working ? 'self' : undefined} />
         {task?.chip}
         <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-foreground/80">
-          {conversation.label ?? 'Agent'} · #{conversation.id}
+          <RunName id={conversation.id} label={conversation.label ?? 'Agent'} /> · #
+          {conversation.id}
         </span>
         {conversation.workspace && (
           <GitBranchIcon

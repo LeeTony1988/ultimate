@@ -138,11 +138,14 @@ it.concurrent("lists a root's newest landings, notes, branches and compactions, 
       model: 'faux/faux-1',
     },
   ])
-  await until(async () => (await log.recent({ events: [Compacted] })).length === 1)
-  const [compacted] = await log.recent({ events: [Compacted] })
+  // Long fixture paths can push the branch over its own automatic compaction threshold; count only this root's.
+  const rootCompactions = async () =>
+    (await log.recent({ events: [Compacted] })).filter(({ data }) => data.conversation === 1)
+  await until(async () => (await rootCompactions()).length === 1)
+  const [compacted] = await rootCompactions()
   expect(compacted.data).toEqual({ conversation: 1, entry: expect.any(Number), reason: 'manual' })
   await server.harness.waitForIdle(context)
-  expect(await log.recent({ events: [Compacted] })).toHaveLength(1)
+  expect(await rootCompactions()).toHaveLength(1)
 })
 
 const landed = (entry: number, sha: string, base?: string) =>

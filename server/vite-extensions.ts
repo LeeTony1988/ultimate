@@ -1,39 +1,31 @@
 import { existsSync } from 'node:fs'
-import { dirname, join, posix, relative } from 'node:path'
+import { dirname, join } from 'node:path'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
-import { normalizePath } from 'vite-plus'
 import type { Plugin } from 'vite-plus'
 import { discoverExtensions } from './discovery.ts'
 import { discoveryRoots } from './project.ts'
-import { watchRoots } from './watch-roots.ts'
-import { extensionSettingsFiles } from './extension-settings.ts'
 import { useProjectSetup } from './project-setup.ts'
 
 const virtual = 'virtual:ultimate/web-facets'
 const resolved = '\0' + virtual
+/**
+ * The `virtual:ultimate/web-facets` loader map and the extension sources of Tailwind's stylesheet. `broken` names facets
+ * whose loader fails with the given message instead of importing them, so one broken facet leaves the bundle buildable.
+ */
 export function extensionModules(
   ultimateRoot: string,
   projectRoot: string,
   userHome: string,
+  broken: Record<string, string> = {},
 ): Plugin {
   const roots = discoveryRoots(ultimateRoot, projectRoot, userHome).map((root) =>
-    normalizePath(join(root.path, 'extensions')),
+    join(root.path, 'extensions'),
   )
-  const trustFile = normalizePath(join(userHome, '.ultimate/trust.json'))
-  const settingsFiles = [...extensionSettingsFiles(projectRoot, userHome), trustFile].map(
-    normalizePath,
-  )
-  const stylesFile = normalizePath(join(ultimateRoot, 'web/src/index.css'))
-  const watchers = new WeakMap<object, () => void>()
   let sourcesFile = ''
   return {
     name: 'ultimate:extension-modules',
     configResolved(config) {
-      sourcesFile = normalizePath(join(config.cacheDir, 'extension-sources.css'))
-    },
-    closeBundle() {
-      watchers.get(this.environment)?.()
-      watchers.delete(this.environment)
+      sourcesFile = join(config.cacheDir, 'extension-sources.css')
     },
     enforce: 'pre',
     async config() {
@@ -54,11 +46,10 @@ export function extensionModules(
     },
     async resolveId(id, importer, options) {
       if (id === virtual) return resolved
-      const importerFile = importer && normalizePath(importer).split('?')[0]
       if (
-        !importerFile ||
+        !importer ||
         options.ssr ||
-        !roots.slice(1).some((root) => importerFile.startsWith(root + '/')) ||
+        !roots.slice(1).some((root) => importer.startsWith(root + '/')) ||
         id.startsWith('.') ||
         id.startsWith('/') ||
         id.startsWith('\0')
@@ -77,13 +68,13 @@ export function extensionModules(
       return dependency
     },
     async load(id) {
-      if (id.split('?')[0] === stylesFile) {
+      if (id.split('?')[0] === join(ultimateRoot, 'web/src/index.css')) {
         // Tailwind skips a git-ignored symlinked extension inside a root, so its target is a source of its own.
         const linked = (await discoverExtensions(ultimateRoot, projectRoot, userHome))
           .filter(
             (entry) => entry.source !== 'builtin' && !entry.error && entry.target !== entry.path,
           )
-          .map((entry) => normalizePath(entry.target))
+          .map((entry) => entry.target)
         const sources = [
           ...roots.filter(
             (root, index) =>
@@ -102,81 +93,24 @@ export function extensionModules(
           await writeFile(sourcesFile, sources)
         }
         return (
-          `@import ${JSON.stringify(sourcesPath())};\n` +
-          (await readFile(stylesFile, 'utf8')) +
-          '\n'
+          (await readFile(join(ultimateRoot, 'web/src/index.css'), 'utf8')) +
+          `\n@import ${JSON.stringify(sourcesFile)};\n`
         )
       }
       if (id !== resolved) return undefined
       const facets = (await discoverExtensions(ultimateRoot, projectRoot, userHome)).filter(
         (entry) => entry.enabled && entry.files.includes('web.tsx'),
       )
-      const entries = facets.map((entry) => {
-        // By target, as the server facet loads: Vite keeps a URL bound to the file it first resolved to.
-        const file = normalizePath(join(entry.path, 'web.tsx'))
-        const target = normalizePath(join(entry.target, 'web.tsx'))
-        return `${JSON.stringify(file)}: () => import(${JSON.stringify(posix.join('/@fs/', target))})`
-      })
+      const entries = facets.map(
+        (entry) =>
+          `${JSON.stringify(join(entry.path, 'web.tsx'))}: ${
+            entry.name in broken
+              ? `() => Promise.reject(new Error(${JSON.stringify(broken[entry.name])}))`
+              : // By target, as the server facet loads: Vite keeps a URL bound to the file it first resolved to.
+                `() => import(${JSON.stringify(join(entry.target, 'web.tsx'))})`
+          }`,
+      )
       return `export const loaders = {${entries.join(',')}};`
     },
-    hotUpdate({ file: eventFile, modules, type }) {
-      const file = normalizePath(eventFile)
-      if (
-        this.environment.name !== 'client' ||
-        type !== 'create' ||
-        !roots.some((root) => file.startsWith(root + '/'))
-      )
-        return undefined
-      const styles = this.environment.moduleGraph.getModuleById(stylesFile)
-      return styles && !modules.includes(styles) ? [...modules, styles] : undefined
-    },
-    configureServer(server) {
-      server.watcher.add([...roots, ...settingsFiles])
-      const structure = (eventFile: string) => {
-        const file = normalizePath(eventFile)
-        if (
-          !settingsFiles.includes(file) &&
-          !roots.some((root) => file === root || file.startsWith(root + '/'))
-        )
-          return
-        for (const id of [resolved, stylesFile]) {
-          const module = server.moduleGraph.getModuleById(id)
-          if (module) {
-            server.moduleGraph.invalidateModule(module)
-            void server
-              .reloadModule(module)
-              .catch((error: unknown) => console.error(`Reloading ${id} failed:`, error))
-          }
-        }
-      }
-      const stopRoots = watchRoots([...roots, ...settingsFiles], (root) => {
-        server.watcher.add(root)
-        structure(root)
-      })
-      const settingsChanged = (file: string) => {
-        const normalized = normalizePath(file)
-        if (settingsFiles.includes(normalized)) structure(normalized)
-      }
-      server.watcher.on('change', settingsChanged)
-      for (const event of ['add', 'unlink', 'addDir', 'unlinkDir'] as const)
-        server.watcher.on(event, structure)
-      const stopWatching = () => {
-        stopRoots()
-        server.watcher.off('change', settingsChanged)
-        for (const event of ['add', 'unlink', 'addDir', 'unlinkDir'] as const)
-          server.watcher.off(event, structure)
-      }
-      // During restart the replacement configures before the old environments close.
-      watchers.set(server.environments.client, stopWatching)
-      server.httpServer?.once('close', stopWatching)
-    },
-  }
-  /** The generated sources file as index.css imports it: relative, with forward slashes, because Lightning CSS and
-   * Tailwind's resolver expect them. */
-  function sourcesPath() {
-    const path = normalizePath(relative(dirname(stylesFile), sourcesFile))
-    // Another Windows drive has no relative form, and CSS reads its drive letter as a URL scheme: `/@fs/` resolves
-    // across drives, as it does for web facets.
-    return path.startsWith('.') ? path : posix.join('/@fs/', sourcesFile)
   }
 }

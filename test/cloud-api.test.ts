@@ -73,6 +73,29 @@ it('publishes optional status and non-forced backup services for the active chap
     vi.unstubAllEnvs()
   }
 
+  // A restart between the Worker registering a backup and this home recording it: the register still names it, so a
+  // chapter's first backup is not taken twice.
+  const register = vi.fn<typeof fetch>(async () =>
+    Response.json({
+      projects: [
+        {
+          hash: 'h',
+          key: 'github.com/user/project@fresh-roots',
+          name: 'project',
+          latest: { ...done, parent: null },
+        },
+      ],
+      machines: [],
+    }),
+  )
+  vi.stubGlobal('fetch', register)
+  try {
+    expect(await service.lastBackup()).toEqual(done)
+    expect((register.mock.calls[0][0] as URL).href).toBe('https://cloud/sync/register')
+  } finally {
+    vi.unstubAllGlobals()
+  }
+
   // A satellite never uploads, forced or not, so it cannot replace the owning machine's backups.
   vi.mocked(backUp).mockClear()
   vi.mocked(cloudConfig).mockResolvedValue({

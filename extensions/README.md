@@ -35,7 +35,7 @@ sending states (side-chat forks @ultimate this way). Only the shown conversation
 
 Wrap `<Conversation/>` in `<ConversationScope id={id}>` (both from `@/sdk`) to render another live conversation without
 switching the shell. `useConversation(select?)`, `useTranscript`, `useDoc`/`useDocKind`, `useUltimate().conversationId`,
-`useIntro`, `useCompact`/`useCompactQuiet`, and `useAction` follow the nearest scope, as do transcript/composer
+`useCompact`/`useCompactThread`, and `useAction` follow the nearest scope, as do transcript/composer
 contributions. Scopes of the same id share a stream; the last unmount releases it. Outside a scope these hooks keep
 their existing behaviour. A shortcut pressed inside a scope runs its command with the scope's id as
 `context.conversationId` (Escape stops the scoped run). Explicit `useDocOf` ids, root UI state, shell navigation, the
@@ -53,6 +53,11 @@ replaces the whole extension, both facets:
 | `user`    | `~/.ultimate/extensions/`         | Your additions, in every project                                   |
 | `project` | `<project>/.ultimate/extensions/` | One project's tools and apps, committed with the project; wins all |
 
+A tool name follows the same layering: a project or user extension may override a built-in's tool (a project `bash`
+replaces coding-tools'). Two extensions of the same source may not share one: the one that loaded second fails with
+a load error such as `web_search is already provided by parallel`, and takes the name on its next reload once the
+other is disabled or removed.
+
 Every extension folder is on by default, built-in, user or project: adding the folder is the opt-in. The exception is
 the built-ins listed in `defaultOff` (`shared/extension-api.ts`; see [settings](../docs/settings.md)), which need
 something of their own and ship off until `extensions.enable` names them (including `voice-live`, the live voice relay). Turn one off
@@ -66,7 +71,7 @@ optional extension plugs into it through a point or an event, never the other wa
 
 The `parallel` web tools read their key from `secrets`. Secrets are user-global, not project state.
 
-A server facet may export `secrets: { name: string; description: string; url?: string }[]`, or a function of its host returning (a promise of) that list, called at each install; with `reloadOnSettings` it follows the facet's settings (mcp declares its `${NAME}` placeholders this way). Names must match `^[A-Z][A-Z0-9_]*$`, descriptions must be non-empty, and optional URLs must use http(s). Installed declarations appear in `ExtensionInfo.server.secrets` and the Secrets panel; values never appear in extension info. Other server facets read values with `readSecret(userHome, name)` from `lib/secrets.ts`; only the secrets extension writes them.
+A server facet may export `secrets: { name: string; description: string; url?: string; provider?: string }[]`, or a function of its host returning (a promise of) that list, called at each install; with `reloadOnSettings` it follows the facet's settings (mcp declares its `${NAME}` placeholders this way). Names must match `^[A-Z][A-Z0-9_]*$`, descriptions must be non-empty, and optional URLs must use http(s). `provider` names a model provider whose configured auth stands in for the secret: the setup check stops reporting it missing once that provider has auth. Installed declarations appear in `ExtensionInfo.server.secrets` and the Secrets panel; values never appear in extension info. Other server facets read values with `readSecret(userHome, name)` from `lib/secrets.ts`; only the secrets extension writes them.
 
 The `tailscale` built-in, once enabled, exposes Ultimate to your own Tailscale login; only user settings set its allowlist. See [tailscale](tailscale/README.md) for stable project URLs and owner-login admission.
 
@@ -103,8 +108,7 @@ Server factories receive exactly these `ExtensionHost` fields (import its type o
 - `reloadExtensions()`: apply settings writes to the registry, browser facets and styles before returning.
 - `invoke(name, action, args, signal, conversationId?)`: call an installed extension action on behalf of a conversation; rejects user-only actions.
 - `harness()`, `uiState(context)`, `doc(kind)`: durable harness, root UI snapshot and exported conversation document token.
-- `provide(name, value)`, `use<T>(name)`: publish and look up typed process-local behaviour. Import the provider's contract with `import type`, never its implementation. Registrations are staged until installation succeeds, replaced on reload, and removed when the facet is disabled, removed or closed; a missing provider returns `undefined`. Look up at call time rather than retaining a provider across reloads. A failed replacement keeps the old provider. For example, workspaces provides `WorkspaceService` under `workspaces`; lineage provides `LineageService` under `lineage`. Shared branches and landings work without the other extension; isolated branches require workspaces.
-- `implement(api, value)`, `need(api)`, `want(api)`, `catalogue()`: the typed successors of `provide`/`use`; see [Extension APIs](#extension-apis).
+- `implement(api, value)`, `need(api)`, `want(api)`, `catalogue()`: publish and use typed process-local services; see [Extension APIs](#extension-apis). Registrations are staged until installation succeeds, replaced on reload, and removed when the facet is disabled, removed or closed; a failed replacement keeps the old provider.
 - `metadata`: the core's `ultimate.metadata` conversation document, `{ title?, label? }`; the shell names a conversation
   by them, so set them on conversations you create (`subagents` labels each child with its definition).
 - `emit(tx, event, data)`, `react(name, events, handler)`, `eventLog`: durable events; see [Events](#events).
@@ -115,6 +119,7 @@ Server factories receive exactly these `ExtensionHost` fields (import its type o
   time the harness opens (at once if it is open; the server serves once it settles), async work each time before it closes while the process stays (a core swap; drop commit subscriptions there), and async cleanup. Facet-level callbacks are removed on unload/reload, with cleanup run before the replacement opens. Callbacks registered inside a shared resource's creation belong to that reload-stable resource and survive until server shutdown.
   Keep only process state in a resource (running children, in-flight promises, flags); never capture document or task
   tokens or facet functions in it, since they go stale on reload. Build those on each install around the shared state.
+- `onLoadError(callback)`: run `callback(name, error)` each time an extension's server facet fails to load; facet-scoped.
 
 ## Extension APIs
 
@@ -202,18 +207,9 @@ branches `branch · coordinator`) and `MessageReference` (the copyable reference
 
 The provider calls `host.implement(Echo, { echo: (text) => text })` in its factory; it is staged, replaced and
 removed with its facet. A consumer calls `host.need(Echo)` for a hard dependency or `host.want(Echo)` for an
-optional one. Both return a handle typed by the token that resolves the current provider on every member access, so
-holding it from setup is fine. `need` throws `<ext> needs echo, which no enabled extension provides` while nothing
-provides it; called during setup it records the dependency instead (the provider may load later) and a still-missing
-provider becomes an extension diagnostic. `want` returns undefined while missing, so call it where you use it. The core
-tier is always on, so its services are always `need`ed; `want` is for optional extensions and extension points.
-`host.catalogue()` (codemode: `ultimate.catalogue()`) lists each API's provider, needs and wants, plus missing
-providers and dependency cycles, each a sorted group of extensions that depend on each other in a cycle.
-
-Which channel to use: services for calls between extensions; documents for durable state; durable events for "this
-happened" (`host.emit` in your commit, `host.react` to act on it; see
-[docs/extensions.md](../docs/extensions.md#durable-events)); actions for the UI and user boundary. Extensions never call the untyped `host.provide` and `host.use`
-(`ultimate/no-raw-services`).
+optional one (the core tier is always on, so its services are always `need`ed). The handles, missing providers, the
+catalogue and which channel to use (services, documents, durable events, actions) are in
+[docs/extensions.md](../docs/extensions.md#extension-apis).
 
 ## Lifecycle
 
@@ -252,16 +248,16 @@ events.emit('hello:selected', { name: 'example' })
 ```
 
 The registry emits `ultimate:extension-loaded { name }` or `ultimate:extension-failed { name, error }` as each
-facet settles, including hot reloads. `ultimate:ready { failed, pending, timedOut }` fires once per page load when
+facet settles. `ultimate:ready { failed, pending, timedOut }` fires once per page load when
 the current loader generation has settled (loaded or failed) and the first system snapshot has arrived, or after
 an 8 s deadline from the first loader map. Superseded imports do not determine readiness. `useReady()` returns
 `{ ready, timedOut, failed, pending }`, even for a subscriber mounted after the event. `ready` and `timedOut` stay
-sticky across hot reloads; `failed` names current load failures and `pending` names current unsettled imports.
+sticky for the page; `failed` names current load failures and `pending` names current unsettled imports.
 The deadline reveals even without a system snapshot; `timedOut` distinguishes that reveal from normal readiness.
 Facets import in parallel and their contributions render as soon as they install, except the app itself: the shell
 shows the surface and starts its shortcuts only once ready. In particular, root overlays can render while another
 facet is still loading; they need not wait for ready.
-A reload of a rendered page (a core restart, a Vite full reload, F5) paints the previous page's view from
+A reload of a rendered page (a core restart, a switch to a new web bundle, F5) paints the previous page's view from
 `sessionStorage` before any module loads and fades it out once the app has rendered and settled
 (`web/src/sdk/resume.ts`); `resumed` from `@/sdk` is true on such a load, so a loading overlay can stay away.
 
@@ -272,7 +268,7 @@ An extension is a folder `<name>/` in one of those places:
 | File        | Facet                                                                                                   | Goes live                                                  |
 | ----------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
 | `server.ts` | Agent and server: a Pi Durable extension (tools, prompt sections, hooks, documents) and its `actions`   | Reinstalled on save; running tool calls finish on old code |
-| `web.tsx`   | UI: `export default defineWebExtension({ … })`                                                          | Vite hot reload, no page reload                            |
+| `web.tsx`   | UI: `export default defineWebExtension({ … })`                                                          | Rebuilt on save; open pages switch to the new bundle       |
 | `README.md` | What it does; the first paragraph is shown in the UI, so open with a sentence, not a heading. Required. | Read on change                                             |
 
 Files ending in `.ts` belong to the server facet, files ending in `.tsx` to the web facet: split a large `web.tsx` into
@@ -306,7 +302,7 @@ No restart, no reload.
 
 ## Contributions
 
-`defineWebExtension({ slots, panels, surfaces, tools, toolLines, entries, link, messageActions, messageDetails, answerLabels, userBubble, compact, intro, documents, commands })`; every key is optional. Extensions load
+`defineWebExtension({ slots, panels, surfaces, tools, toolLines, entries, link, messageActions, messageDetails, answerLabels, userBubble, compact, documents, commands })`; every key is optional. Extensions load
 in parallel, installing independently; contributions follow discovery order: built-in → user → project, then folder name within each source. Give a slot item `{ component, order }` to move it (default order 0, lower first).
 
 ### Slots
@@ -329,9 +325,11 @@ title bar the host shows above every surface.
 | `composer.status`      | Line under the composer; conversation-specific, monospace, one line (`<Conversation />`)                     |
 | `composer.actions`     | Composer footer, beside Send; input helpers that write into the draft with `insertIntoComposer`              |
 | `conversation.overlay` | Over the transcript and the composer (`<Conversation />`); position it `absolute inset-0`                    |
+| `transcript.top`       | At the top of a transcript's view as it scrolls, over its rows; `useTranscript()`, `useTranscriptScroll()`   |
 | `transcript.start`     | Above a transcript's first row once its whole history is loaded; `useTranscript()` inside                    |
 | `transcript.end`       | After a transcript's last row, before the working line: a turn still forming, such as live speech            |
 | `overlay`              | Always mounted at the root, above every surface: dialogs, toasts, global effects                             |
+| `shell.rail`           | Full-height column at the window's left edge, beside the title bar and every surface; not in a frame         |
 
 ```tsx
 slots: { 'header.right': [Badge], sidebar: { component: Conversations, order: -1 } }
@@ -412,6 +410,19 @@ link: ({ href, children, core }) =>
   href.startsWith('https://docs.example.com/') ? <a href={href}>{children}</a> : core
 ```
 
+### Code block renderers
+
+`codeBlocks` renders the fenced code blocks of one language in Markdown that `MessageResponse` shows, keyed by the
+fence's language. Each receives `{ code, language, incomplete, core }`; `core` starts as the highlighted block with its
+copy button, and `incomplete` is true while the fence still streams. They compose in discovery order behind error
+boundaries that fall back to `core`. Return `core` while `incomplete`, so a half-written block never renders.
+
+```tsx
+codeBlocks: {
+  dot: ({ code, incomplete, core }) => (incomplete ? core : <Graph source={code} />),
+}
+```
+
 ### Message actions
 
 `messageActions` contributes components to the hover action row on stored user and assistant messages, between the
@@ -461,12 +472,9 @@ follows and passes to them by kind. The tools of every matching facet combine. R
 test for the shown conversation or `undefined`, to adapt to it. Messages turns it on for @ultimate's conversation, found
 by the standing agents' index (`StandingDoc`) rather than its title, keeping messages, branch starts,
 workspace outcomes and scripts its log says messaged you, and shows its messages to you as bubbles. Revealing an entry
-in a folded run opens the run.
-
-`intro` says what a matching conversation is before its first message: `{ when(conversation), title, hint?, placeholder?, card? }`
-replaces the empty state's line under ULTIMATE, adds a hint below it, and sets the composer's placeholder while it is
-idle; `card`, a component, renders under the empty state, such as a setup card the conversation needs first. The last
-matching facet wins.
+in a folded run opens the run. `thread: (row, docs) => boolean` names the rows the reader follows; everything between two
+of them recedes into one line that opens it, worded by the first matching facet's `summary` component (`rows`, `steps`,
+`working`), an update count otherwise. Messages marks your inputs and @ultimate's messages to you as thread.
 
 ### Entry renderers
 
@@ -918,8 +926,9 @@ Keep in mind:
 
 `@/sdk/*` deep imports are core internals, not extension API. Import only from `@/sdk`, `@/components/ui/*`, `@/components/ai/*`, `@/components/json-tree`, `react`, and `lucide-react`. Never call `fetch` or
 open an `EventSource` yourself (`ultimate/no-raw-stream` fails lint on it in `extensions/**/*.tsx`): the SDK keeps one
-live stream for the shown conversation plus one for each conversation whose documents are watched with `useDocOf`
-(the shown one included), replays their changes, and your server code is reached through [actions](#actions). The surface primitives are in [Surfaces](#primitives).
+live stream per tab, carrying a subscription for the shown conversation plus one for each conversation whose documents
+are watched with `useDocOf` (the shown one included), replays their changes, and your server code is reached through
+[actions](#actions). Browsers allow about six connections per host, so every further stream would hold back requests. The surface primitives are in [Surfaces](#primitives).
 
 | Hook                                                                      | Returns                                                                                                                                                                                                                  |
 | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -943,6 +952,7 @@ live stream for the shown conversation plus one for each conversation whose docu
 | `useNotices()`, `useCommands()`, `useExtensions()`, `useNow(ms, active?)` | Server and client notices, all commands, installed web facets, a clock ticking every `ms` while `active`                                                                                                                 |
 | `useDocumentRenderers()`                                                  | Registered document renderers by kind (see [Documents](#documents))                                                                                                                                                      |
 | `useStore(select)`                                                        | Any slice of the client state (`State`), re-rendering when it changes                                                                                                                                                    |
+| `useTranscriptScroll()`                                                   | In `transcript.*` slots: `{ scrollRef, contentRef, atBottom }`, the transcript's scroller, the element whose children are its rows (`data-entry-id`), and whether it follows its newest row                              |
 
 `api` sends commands: `submit(text, whenBusy?)`, `abort()`, `configure({ model, thinkingLevel })`, `compact()`,
 `createConversation()`, `restart()`, and `action(extension, name, args?)`. Conversation commands default to the shown
@@ -970,6 +980,13 @@ Keep UI state that should survive a reload in `useExtensionUiState`; keep throwa
   `text-warning`, `text-error`, `text-diff-add`, `text-diff-del`. Opacity modifiers work: `bg-error/10`. They follow
   the light and dark themes; never hard-code colours.
 - No new CSS files, no inline style objects for colours.
+- A theme extension (a CSS file imported from its `web.tsx`) targets the app through stable `data-ui` hooks, never
+  Tailwind classes: `titlebar`, `surface-tabs`, `wordmark`, `ultimate-button`, `sidebar-row`, `sidebar-section-header`,
+  `conversation-header`, `turn-header`, `empty-state`, `card`, `message-card` (with `data-sender`), `composer`,
+  `side-chat-hint`, `side-chat-switch`, `palette`, `status-line` and `transcript-meta` (the transcript's small
+  dividers, folds and summary lines); selected rows and tabs carry `data-selected`, the sidebar's status dots `data-status` (`working`,
+  `waiting`, `paused`, `done`, `failed` or `idle`) and the final answer `data-final`. Keep these when changing that
+  markup.
 - Dense and quiet: 12–14 px, monospace (`font-mono`) for meta such as paths, counts, ids, and durations; proportional
   for prose. Subtle borders (`border-border/70`), little motion.
 
@@ -983,7 +1000,7 @@ Keep UI state that should survive a reload in `useExtensionUiState`; keep throwa
   (git and isolation checks), `json-file.ts` (read, atomic write, serialised update), `settings.ts`, `secrets.ts`
   (read-only), `cloud.ts` (the user's cloud settings),
   `project-identity.ts` (a project's GitHub key), `entries.ts` (`isInput`) and `agents.ts` (agent definitions and
-  their discovery). Import them freely; they hot reload with the extensions that import them. `lib/` holds no state
+  their discovery). Import them freely; they reload with the extensions that import them. `lib/` holds no state
   and imports no extension or `web/` code; only `agents.ts` reads the core project trust decision at runtime.
 - Server facets: see `prompt/` for prompt sections and `coding-tools/server.ts` for tools; the root `AGENTS.md` explains
   reloads and durability. Server facets may `export const order = -100`: lower values come first, with the default 0

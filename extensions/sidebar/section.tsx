@@ -33,12 +33,13 @@ export function Section({
       }
       open={open}
     >
-      <CollapsibleTrigger className="group/section mx-2 flex h-6 cursor-pointer items-center gap-1 rounded-md px-1 font-mono text-[9.5px] tracking-wider text-muted-foreground/70 uppercase outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring">
+      <CollapsibleTrigger
+        className="group/section mx-2 flex h-6 cursor-pointer items-center gap-1 rounded-md px-1 section-label outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+        data-ui="sidebar-section-header"
+      >
         <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/section:rotate-90" />
         {label}
-        <span className="rounded-full bg-sidebar-accent px-1.5 text-[9.5px] leading-4 tracking-normal text-foreground/80 tabular-nums">
-          {count}
-        </span>
+        <span className="text-muted-foreground/60 tabular-nums">{count}</span>
       </CollapsibleTrigger>
       <CollapsibleContent className="flex flex-col gap-px">{children}</CollapsibleContent>
     </Collapsible>

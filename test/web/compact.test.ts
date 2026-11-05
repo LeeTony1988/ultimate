@@ -4,15 +4,15 @@ import {
   anchorSelector,
   compactRows,
   groupAside,
-  groupQuiet,
+  groupBetween,
   isOpenIn,
   openIn,
   partsOf,
-  quietOf,
   runOf,
   setAsideIds,
 } from '../../web/src/app/compact.ts'
-import type { CompactPart, QuietGroup, WorkRun } from '../../web/src/app/compact.ts'
+import type { CompactPart, WorkRun } from '../../web/src/app/compact.ts'
+import { threadRow } from '../../extensions/messages/data.tsx'
 
 let nextId = 1
 const entry = (kind: string, message?: object, data?: object) =>
@@ -190,90 +190,56 @@ describe('set-aside rows', () => {
   })
 })
 
-/** Rows as ids, a quiet group as `{…} ×steps` around its rows. */
-const quietShape = (rows: (CompactPart | WorkRun | QuietGroup)[]): string[] =>
-  rows.map((row) =>
-    'quiet' in row ? `{${quietShape([...row.quiet]).join(' ')}} ×${row.steps}` : shape([row])[0],
-  )
-const verdict = ({ entry: { kind } }: CompactPart) =>
-  kind === 'note' ? true : kind === 'wake' ? ('hidden' as const) : false
-
-describe('quiet groups', () => {
-  it('folds a stretch of background with the work and hidden rows between it, but not work that ends it', () => {
+describe('folded groups', () => {
+  it('keeps an open run open when a page of earlier history extends it', () => {
     nextId = 1
-    const rows = compactRows(
-      [
-        user('go'),
-        entry('note'),
-        assistant('toolUse', call('bash')),
-        entry('wake'),
-        entry('note'),
-        user('and now?'),
-        entry('note'),
-        assistant('toolUse', call('read')),
-      ],
-      visible,
-    )
-    expect(quietShape(groupQuiet(rows, verdict))).toEqual([
-      '1',
-      '{2 [3] ×1 4 5} ×1',
-      '6',
-      '{7} ×0',
-      '[8] ×1',
-    ])
-  })
-
-  it('leaves a stretch with nothing quiet that shows as it is, and opens a group to reveal its entries', () => {
-    nextId = 1
-    const rows = compactRows(
-      [user('go'), entry('wake'), assistant('toolUse', call('bash')), entry('note')],
-      visible,
-    )
-    const grouped = groupQuiet(rows, (row) => (row.entry.id === 4 ? true : verdict(row)))
-    expect(quietShape(grouped)).toEqual(['1', '{2 [3] ×1 4} ×1'])
-    expect(quietShape(groupQuiet(rows.slice(0, 3), verdict))).toEqual(['1', '2', '[3] ×1'])
-    expect(quietOf(grouped, 3)).toBe(grouped[1])
-    expect(quietOf(grouped, 1)).toBeUndefined()
-    // A run inside a group opens too.
-    expect(runOf(grouped, 3)).toBe(rows[2])
-  })
-
-  it('keeps an open group open when a page of earlier history extends it', () => {
-    nextId = 1
-    const earlier = entry('note')
-    const later = [entry('note'), assistant('toolUse', call('bash')), entry('note'), user('next')]
-    const before = groupQuiet(compactRows(later, visible), verdict)[0] as QuietGroup
+    const earlier = assistant('toolUse', call('read'))
+    const later = [assistant('toolUse', call('bash')), user('next')]
+    const before = compactRows(later, visible)[0] as WorkRun
     const opened = openIn(new Set(), before, true)
-    const after = groupQuiet(compactRows([earlier, ...later], visible), verdict)[0] as QuietGroup
-    // Its first part, and so the key a group was known by, changed.
+    const after = compactRows([earlier, ...later], visible)[0] as WorkRun
+    // Its first part, and so the key a run was known by, changed.
     expect(partsOf(after)[0].entry).toBe(earlier)
     expect(isOpenIn(opened, after)).toBe(true)
     expect(isOpenIn(openIn(opened, after, false), after)).toBe(false)
   })
 
-  it('finds a scroll anchor by its last entry, nested in an open group or not', () => {
+  it('finds a scroll anchor by its last entry, or a row inside an open run', () => {
     expect(anchorSelector({ entryId: 3, last: 5, inner: false })).toBe(
       ':scope > [data-run-last="5"]',
     )
-    // A work run inside an open background group.
-    expect(anchorSelector({ entryId: 3, last: 5, inner: true })).toBe(
-      '[data-run-last] [data-run-last="5"]',
-    )
-    // A row inside an open run or group, never the run that may carry the same id.
+    // A row inside an open run, never the run that may carry the same id.
     expect(anchorSelector({ entryId: 3, inner: true })).toBe(
       '[data-run-last] [data-entry-id="3"]:not([data-run-last])',
     )
     expect(anchorSelector({ entryId: 3, inner: false })).toBe('[data-entry-id="3"]')
   })
 
-  it('opens the run that holds an entry inside a group', () => {
-    nextId = 1
-    const rows = compactRows(
-      [user('go'), entry('wake'), assistant('toolUse', call('bash')), entry('note')],
-      visible,
+  it('folds everything between two thread rows into one stretch', () => {
+    const ids = groupBetween(
+      [1, 2, 3, 4, 5, 6].map((id) => ({ id })),
+      ({ id }) => id === 2 || id === 5,
     )
-    const grouped = groupQuiet(rows, (row) => (row.entry.id === 4 ? true : verdict(row)))
-    expect(runOf(grouped, 3)).toBe(rows[2])
-    expect(partsOf(grouped[1]).map((inner) => inner.entry.id)).toEqual([2, 3, 4])
+    expect(ids.map((row) => ('between' in row ? row.between.map(({ id }) => id) : row.id))).toEqual(
+      [[1], 2, [3, 4], 5, [6]],
+    )
+  })
+
+  it("folds no stretch made only of rows that render nothing, such as the user's hidden answers", () => {
+    // @ultimate's answer, the hidden note carrying the user's answers, then the user's next input: no empty line between.
+    nextId = 1
+    const rows = [
+      assistant('stop', text('I can ask you directly.')),
+      entry('board.answered'),
+      user('next'),
+    ].map((value) => ({ entry: value }))
+    const thread = (row: CompactPart) => threadRow({ entry: row.entry, calls: [] }, undefined)
+    expect(groupBetween(rows, thread).some((row) => 'between' in row)).toBe(false)
+    // Nor of a system prompt change alone, which a stretch's line does not count either.
+    const prompt = [rows[2], { entry: system() }, { entry: assistant('stop', text('pong')) }]
+    expect(groupBetween(prompt, thread).some((row) => 'between' in row)).toBe(false)
+    // With a row that shows, the stretch folds with the hidden one inside it.
+    const shown = [rows[0], rows[1], { entry: entry('lineage.note') }, rows[2]]
+    expect(groupBetween(shown, thread).filter((row) => 'between' in row)).toHaveLength(1)
   })
 })

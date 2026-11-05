@@ -2,8 +2,9 @@
  * Lineage for other extensions' browser code: the project's roots, a root's tally, landing links and compaction, the
  * branch and root events, and the Memory surface with its header point.
  */
-import type { ReactNode } from 'react'
-import { definePoint, getState, useDocOf, useUiState, useUltimate } from '@/sdk'
+import { BrainIcon } from 'lucide-react'
+import type { ComponentProps, ReactNode } from 'react'
+import { cn, definePoint, getState, useDocOf, useUiState, useUltimate } from '@/sdk'
 import { RootsDoc } from './refs.ts'
 
 export {
@@ -30,6 +31,30 @@ export function useOpenMemory() {
     if (slug) setFocus(slug)
     showSurface(MEMORY_SURFACE)
   }
+}
+
+/** A memory's slug as a small pill that opens it on the Memory surface. */
+export function MemoryChip({
+  slug,
+  className,
+  ...props
+}: { slug: string } & Omit<ComponentProps<'button'>, 'onClick' | 'type'>) {
+  const openMemory = useOpenMemory()
+  return (
+    <button
+      className={cn(
+        'inline-flex h-5 max-w-full min-w-0 cursor-pointer items-center gap-1 rounded-full border border-border/70 bg-background px-1.5 font-mono text-[10px] text-muted-foreground outline-none hover:border-brand/50 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring',
+        className,
+      )}
+      onClick={() => openMemory(slug)}
+      title={`Open ${slug} in Memory`}
+      type="button"
+      {...props}
+    >
+      <BrainIcon className="size-3 shrink-0 text-brand" />
+      <span className="truncate">{slug}</span>
+    </button>
+  )
 }
 
 /** The composer's reading column, as the core lays it out; a card in place of a root's composer uses it. */

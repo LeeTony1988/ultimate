@@ -54,6 +54,7 @@ function Touches({ layers }: { layers: Layers }) {
   return (
     <span>
       {parts.map((part, index) => (
+        // oxlint-disable-next-line react/no-array-index-key -- Positional layer fragments built for this render.
         <span key={index}>
           {index > 0 && ' · '}
           {part}
@@ -86,6 +87,7 @@ function After({ layers, install }: { layers: Layers; install?: UpdateResult & {
   return (
     <ul className="space-y-0.5">
       {lines.map((line, index) => (
+        // oxlint-disable-next-line react/no-array-index-key -- Fixed instructions derived from this update's layers.
         <li className="flex gap-1.5" key={index}>
           <span className="text-muted-foreground">·</span>
           <span className="min-w-0">{line}</span>
@@ -143,9 +145,7 @@ function Popup({
   return (
     <>
       <div className="border-b border-border/70 px-3 py-2 text-[11.5px]">
-        <div className="text-[10.5px] tracking-wider text-muted-foreground uppercase">
-          Ultimate update
-        </div>
+        <div className="section-label">Ultimate update</div>
         <div className="truncate text-muted-foreground" title={state.root}>
           {short(state.root)}
         </div>
@@ -230,7 +230,7 @@ function Popup({
           <div>
             {state.install
               ? 'pnpm-lock.yaml differs from the installed packages: pnpm install is owed.'
-              : 'Packages were installed after this Ultimate started: restart it to load them.'}
+              : 'Packages or server code changed after this Ultimate started: restart it to load them.'}
           </div>
         )}
         {state.merge && !updated ? (

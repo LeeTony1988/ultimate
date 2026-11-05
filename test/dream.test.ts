@@ -1,254 +1,342 @@
 import { DatabaseSync } from 'node:sqlite'
 import { join } from 'node:path'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import { createModels } from '@earendil-works/pi-ai/models'
-import {
-  configure,
-  createRegistry,
-  Harness,
-  MemoryStorage,
-  ROOT_CONVERSATION_ID,
-} from '@earendil-works/pi-durable'
 import type { JsonValue } from '@earendil-works/chord'
-import type { Tx } from '@earendil-works/pi-durable'
-import { expect, it } from 'vitest'
-import type { ActionContext } from '../server/actions.ts'
+import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import { configure, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import { afterEach, expect, it, vi } from 'vitest'
+import { writeJson } from '../lib/json-file.ts'
+import { prepareHarness } from '../server/harness.ts'
+import type { OpenHost } from '../server/harness.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
+import type { ActionContext } from '../server/actions.ts'
+import { Metadata } from '../server/metadata.ts'
+import { docs as lineageDocs } from '../extensions/lineage/server.ts'
+import { Messages } from '../extensions/messages/api.ts'
+import { Todos } from '../extensions/todos/server.ts'
 import { Standing } from '../extensions/subagents/api.ts'
+import { ContextUsageDoc } from '../extensions/conversations/api.ts'
+import automations, {
+  actions as automationActions,
+  Automations,
+} from '../extensions/automations/server.ts'
 import dream, {
   actions,
-  decide,
-  fileJournal,
-  journalText,
-  landed,
-  reportPass,
-  Sessions,
-  startDreamIn,
-  startSession,
+  branched,
+  Next,
   toolStats,
+  userActions,
 } from '../extensions/dream/server.ts'
-import { busyElsewhere } from '../extensions/dream/types.ts'
-import { temp, until } from './helpers.ts'
+import {
+  AUTOMATION_NAME,
+  BuiltInDoc,
+  ensureAutomation,
+  PAUSE_NAME,
+  PauseDoc,
+} from '../extensions/dream/built-ins.ts'
+import { apis, eventHost, temp, until } from './helpers.ts'
 
-/** A transaction over plain documents, keyed by kind and conversation. */
-function fakeTx() {
-  const docs = new Map<string, object>()
-  return {
-    doc: async (
-      { definition: def }: { definition: { kind: string; initial: () => object } },
-      id: number,
-    ) => {
-      const key = `${def.kind}:${id}`
-      if (!docs.has(key)) docs.set(key, def.initial())
-      return docs.get(key)
-    },
-  } as unknown as Tx
-}
-const session = async (tx: Tx, id = 1) =>
-  (await tx.doc(Sessions, 1 as never)).sessions.find((item) => item.id === id)!
+const openedHosts: OpenHost[] = []
+/** The extensions' close callbacks: automations' minute timer stops before its harness closes. */
+const closers: (() => Promise<void>)[] = []
+afterEach(async () => {
+  for (const close of closers.splice(0)) await close()
+  for (const opened of openedHosts.splice(0)) await opened.close()
+  vi.useRealTimers()
+})
 
-const journal = {
-  session: 1,
-  learned: ['I learned to read the trace.', 'I keep editing stale text.', "I'd like a diff tool."],
-  text: '## Memory\nNothing stale.',
-  proposals: [
-    {
-      id: 'fast-default',
-      pass: 'codify',
-      title: 'Default fast for Sol',
-      size: 'S',
-      retire: 'sol-runs-fast',
-    },
-    { id: 'drop-stale', pass: 'memory', title: 'Delete memory demo', risk: 'none' },
-  ],
-}
-
-it('lets one session run at a time, with every pass waiting', async () => {
-  const tx = fakeTx()
-  expect(await startSession(tx, 10)).toBe(1)
-  expect((await session(tx)).passes).toEqual({
-    memory: { status: 'waiting' },
-    failures: { status: 'waiting' },
-    tools: { status: 'waiting' },
-    corrections: { status: 'waiting' },
-    codify: { status: 'waiting' },
-    project: { status: 'waiting' },
+/** A real harness with automations and dream installed, and @ultimate. */
+async function fixture() {
+  const home = await temp('ultimate-dream-')
+  const prepared = await prepareHarness({
+    ultimateRoot: home,
+    userHome: home,
+    home,
+    faux: fauxProvider(),
   })
-  await expect(startSession(tx, 11)).rejects.toThrow('Dream session 1 is still open')
-})
-
-it('names the first pass reporter the dreamer and refuses unknown passes', async () => {
-  const tx = fakeTx()
-  await startSession(tx, 1)
-  await reportPass(tx, { session: 1, pass: 'tools', status: 'running' }, 40)
-  await reportPass(tx, { session: 1, pass: 'tools', status: 'done', note: '12 unused' }, 41)
-  const found = await session(tx)
-  expect(found.dreamer).toBe(40)
-  expect(found.passes.tools).toEqual({ status: 'done', note: '12 unused' })
-  await expect(reportPass(tx, { session: 1, pass: 'dreams', status: 'done' }, 40)).rejects.toThrow(
-    'pass must be one of',
+  let opened: OpenHost
+  const openers: (() => Promise<void>)[] = []
+  const tokens = [...lineageDocs, Messages, Todos]
+  const resources = new Map<string, unknown>()
+  const events = eventHost(() => opened.harness, 'test')
+  const services = apis(
+    new Map<string, unknown>([
+      ['messages', { send: async () => ({}) }],
+      ['lineage', { rootOf: async () => undefined }],
+      [
+        'subagents',
+        {
+          standing: async () =>
+            (await opened.harness.snapshot(Standing, ROOT_CONVERSATION_ID, context))!.ultimate,
+        },
+      ],
+    ]),
   )
-  await expect(reportPass(tx, { session: 2, pass: 'tools', status: 'done' }, 40)).rejects.toThrow(
-    'No dream session 2',
-  )
-})
-
-it('files the journal once, validating its three lines and proposal ids', async () => {
-  const tx = fakeTx()
-  await startSession(tx, 1)
-  await expect(fileJournal(tx, { ...journal, learned: ['one'] }, 2)).rejects.toThrow('3 lines')
-  await expect(
-    fileJournal(tx, { ...journal, proposals: [journal.proposals[0], journal.proposals[0]] }, 2),
-  ).rejects.toThrow('unique slug')
-  const { found, filed } = await fileJournal(tx, journal, 2)
-  expect(filed).toBe(true)
-  expect(found.proposals.map((item) => [item.id, item.status, item.retire])).toEqual([
-    ['fast-default', 'open', 'sol-runs-fast'],
-    ['drop-stale', 'open', undefined],
-  ])
-  // A second filing (a retried action) keeps the first.
-  expect((await fileJournal(tx, { ...journal, text: 'other' }, 3)).filed).toBe(false)
-  expect((await session(tx)).journal?.text).toBe(journal.text)
-  expect(journalText(await session(tx))).toContain(
-    '- fast-default [codify] (S): Default fast for Sol — retires memory sol-runs-fast once landed',
-  )
-})
-
-it('follows approved proposals to landing and ends the session when all are settled', async () => {
-  const tx = fakeTx()
-  await startSession(tx, 1)
-  await fileJournal(tx, journal, 2)
-  await expect(
-    decide(tx, { session: 1, proposal: 'fast-default', status: 'approved' }, 3),
-  ).rejects.toThrow('branch must be a positive integer')
-  await decide(tx, { session: 1, proposal: 'fast-default', status: 'approved', branch: 77 }, 3)
-  await decide(tx, { session: 1, proposal: 'drop-stale', status: 'applied' }, 4)
-  expect((await session(tx)).endedAt).toBeUndefined()
-  await landed(tx, 99, 'abc', 5)
-  expect((await session(tx)).proposals[0].status).toBe('approved')
-  await landed(tx, 77, 'def', 6)
-  const found = await session(tx)
-  expect(found.proposals[0]).toMatchObject({ status: 'landed', sha: 'def' })
-  expect(found.endedAt).toBe(6)
-  await expect(reportPass(tx, { session: 1, pass: 'tools', status: 'done' }, 1)).rejects.toThrow(
-    'has ended',
-  )
-  expect(await startSession(tx, 7)).toBe(2)
-})
-
-it('records a branch landed outside the lander with its sha and settles the session', async () => {
-  const tx = fakeTx()
-  await startSession(tx, 1)
-  await fileJournal(tx, journal, 2)
-  await expect(
-    decide(tx, { session: 1, proposal: 'fast-default', status: 'landed', sha: 'abcdef1' }, 3),
-  ).rejects.toThrow('is not approved with a branch')
-  await decide(tx, { session: 1, proposal: 'fast-default', status: 'approved', branch: 77 }, 3)
-  await expect(
-    decide(tx, { session: 1, proposal: 'fast-default', status: 'landed' }, 4),
-  ).rejects.toThrow('sha must be 7 to 40 hex characters')
-  await expect(
-    decide(tx, { session: 1, proposal: 'fast-default', status: 'landed', sha: 'abc' }, 4),
-  ).rejects.toThrow('sha must be 7 to 40 hex characters')
-  await decide(tx, { session: 1, proposal: 'drop-stale', status: 'applied' }, 4)
-  expect((await session(tx)).endedAt).toBeUndefined()
-  const { proposal } = await decide(
-    tx,
-    { session: 1, proposal: 'fast-default', status: 'landed', sha: 'abcdef1234567890' },
-    5,
-  )
-  expect(proposal).toMatchObject({ status: 'landed', sha: 'abcdef1234567890', branch: 77 })
-  const found = await session(tx)
-  expect(found.proposals[0]).toMatchObject({
-    status: 'landed',
-    sha: 'abcdef1234567890',
-    branch: 77,
+  const invoke = vi.fn<ExtensionHost['invoke']>(async (extension, action, args) => {
+    if (extension !== 'automations') throw new Error(`Unexpected ${extension}/${action}`)
+    return automationActions[action as 'list'](args, { host } as ActionContext)
   })
-  expect(found.endedAt).toBe(5)
-})
-
-it('returns a journal with no proposals again after its session ended', async () => {
-  const tx = fakeTx()
-  await startSession(tx, 1)
-  await fileJournal(tx, { ...journal, proposals: [] }, 2)
-  expect((await session(tx)).endedAt).toBe(2)
-  expect((await fileJournal(tx, { ...journal, proposals: [] }, 3)).filed).toBe(false)
-})
-
-it('delivers the start and the journal to @ultimate once, through a real harness', async () => {
-  const storage = new MemoryStorage()
-  const registry = createRegistry()
-  const harness = await Harness.open(storage, { models: createModels(), registry }, context)
-  await harness.root(context)
-  const ultimate = await harness.commit(async (tx) => {
+  const host = {
+    ...prepared,
+    ...events,
+    ...services,
+    get chapter() {
+      return prepared.chapter
+    },
+    harness: () => opened.harness,
+    resource: (key: string, create: () => unknown) => {
+      if (!resources.has(key)) resources.set(key, create())
+      return resources.get(key)
+    },
+    metadata: Metadata,
+    onRelease: () => {},
+    onClose: (callback: () => Promise<void>) => void closers.push(callback),
+    onOpen: (callback: () => Promise<void>) => void openers.push(callback),
+    projectSetup: async () => ({ decision: false }),
+    projectSettings: async () => ({}),
+    extensions: () => [
+      { name: 'subagents', enabled: true },
+      { name: 'automations', enabled: true },
+    ],
+    conversations: () => [],
+    doc: (kind: string) =>
+      tokens.find((token) => token.definition.kind === kind) ?? events.doc(kind),
+    notice: () => {},
+    invoke,
+  } as unknown as ExtensionHost
+  prepared.registry.install(automations(host))
+  prepared.registry.install(dream(host))
+  opened = await prepared.open(false)
+  openedHosts.push(opened)
+  const ultimate = await opened.harness.commit(async (tx) => {
     const created = await tx.createConversation({ ownership: { kind: 'ownerless' } })
     await configure(tx, created.id, {})
     ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = created.id
     return created.id
   }, context)
-  const host = {
-    harness: () => harness,
-    conversations: () => [],
-    need: () => ({ standing: async () => ultimate }),
-    react: () => {},
-    implement: () => {},
-    onOpen: () => {},
-    resource: (_key: string, create: () => unknown) => create(),
-  } as unknown as ExtensionHost
-  registry.install(dream(host))
-  const call = { host } as ActionContext
-  expect(await harness.commit((tx) => startDreamIn(host, tx), context)).toEqual({ session: 1 })
-  const filing = JSON.parse(JSON.stringify(journal)) as JsonValue
-  expect(await actions.journal(filing, call)).toEqual({ session: 1, proposals: 2 })
-  expect(await actions.journal(filing, call)).toEqual({ session: 1, proposals: 2 })
-  // The input starts a run that cannot finish without a model, so the write is admitted but waits in the inbox.
-  const submitted = () =>
-    harness.commit(
-      async (tx) =>
-        (
-          await Promise.all(
-            ['dream.started:1', 'dream.journal:1'].map((id) =>
-              tx.submissionByRequest(ultimate, id),
-            ),
-          )
-        ).map((submission) => submission?.type),
-      context,
-    )
-  await until(async () => !(await submitted()).includes(undefined))
-  expect(await submitted()).toEqual(['input', 'write'])
-  const deliveries = await harness.commit(
-    (tx) => tx.scanTasks({ kind: 'dream.deliver' }, 10),
-    context,
-  )
-  expect(deliveries.items).toHaveLength(2)
-  await harness.close(context)
+  for (const open of openers) await open()
+  await events.start()
+  const harness = opened.harness
+  const own = async () => (await harness.snapshot(BuiltInDoc, ROOT_CONVERSATION_ID, context))?.id
+  const ownPause = async () => (await harness.snapshot(PauseDoc, ROOT_CONVERSATION_ID, context))?.id
+  const ids = async () => Object.keys((await harness.snapshot(Automations, context))!.automations)
+  const record = async (id: string) =>
+    (await harness.snapshot(Automations, context))!.automations[id]
+  /** @ultimate's context usage, as conversations measures it after an answer. */
+  const usage = (percent: number) =>
+    harness.commit(async (tx) => {
+      Object.assign(await tx.doc(ContextUsageDoc, ultimate), {
+        percent,
+        tokens: percent * 10000,
+        window: 1000000,
+        at: Date.now(),
+      })
+    }, context)
+  /** @ultimate's `dream.*` submissions, oldest first: their request ids and types. */
+  const requests = () =>
+    harness.commit(async (tx) => {
+      const deliveries = (await tx.scanTasks({ kind: 'dream.deliver' }, 50)).items
+      const found = []
+      for (const task of deliveries) {
+        const { requestId } = task.input as { requestId: string }
+        const submission = await tx.submissionByRequest(ultimate, requestId)
+        if (submission) found.push({ requestId, type: submission.type })
+      }
+      return found
+    }, context)
+  return {
+    host,
+    harness,
+    ultimate,
+    own,
+    ownPause,
+    ids,
+    record,
+    usage,
+    requests,
+    settle: () => until(events.settled),
+    call: { host, conversationId: ultimate } as unknown as ActionContext,
+    action: (name: keyof typeof automationActions, args: JsonValue = {}) =>
+      automationActions[name](args, {
+        host,
+        conversationId: ultimate,
+      } as unknown as ActionContext),
+  }
+}
+
+it('ships both built-in triggers, each waking @ultimate, and keeps a deletion', async () => {
+  const f = await fixture()
+  const id = (await f.own())!
+  const pause = (await f.ownPause())!
+  expect(await f.record(id)).toMatchObject({
+    name: AUTOMATION_NAME,
+    enabled: true,
+    condition: { metric: 'context', of: '@ultimate', above: 70, armed: true },
+    subscribers: ['@ultimate'],
+  })
+  expect(await f.record(pause)).toMatchObject({
+    name: PAUSE_NAME,
+    enabled: true,
+    condition: { of: '@ultimate', above: 50, idleFor: 8 * 3600_000 },
+    subscribers: ['@ultimate'],
+  })
+  // Opening again (a facet reload, a restart) makes no second one.
+  await ensureAutomation(f.host)
+  expect(await f.ids()).toEqual([id, pause])
+  // The user deletes it: it stays deleted.
+  await f.action('delete', { id })
+  await ensureAutomation(f.host)
+  expect(await f.ids()).toEqual([pause])
 })
 
-it('counts top-level conversations at work besides @ultimate', () => {
-  expect(
-    busyElsewhere(
-      [
-        { id: 5, busy: true, title: '@ultimate' },
-        { id: 8, busy: true, title: 'Fix it' },
-        { id: 9, busy: true, parentConversationId: 8 },
-        { id: 10, busy: false, title: 'Idle' },
-      ],
-      5,
-    ),
-  ).toEqual([{ id: 8, title: 'Fix it' }])
+it('adopts its own automation after a lost receipt, and keeps a chapter seed paused or deleted', async () => {
+  const f = await fixture()
+  const id = (await f.own())!
+  await f.action('update', { id, condition: { metric: 'context', of: '@ultimate', above: 80 } })
+  await f.action('pause', { id })
+  // The create committed but its receipt was lost: its key returns it, not made twice, the user's threshold kept.
+  await f.harness.commit(async (tx) => {
+    delete (await tx.doc(BuiltInDoc, ROOT_CONVERSATION_ID)).id
+  }, context)
+  await ensureAutomation(f.host)
+  expect(await f.own()).toBe(id)
+  expect(await f.ids()).toEqual([id, await f.ownPause()])
+  expect(await f.record(id)).toMatchObject({ enabled: false, condition: { above: 80 } })
+  // A new chapter whose seed carried it paused makes it paused; one whose seed had it deleted makes none.
+  const forget = () =>
+    f.harness.commit(async (tx) => {
+      const doc = await tx.doc(BuiltInDoc, ROOT_CONVERSATION_ID)
+      delete doc.id
+      delete doc.deleted
+    }, context)
+  await f.action('delete', { id })
+  await forget()
+  await writeJson(`${f.host.chapter.dir}/seed.json`, { builtIn: { enabled: false } })
+  await ensureAutomation(f.host)
+  const made = (await f.own())!
+  expect((await f.record(made)).enabled).toBe(false)
+  await f.action('delete', { id: made })
+  await forget()
+  await writeJson(`${f.host.chapter.dir}/seed.json`, { builtIn: null })
+  await ensureAutomation(f.host)
+  expect(await f.ids()).toEqual([await f.ownPause()])
+})
+
+it("asks @ultimate to dream on a built-in's fire, beside the fire's own wake-up, once per fire", async () => {
+  const f = await fixture()
+  const id = (await f.own())!
+  f.host.harness().resume()
+  await f.usage(71)
+  await f.settle()
+  // The fire's own input wakes @ultimate; the dream ask is a passive write in that run, so it costs one turn.
+  await until(async () => (await f.requests()).length === 1)
+  expect(await f.requests()).toEqual([{ requestId: `dream.requested:${id}:1`, type: 'write' }])
+  // Still above: no second fire, no second ask.
+  await f.usage(75)
+  await until(async () => (await f.record(id)).condition?.value === 75)
+  expect(await f.requests()).toHaveLength(1)
+})
+
+it("asks @ultimate to dream on the user's Dream, prepares the next chapter, and replaces it", async () => {
+  const f = await fixture()
+  expect(userActions).toEqual(['start', 'ready', 'dismiss', 'asleep', 'switch'])
+  expect(await actions.start(null, f.call)).toEqual({ requested: true })
+  await until(async () => (await f.requests()).length === 1)
+  expect((await f.requests())[0].type).toBe('input')
+  const ready = {
+    chapter: 'fresh-roots',
+    learned: ['I learned one.', 'I keep two.', "I'd like three."],
+    handoff: 'Open: the preview round.',
+  }
+  await expect(actions.prepare({ ...ready, learned: ['one'] }, f.call)).rejects.toThrow('3 lines')
+  await expect(actions.prepare({ ...ready, chapter: '../escape' }, f.call)).rejects.toThrow(
+    'chapter name',
+  )
+  await expect(actions.prepare({ ...ready, handoff: 'x'.repeat(12_001) }, f.call)).rejects.toThrow(
+    'at most 12000',
+  )
+  const first = await actions.prepare(ready, f.call)
+  expect(first).toMatchObject(ready)
+  // Its card is a passive write: @ultimate's running turn reads it.
+  await until(async () => (await f.requests()).length === 2)
+  expect((await f.requests())[1]).toEqual({
+    requestId: `dream.prepared:${first.at}`,
+    type: 'write',
+  })
+  const second = await actions.prepare({ ...ready, chapter: 'second-try' }, f.call)
+  expect((await f.harness.snapshot(Next, ROOT_CONVERSATION_ID, context))?.prepared).toEqual(second)
+})
+
+it("marks the branch a dream request's turn started as the dream, and asks @ultimate to prepare on Fall asleep", async () => {
+  const f = await fixture()
+  const append = (kind: string, model?: { stopReason: string }) =>
+    f.harness.commit(
+      async (tx) =>
+        (
+          await tx.appendEntry(f.ultimate, {
+            kind,
+            ...(model
+              ? {
+                  model: [
+                    {
+                      role: 'assistant',
+                      content: [],
+                      stopReason: model.stopReason,
+                    } as never,
+                  ],
+                }
+              : {}),
+          })
+        ).id as number,
+      context,
+    )
+  const mark = (id: number, call: number, by: number = f.ultimate) =>
+    f.harness.commit((tx) => branched(tx, { id, by, call, at: 1000 + id }), context)
+  const dreamOf = async () => (await f.harness.snapshot(Next, ROOT_CONVERSATION_ID, context))?.dream
+  // An ordinary branch, with no dream request in its turn, is not a dream.
+  await mark(900, await append('pi.assistant', { stopReason: 'toolUse' }))
+  expect(await dreamOf()).toBeUndefined()
+  const requested = await append('dream.requested')
+  await append('pi.assistant', { stopReason: 'toolUse' })
+  const call = await append('pi.assistant', { stopReason: 'toolUse' })
+  // Started by another conversation in the same moment: not @ultimate's dream.
+  await mark(901, call, 77)
+  expect(await dreamOf()).toBeUndefined()
+  await mark(902, call)
+  expect(await dreamOf()).toEqual({ branch: 902, requested, at: 1902 })
+  // A later turn's branch, after @ultimate's answer ended the dream turn, leaves the dream as it was.
+  await append('pi.assistant', { stopReason: 'stop' })
+  await mark(903, await append('pi.assistant', { stopReason: 'toolUse' }))
+  expect((await dreamOf())?.branch).toBe(902)
+  // Fall asleep asks @ultimate to prepare, as an input that wakes it.
+  const { asked } = await actions.ready(null, f.call)
+  expect((await dreamOf())?.asked).toBe(asked)
+  await until(async () => (await f.requests()).length === 1)
+  expect(await f.requests()).toEqual([{ requestId: `dream.ready:${asked}`, type: 'input' }])
 })
 
 it('reads tool numbers from the trace, with unused tools and frequent errors', async () => {
   const file = join(await temp(), 'trace.sqlite')
   const db = new DatabaseSync(file)
   db.exec(
-    'CREATE TABLE calls (id TEXT, at REAL, ms REAL, kind TEXT, name TEXT, ok INTEGER, error TEXT)',
+    'CREATE TABLE calls (id TEXT, at REAL, ms REAL, kind TEXT, name TEXT, ok INTEGER, error TEXT, args TEXT, conversation INTEGER, entry INTEGER)',
   )
-  const insert = db.prepare('INSERT INTO calls VALUES (?, ?, ?, ?, ?, ?, ?)')
-  insert.run('1', 100, 10, 'tool', 'edit', 1, null)
-  insert.run('2', 200, 30, 'tool', 'edit', 0, 'Could not find the exact text')
-  insert.run('3', 300, 5, 'tool', 'read', 1, null)
-  insert.run('4', 50, 5, 'action', 'dream/stats', 1, null)
+  const insert = db.prepare('INSERT INTO calls VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+  insert.run('1', 100, 10, 'tool', 'edit', 1, null, null, null, null)
+  insert.run(
+    '2',
+    200,
+    30,
+    'tool',
+    'edit',
+    0,
+    'Could not find the exact text',
+    '{"path":"a.ts"}',
+    7,
+    42,
+  )
+  insert.run('3', 300, 5, 'tool', 'read', 1, null, null, null, null)
+  insert.run('4', 50, 5, 'action', 'dream/stats', 1, null, null, null, null)
   db.close()
   expect(toolStats(file, ['edit', 'read', 'notify'])).toEqual({
     since: 100,
@@ -258,54 +346,14 @@ it('reads tool numbers from the trace, with unused tools and frequent errors', a
       { name: 'read', calls: 1, failed: 0, avgMs: 5 },
     ],
     unused: ['notify'],
-    errors: [{ name: 'edit', error: 'Could not find the exact text', count: 1 }],
-  })
-  expect(toolStats(join(await temp(), 'none.sqlite'), ['read']).unused).toEqual(['read'])
-})
-
-it('leaves deferred tools out of unused, since tool_search hides them until it loads them', async () => {
-  const file = join(await temp(), 'trace.sqlite')
-  const db = new DatabaseSync(file)
-  db.exec(
-    'CREATE TABLE calls (id TEXT, at REAL, ms REAL, kind TEXT, name TEXT, ok INTEGER, error TEXT)',
-  )
-  db.prepare('INSERT INTO calls VALUES (?, ?, ?, ?, ?, ?, ?)').run(
-    '1',
-    100,
-    10,
-    'tool',
-    'edit',
-    1,
-    null,
-  )
-  db.close()
-  const host = {
-    chapter: { trace: file },
-    extensions: () => [
+    errors: [
       {
-        name: 'coding-tools',
-        enabled: true,
-        server: {
-          tools: [
-            { name: 'edit', description: 'Change a file.' },
-            { name: 'read', description: 'Read a file.' },
-          ],
-          sections: [],
-          hooks: 0,
-          docs: [],
-        },
-      },
-      {
-        name: 'recall',
-        enabled: true,
-        server: {
-          tools: [{ name: 'recall', description: 'Find old work.', deferred: true }],
-          sections: [],
-          hooks: 0,
-          docs: [],
-        },
+        name: 'edit',
+        error: 'Could not find the exact text',
+        count: 1,
+        examples: [{ at: '#7/42', args: '{"path":"a.ts"}' }],
       },
     ],
-  } as unknown as ExtensionHost
-  expect(actions.stats(null, { host } as ActionContext).unused).toEqual(['read'])
+  })
+  expect(toolStats(join(await temp(), 'none.sqlite'), ['read']).unused).toEqual(['read'])
 })

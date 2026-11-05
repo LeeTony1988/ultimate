@@ -1329,6 +1329,7 @@ function Spoken({ entry, text }: { entry: number; text: string }) {
   return words.map((word, index) => (
     <span
       className={cn('transition-opacity duration-300', index >= speaking.words && 'opacity-25')}
+      // oxlint-disable-next-line react/no-array-index-key -- Word positions track spoken progress in this line.
       key={index}
     >
       {index ? ' ' : ''}
@@ -1361,7 +1362,7 @@ function LiveTurn() {
         >
           <span>
             {text.split(' ').map((word, index) => (
-              // Index keys keep the words already shown in place; only new ones mount and fade in.
+              // oxlint-disable-next-line react/no-array-index-key -- Existing word positions stay mounted as speech streams.
               <span className="animate-fade-in" key={index}>
                 {index ? ' ' : ''}
                 {word}

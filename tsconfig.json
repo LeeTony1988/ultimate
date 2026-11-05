@@ -22,6 +22,7 @@
     "scripts",
     "extensions/**/*.ts",
     ".ultimate/extensions/**/*.ts",
+    ".ultimate/skills/**/*.ts",
     "test",
     "vite.config.ts"
   ],

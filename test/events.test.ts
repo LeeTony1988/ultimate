@@ -210,7 +210,7 @@ it('leaves the log conversation out of conversation lists but serves it by id', 
   const probe = await start(await project())
   await probe.land('a1')
   const log = (await probe.server.harness.snapshot(EventLog, ROOT, context))!.conversation!
-  const stream = await attach(probe.server, `?conversation=${log}`)
+  const stream = await attach(probe.server, { conversation: log })
   try {
     expect(stream.view().conversation.id).toBe(log)
     // Summaries refresh in commit order: once a later conversation is listed, the log's refresh is done too.

@@ -16,29 +16,25 @@ import { chapterFiles } from '../lib/chapters.ts'
 import { readJson, writeJson } from '../lib/json-file.ts'
 import { CloudApi } from '../extensions/cloud/api.ts'
 import type { CloudService } from '../extensions/cloud/api.ts'
-import { InstanceApi } from '../extensions/instance/api.ts'
-import type { InstanceService } from '../extensions/instance/api.ts'
 import { Standing } from '../extensions/subagents/api.ts'
 import { docs as lineageDocs } from '../extensions/lineage/server.ts'
 import { Messages } from '../extensions/messages/api.ts'
 import { Todos } from '../extensions/todos/server.ts'
-import {
-  actions,
-  fileJournal,
-  Sessions,
-  startSession,
-  userActions,
-} from '../extensions/dream/server.ts'
+import { actions, Next, userActions } from '../extensions/dream/server.ts'
 import type { Sleep } from '../extensions/dream/refs.ts'
 import type { Seed } from '../extensions/dream/types.ts'
-import { inspection } from './dream-fixture.ts'
 import { temp } from './helpers.ts'
 
 const harnesses: Harness[] = []
 afterEach(async () => {
-  vi.unstubAllGlobals()
   for (const harness of harnesses.splice(0)) await harness.close(context)
 })
+
+const READY = {
+  chapter: 'fresh-roots',
+  learned: ['One', 'Two', 'Three'],
+  handoff: 'Open: the preview round.',
+}
 
 async function fixture() {
   const home = await temp('ultimate-dream-asleep-')
@@ -49,23 +45,10 @@ async function fixture() {
   )
   harnesses.push(harness)
   await harness.root(context)
-  const tokens = [...lineageDocs, Messages, Todos, Sessions]
+  const tokens = [...lineageDocs, Messages, Todos, Next]
   const resources = new Map<string, unknown>()
   const phases: Sleep[] = []
   let previous = ''
-  let current: Seed
-  let attempts = 0
-  const instances = {
-    start: vi.fn<InstanceService['start']>(async ({ home: scratch }) => {
-      current = (await readJson<Seed | null>(
-        join(scratch, 'chapters/fresh-roots/seed.json'),
-        null,
-      ))!
-      attempts++
-      return { id: String(attempts), url: 'http://127.0.0.1:12345' }
-    }),
-    stop: vi.fn<InstanceService['stop']>(async () => {}),
-  }
   const cloud = {
     status: vi.fn<CloudService['status']>(async () => 'on'),
     backup: vi.fn<CloudService['backup']>(async () => ({
@@ -75,11 +58,9 @@ async function fixture() {
       bytes: 1,
       uploaded: 1,
     })),
+    lastBackup: vi.fn<CloudService['lastBackup']>(async () => undefined),
   }
-  const services = new Map<unknown, unknown>([
-    [InstanceApi, instances],
-    [CloudApi, cloud],
-  ])
+  const services = new Map<unknown, unknown>([[CloudApi, cloud]])
   const invoke = vi.fn<(extension: string, action: string) => Promise<[]>>(
     async (extension, action) => {
       expect(action).toBe('list')
@@ -99,10 +80,10 @@ async function fixture() {
     },
     harness: () => ({
       hold,
+      resume: () => harness.resume(),
       commit: async (run: Parameters<Harness['commit']>[0]) => {
         const result = await harness.commit(run, context)
-        const sleep = (await harness.snapshot(Sessions, ROOT_CONVERSATION_ID, context))?.sessions[0]
-          ?.sleep
+        const sleep = (await harness.snapshot(Next, ROOT_CONVERSATION_ID, context))?.sleep
         if (sleep && JSON.stringify(sleep) !== previous) {
           phases.push(structuredClone(sleep))
           previous = JSON.stringify(sleep)
@@ -117,14 +98,10 @@ async function fixture() {
         to: 'fresh-roots',
         by: process.pid,
       })
-      const saved = await readJson<Seed | null>(join(home, 'chapters/fresh-roots/seed.json'), null)
-      expect(saved?.gate).toBeUndefined()
-      expect({ ...saved, gate: true }).toEqual(current)
       return 'Restart refused'
     }),
   } as unknown as ExtensionHost
   await harness.commit(async (tx) => {
-    await startSession(tx, 1)
     ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = 20 as never
     ;(await tx.doc(host.doc('lineage.roots')!, ROOT_CONVERSATION_ID)).roots = [1]
     ;(await tx.doc(host.doc('lineage.memory')!, ROOT_CONVERSATION_ID)).memories = {
@@ -132,100 +109,52 @@ async function fixture() {
     }
   }, context)
   const call = { host } as ActionContext
-  const journal = (extra = {}) =>
-    harness.commit(
-      (tx) =>
-        fileJournal(
-          tx,
-          {
-            session: 1,
-            learned: ['One', 'Two', 'Three'],
-            text: 'Journal',
-            chapter: 'fresh-roots',
-            proposals: [],
-            ...extra,
-          },
-          2,
-        ),
-      context,
-    )
-  const fetcher = inspection(() => current)
-  return {
-    host,
-    home,
-    harness,
-    call,
-    journal,
-    instances,
-    cloud,
-    services,
-    phases,
-    invoke,
-    fetcher,
-    hold,
-    current: () => current,
-    attempts: () => attempts,
-  }
+  /** What @ultimate's `prepare` stores, without the card it delivers. */
+  const prepare = () =>
+    harness.commit(async (tx) => {
+      ;(await tx.doc(Next, ROOT_CONVERSATION_ID)).prepared = { ...READY, at: 1 }
+    }, context)
+  return { host, home, harness, call, prepare, cloud, services, phases, invoke, hold }
 }
 
-it('keeps asleep and switch user-only and validates the proposed chapter before filing', async () => {
+it('keeps asleep and switch user-only', () => {
   expect(userActions).toEqual(expect.arrayContaining(['asleep', 'switch']))
-  const f = await fixture()
-  await expect(f.journal({ chapter: '../escape' })).rejects.toThrow('chapter name')
-  await f.journal()
-  expect(
-    (await f.harness.snapshot(Sessions, ROOT_CONVERSATION_ID, context))?.sessions[0].journal
-      ?.chapter,
-  ).toBe('fresh-roots')
+  expect(userActions).not.toContain('prepare')
 })
 
-it.each(['no journal', 'open', 'approved', 'busy', 'no name', 'existing'])(
+it.each(['nothing prepared', 'busy', 'existing'])(
   'refuses asleep with %s before any effects',
   async (reason) => {
     const f = await fixture()
-    if (reason !== 'no journal') await f.journal(reason === 'no name' ? { chapter: undefined } : {})
-    if (reason === 'open' || reason === 'approved')
-      await f.harness.commit(async (tx) => {
-        ;(await tx.doc(Sessions, ROOT_CONVERSATION_ID)).sessions[0].proposals.push({
-          id: 'p',
-          pass: 'tools',
-          title: 'Fix',
-          status: reason,
-        })
-      }, context)
+    if (reason !== 'nothing prepared') await f.prepare()
     // @ultimate counts too: a switch would park its turn, and parked work keeps the old chapter from being reopened.
     if (reason === 'busy')
       f.host.conversations = () => [{ id: 20, busy: true, title: 'Building' }] as never
-    const args = { session: 1, ...(reason === 'existing' ? { name: 'the-beginning' } : {}) }
+    const args: { name?: string } = reason === 'existing' ? { name: 'the-beginning' } : {}
     const messages = {
-      'no journal': 'has no journal',
-      open: 'Settle every',
-      approved: 'Settle every',
+      'nothing prepared': 'Nothing is prepared',
       busy: '#20 Building',
-      'no name': 'chapter name',
       existing: 'already exists',
     }
     await expect(actions.asleep(args, f.call)).rejects.toThrow(
       messages[reason as keyof typeof messages],
     )
     expect(f.phases).toEqual([])
-    expect(f.instances.start).not.toHaveBeenCalled()
     expect(f.cloud.backup).not.toHaveBeenCalled()
     expect(f.host.restart).not.toHaveBeenCalled()
   },
 )
 
-it('commits each sleep phase, takes the final backup before journaling, and records restart failure with no pending switch', async () => {
+it('commits each sleep phase, carries the handover, backs up before journaling, and records restart failure with no pending switch', async () => {
   const f = await fixture()
-  await f.journal()
+  await f.prepare()
   f.cloud.backup.mockImplementation(async () => {
     expect(existsSync(join(f.home, 'pending-chapter.json'))).toBe(false)
     expect(f.phases.at(-1)?.phase).toBe('backing up')
     return { id: 'final', at: 1, machine: 'here', bytes: 1, uploaded: 1 }
   })
-  const result = await actions.asleep({ session: 1 }, f.call)
+  const result = await actions.asleep({}, f.call)
   expect(result).toMatchObject({
-    session: 1,
     sleep: {
       chapter: 'fresh-roots',
       phase: 'failed',
@@ -235,16 +164,19 @@ it('commits each sleep phase, takes the final backup before journaling, and reco
   })
   expect(f.phases.map((item) => item.phase)).toEqual([
     'seeding',
-    'checking',
     'backing up',
     'backing up',
     'switching',
     'failed',
   ])
-  expect(f.phases.every((item) => item.at > 0)).toBe(true)
-  expect(f.phases[2].checks?.every((item) => item.ok)).toBe(true)
   expect(f.cloud.backup).toHaveBeenCalledOnce()
-  expect(f.instances.stop).toHaveBeenCalledWith('1')
+  // The seed is written before the restart and stays for a retry: it carries what @ultimate prepared.
+  const seed = await readJson<Seed | null>(join(f.home, 'chapters/fresh-roots/seed.json'), null)
+  expect(seed).toMatchObject({
+    learned: READY.learned,
+    continues: { conversation: 20, handoff: READY.handoff },
+    counts: { memories: 1 },
+  })
   expect(existsSync(join(f.home, 'pending-chapter.json'))).toBe(false)
   expect(existsSync(chapterFiles(f.home, 'fresh-roots').database)).toBe(false)
 })
@@ -253,82 +185,39 @@ it.each([undefined, 'off', 'local'] as const)(
   'skips cloud with a recorded reason for %s',
   async (status) => {
     const f = await fixture()
-    await f.journal({ chapter: undefined })
+    await f.prepare()
     if (status === undefined) f.services.delete(CloudApi)
     else f.cloud.status.mockResolvedValue(status)
-    const result = await actions.asleep({ session: 1, name: 'fresh-roots' }, f.call)
+    const result = await actions.asleep({ name: 'other-name' }, f.call)
     const reasons = {
       off: 'Cloud backups are off',
       local: 'Project has no GitHub origin; cloud backup is local-only',
     }
     expect(result).toMatchObject({
       sleep: {
+        chapter: 'other-name',
         backup: {
           skipped: status === undefined ? 'Cloud extension is not enabled' : reasons[status],
         },
       },
     })
     expect(f.cloud.backup).not.toHaveBeenCalled()
-    expect(f.host.restart).toHaveBeenCalledOnce()
   },
 )
 
-it.each([false, true])('rebuilds once after a failed gate; fail twice = %s', async (twice) => {
+it('stays when the backup fails, or another conversation starts during the backup', async () => {
   const f = await fixture()
-  await f.journal()
-  inspection(f.current, () =>
-    f.attempts() === 1 || twice ? { 'lineage.memory': { memories: {} } } : {},
-  )
-  const result = await actions.asleep({ session: 1 }, f.call)
-  expect(f.instances.start).toHaveBeenCalledTimes(2)
-  expect(f.instances.stop).toHaveBeenCalledTimes(2)
-  expect(f.invoke.mock.calls.filter(([extension]) => extension === 'automations')).toHaveLength(2)
-  expect(f.phases.slice(0, 4).map((item) => item.phase)).toEqual([
-    'seeding',
-    'checking',
-    'seeding',
-    'checking',
-  ])
-  expect(result).toMatchObject({
-    sleep: {
-      phase: 'failed',
-      error: twice ? 'Chapter gate failed after one repair' : 'Error: Restart refused',
-    },
-  })
-  expect(f.phases.at(-1)?.checks?.find((item) => item.name === 'memories')?.ok).toBe(!twice)
-  expect(f.cloud.backup).toHaveBeenCalledTimes(twice ? 0 : 1)
-  expect(f.host.restart).toHaveBeenCalledTimes(twice ? 0 : 1)
-  expect(existsSync(join(f.home, 'chapters/fresh-roots/seed.json'))).toBe(!twice)
-})
-
-it('stays when the backup fails or the instance service is missing', async () => {
-  const f = await fixture()
-  await f.journal()
-  f.cloud.backup.mockRejectedValue(new Error('Conflict'))
-  expect(await actions.asleep({ session: 1 }, f.call)).toMatchObject({
+  await f.prepare()
+  f.cloud.backup.mockRejectedValueOnce(new Error('Conflict'))
+  expect(await actions.asleep({}, f.call)).toMatchObject({
     sleep: { phase: 'failed', error: 'Error: Conflict' },
   })
-  expect(f.host.restart).not.toHaveBeenCalled()
-  expect(existsSync(join(f.home, 'pending-chapter.json'))).toBe(false)
-  f.services.delete(InstanceApi)
-  expect(await actions.asleep({ session: 1 }, f.call)).toMatchObject({
-    sleep: { phase: 'failed', error: expect.stringContaining('instance extension') },
-  })
-})
-
-it('stays when another conversation starts during the gate or backup', async () => {
-  const f = await fixture()
-  await f.journal()
   f.cloud.backup.mockImplementation(async () => {
     f.host.conversations = () => [{ id: 30, busy: true, title: 'New work' }] as never
     return { id: 'final', at: 1, machine: 'here', bytes: 1, uploaded: 1 }
   })
-  expect(await actions.asleep({ session: 1 }, f.call)).toMatchObject({
-    sleep: {
-      phase: 'failed',
-      backup: { id: 'final' },
-      error: expect.stringContaining('#30 New work'),
-    },
+  expect(await actions.asleep({}, f.call)).toMatchObject({
+    sleep: { phase: 'failed', backup: { id: 'final' }, error: expect.stringContaining('#30') },
   })
   expect(f.host.restart).not.toHaveBeenCalled()
   expect(existsSync(join(f.home, 'pending-chapter.json'))).toBe(false)
@@ -430,7 +319,7 @@ it.each([true, false])(
       active: 'the-beginning',
       chapters: [{ name: 'the-beginning' }, { name: 'fresh-roots' }],
     })
-    const before = await f.harness.snapshot(Sessions, ROOT_CONVERSATION_ID, context)
+    const before = await f.harness.snapshot(Next, ROOT_CONVERSATION_ID, context)
     const order: string[] = []
     if (!enabled) f.services.delete(CloudApi)
     f.cloud.backup.mockImplementation(async () => {
@@ -451,29 +340,28 @@ it.each([true, false])(
     )
     expect(order).toEqual(enabled ? ['backup', 'restart'] : ['restart'])
     expect(f.cloud.backup).toHaveBeenCalledTimes(enabled ? 1 : 0)
-    expect(await f.harness.snapshot(Sessions, ROOT_CONVERSATION_ID, context)).toEqual(before)
+    expect(await f.harness.snapshot(Next, ROOT_CONVERSATION_ID, context)).toEqual(before)
     expect(f.phases).toEqual([])
     expect(existsSync(join(f.home, 'pending-chapter.json'))).toBe(false)
   },
 )
 
-it('serializes chapter changes while the gate is starting', async () => {
+it('serializes chapter changes while the backup runs', async () => {
   const f = await fixture()
-  await f.journal()
+  await f.prepare()
   const started = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
-  const start = f.instances.start.getMockImplementation()!
-  f.instances.start.mockImplementation(async (options) => {
+  f.cloud.backup.mockImplementation(async () => {
     started.resolve()
     await release.promise
-    return start(options)
+    return { id: 'final', at: 1, machine: 'here', bytes: 1, uploaded: 1 }
   })
-  const pending = actions.asleep({ session: 1 }, f.call)
+  const pending = actions.asleep({}, f.call)
   await started.promise
   await expect(actions.switch({ chapter: 'the-beginning' }, f.call)).rejects.toThrow(
     'already running',
   )
-  await expect(actions.asleep({ session: 1 }, f.call)).rejects.toThrow('already running')
+  await expect(actions.asleep({}, f.call)).rejects.toThrow('already running')
   release.resolve()
   await pending
 })

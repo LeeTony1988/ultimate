@@ -6,8 +6,8 @@ import type { Context } from '@earendil-works/chord'
 import { defineDoc } from '@earendil-works/pi-durable'
 import type { ConversationId, Tx } from '@earendil-works/pi-durable'
 import { defineApi } from '../../shared/extension-api.ts'
-import { ContextDoc } from './refs.ts'
-import type { ContextUsage } from './refs.ts'
+import { ContextDoc, MarksDoc } from './refs.ts'
+import type { AgentMarkStyle, ContextUsage } from './refs.ts'
 import type { ConversationSubject, KeptWork } from './types.ts'
 import type {
   accountResponse,
@@ -86,6 +86,12 @@ export type ReleaseService = {
 }
 /** The extension point concluding frees resources through; workspaces provides it (worktrees). */
 export const Release = defineApi<ReleaseService>()('conversations.release')
+export type PreviewsService = {
+  /** Stop the previews conversations `ids` started (each listed, descendants included); returns their instance ids. */
+  stop(ids: number[], caller: Context): Promise<string[]>
+}
+/** The extension point the Conclude action stops previews through; instance provides it. */
+export const Previews = defineApi<PreviewsService>()('conversations.previews')
 /**
  * How full a conversation's context is, on that conversation: the one measure the status line and automations' context
  * triggers read. The conversations extension keeps it; a fork starts empty until its first answer.
@@ -100,6 +106,16 @@ export const ContextUsageDoc = defineDoc<ContextUsage>({
   initial: () => ({ at: 0 }),
 })
 export type { ContextUsage } from './refs.ts'
+/** How each standing agent's mark looks, on conversation 1; subagents writes it from the definitions. */
+export const Marks = defineDoc<Record<string, AgentMarkStyle>>({
+  kind: MarksDoc.kind,
+  checkpointWhen: () => false,
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({}),
+})
 /** Conversation subjects and the summary model; core, so `need` it. */
 export const ConversationsApi = defineApi<ConversationsService>()('conversations')
 export const tier = 'core'

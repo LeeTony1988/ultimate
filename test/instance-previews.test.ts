@@ -1,10 +1,21 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { ModelRuntime } from '@earendil-works/pi-coding-agent'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { previewEnv, previewWorkspace, remember, stopped } from '../extensions/instance/server.ts'
+import {
+  linkHome,
+  previewEnv,
+  previewWorkspace,
+  remember,
+  seedUserHome,
+  stopped,
+} from '../extensions/instance/server.ts'
+import { saveDefinition } from '../lib/agents.ts'
+import { writeFamilies } from '../lib/families-settings.ts'
+import { writeJson } from '../lib/json-file.ts'
 import { at, label } from '../extensions/instance/links.ts'
 
 const homes: string[] = []
@@ -59,6 +70,7 @@ it('isolates preview cloud environment and host identity', () => {
     ULTIMATE_HOME: '/parent/state',
     ULTIMATE_PROJECT: '/parent/project',
     HOME: '/parent/user',
+    ULTIMATE_USER_HOME: '/parent/config',
     ULTIMATE_PORT: '4747',
     ULTIMATE_NO_OPEN: '0',
     ULTIMATE_INSTANCE_OWNER: '111',
@@ -81,11 +93,68 @@ it('isolates preview cloud environment and host identity', () => {
     ULTIMATE_HOME: '/preview/state',
     ULTIMATE_PROJECT: '/preview/project',
     HOME: '/preview/user',
+    ULTIMATE_USER_HOME: '/preview/user',
     ULTIMATE_PORT: '0',
     ULTIMATE_NO_OPEN: '1',
     ULTIMATE_INSTANCE_OWNER: '222',
   })
   expect(parent).toEqual(before)
+})
+
+// Regression: preview clicks moved an agent in a linked ~/.ultimate/agents/*.md and saved a linked
+// model-families.json, both kept in the user's dotfiles repository.
+it("keeps a preview's agent and family writes out of the user's linked config", async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ultimate-preview-user-'))
+  homes.push(root)
+  const [dotfiles, user, copy] = ['dotfiles', 'user', 'preview'].map((name) => join(root, name))
+  const agent = '---\nname: helper\ndescription: Helps\n---\nHelp.\n'
+  await mkdir(join(dotfiles, 'agents'), { recursive: true })
+  await mkdir(join(user, '.ultimate/agents'), { recursive: true })
+  await writeFile(join(dotfiles, 'agents/helper.md'), agent)
+  await writeFile(join(dotfiles, 'model-families.json'), '{}\n')
+  await symlink(join(dotfiles, 'agents/helper.md'), join(user, '.ultimate/agents/helper.md'))
+  await symlink(join(dotfiles, 'model-families.json'), join(user, '.ultimate/model-families.json'))
+
+  await seedUserHome(user, copy)
+  const runtime = await ModelRuntime.create()
+  await saveDefinition(
+    { projectRoot: root, userHome: copy },
+    runtime,
+    'user',
+    'helper',
+    { description: 'Moved' },
+    'Help.',
+  )
+  await writeFamilies(copy, root, {})
+
+  expect(await readFile(join(dotfiles, 'agents/helper.md'), 'utf8')).toBe(agent)
+  expect(await readFile(join(dotfiles, 'model-families.json'), 'utf8')).toBe('{}\n')
+  expect(await readFile(join(copy, '.ultimate/agents/helper.md'), 'utf8')).toContain('Moved')
+  expect(await readFile(join(copy, '.ultimate/model-families.json'), 'utf8')).toContain('recent')
+  // Every preview and the host pick Tailscale ports in one registry, even one the preview creates.
+  await writeJson(join(copy, '.ultimate/tailscale.json'), { ports: {} })
+  expect(await readFile(join(user, '.ultimate/tailscale.json'), 'utf8')).toContain('ports')
+})
+
+// Regression: a preview agent's bash `~` and write tool `~/…` reached the user's real ~/.ultimate/skills.
+it("keeps a preview's ~/.ultimate private while sharing the rest of the home", async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ultimate-preview-home-'))
+  homes.push(root)
+  const [user, copy] = ['user', 'preview'].map((name) => join(root, name))
+  await mkdir(join(user, '.ultimate/skills'), { recursive: true })
+  await mkdir(join(user, '.pi/agent'), { recursive: true })
+  await writeFile(join(user, '.pi/agent/auth.json'), '{"login":true}')
+
+  await seedUserHome(user, copy)
+  await linkHome(user, copy)
+  await linkHome(user, copy)
+  const { HOME } = previewEnv({}, { home: root, project: root, userHome: copy, ownerPid: 1 })
+  await mkdir(join(HOME!, '.ultimate/skills/leak'))
+  await writeFile(join(HOME!, '.ultimate/skills/leak/SKILL.md'), 'x')
+
+  expect(await readFile(join(copy, '.ultimate/skills/leak/SKILL.md'), 'utf8')).toBe('x')
+  await expect(readFile(join(user, '.ultimate/skills/leak/SKILL.md'))).rejects.toThrow('ENOENT')
+  expect(await readFile(join(HOME!, '.pi/agent/auth.json'), 'utf8')).toBe('{"login":true}')
 })
 
 it('remembers stopped previews across restarts, one per port, the last 50', async () => {

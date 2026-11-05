@@ -63,7 +63,7 @@ export interface EventSourceLike {
 export interface StoreOptions {
   eventSource?: (url: string) => EventSourceLike
   fetch?: typeof fetch
-  /** Delay before reopening a stream the server closed. */
+  /** Delay before reopening a stream the server closed, or a subscription it refused. */
   retryMs?: number
   /** Called when the requested conversation could not be opened and the stream fell back to the root. */
   onFallback?: () => void
@@ -72,6 +72,7 @@ export interface StoreOptions {
 
 const CLOSED = 2
 const names = [
+  'stream',
   'system',
   'conversations',
   'view',
@@ -83,17 +84,21 @@ const names = [
   'tasks',
   'notice',
 ] as const satisfies readonly (keyof ServerEvents)[]
+/** Events of one subscription, which carry its id on their first data line. */
+const subscribed = new Set<keyof ServerEvents>(['view', 'ops', 'doc', 'docOps'])
+type Handler = (name: 'view' | 'ops' | 'doc' | 'docOps', raw: string) => void
 
-/** A scoped view and/or documents of one conversation: its sorted, comma-joined kinds. */
+/** A scoped view and/or documents of one conversation: its sorted, comma-joined kinds and its subscription. */
 interface DocStream {
   kinds: string
-  source: EventSourceLike
+  view: boolean
+  sub: number
   retry?: ReturnType<typeof setTimeout>
 }
 
 /**
- * `docs` after a `doc` snapshot or `docOps` batch. Ops need their stream's snapshot: a kind without one, such as a kind
- * watched again, waits for the reconnect that brings it.
+ * `docs` after a `doc` snapshot or `docOps` batch. Ops need their subscription's snapshot: a kind without one, such as a
+ * kind watched again, waits for the new subscription that brings it.
  */
 function applyDoc(docs: Docs, event: ServerEvents['doc'] | ServerEvents['docOps']): Docs {
   if ('value' in event) return { ...docs, [event.kind]: event.value }
@@ -124,12 +129,21 @@ export function createStore(options: StoreOptions = {}) {
   /** Watch counts of documents of given conversations, by conversation id, then kind. */
   const watchedOf = new Map<number, Map<string, number>>()
   const watchedViews = new Map<number, number>()
-  /** One stream per retained conversation, carrying its view and all its watched kinds. */
+  /** One subscription per retained conversation, carrying its view and all its watched kinds. */
   const docStreams = new Map<number, DocStream>()
+  /**
+   * The tab's one stream carries every subscription: the shown conversation's (`main`) and one per retained
+   * conversation. Browsers allow a handful of connections per host, so each further stream would block other requests.
+   */
   let source: EventSourceLike | undefined
+  /** The open stream's id, which subscriptions are made on; absent until it arrives and after a drop. */
+  let streamId: string | undefined
+  const handlers = new Map<number, Handler>()
+  let nextSub = 0
+  let main: number | undefined
   let opened = false
   let retry: ReturnType<typeof setTimeout> | undefined
-  let reconnect: ReturnType<typeof setTimeout> | undefined
+  let resubscribe: ReturnType<typeof setTimeout> | undefined
   let sync: ReturnType<typeof setTimeout> | undefined
   let noticeId = 0
   let stopped = true
@@ -139,6 +153,12 @@ export function createStore(options: StoreOptions = {}) {
    */
   const recent = new Map<number, { view: StreamedView; raw?: string }>()
   const keep = 6
+  /**
+   * The last text of each whole-state event. Every (re)connect resends them, mostly unchanged: skipping an identical one
+   * spares the parse and a re-render of everything that reads it (the conversation list is megabytes in a long history).
+   */
+  const lastRaw: Partial<Record<keyof ServerEvents, string>> = {}
+  const snapshots = new Set<keyof ServerEvents>(['system', 'conversations', 'tasks'])
   function remember(view: StreamedView, raw?: string) {
     const id = view.conversation.id
     recent.delete(id)
@@ -228,15 +248,66 @@ export function createStore(options: StoreOptions = {}) {
     set({ view, restored: false })
   }
 
+  /**
+   * Subscribe to a conversation on the open stream; `failed` gets the status of a refusal (0 for a network error) while
+   * the subscription is current. Without a stream yet, its `stream` event reopens every subscription instead.
+   */
+  function subscribe(
+    spec: { conversation?: number; docs: string[]; view: boolean },
+    handler: Handler,
+    failed: (status: number) => void,
+  ) {
+    const sub = ++nextSub
+    handlers.set(sub, handler)
+    const stream = streamId
+    if (stream === undefined) return sub
+    const refused = (status: number) => {
+      if (handlers.has(sub) && streamId === stream) failed(status)
+    }
+    void request(`/api/events/${stream}/${sub}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(spec),
+    }).then(
+      (response) => {
+        if (!response.ok) refused(response.status)
+      },
+      () => refused(0),
+    )
+    return sub
+  }
+  function unsubscribe(sub: number | undefined) {
+    if (sub === undefined || !handlers.delete(sub) || streamId === undefined) return
+    request(`/api/events/${streamId}/${sub}`, { method: 'DELETE' }).catch(() => {
+      // The stream is gone, and its subscriptions with it.
+    })
+  }
+  /** (Re)subscribe the shown conversation with the watched kinds, replacing its previous subscription. */
+  function openMain() {
+    clearTimeout(resubscribe)
+    unsubscribe(main)
+    const requested = state.requested
+    main = subscribe(
+      { conversation: requested, docs: [...docKinds.keys()].toSorted(), view: true },
+      (name, raw) => (name === 'view' ? receiveView(raw) : handle(name, JSON.parse(raw))),
+      (status) => {
+        // The stream ended: its reconnect resubscribes.
+        if (status === 410) return
+        // A conversation that never opened is likely gone (a new home): fall back to the root.
+        if (status === 404 && requested !== undefined && !state.view) {
+          set({ requested: undefined })
+          options.onFallback?.()
+          openMain()
+        } else resubscribe = setTimeout(openMain, options.retryMs ?? 1000)
+      },
+    )
+  }
+
   function connect() {
     clearTimeout(retry)
     source?.close()
-    const params = new URLSearchParams()
-    if (state.requested !== undefined) params.set('conversation', String(state.requested))
-    const kinds = [...docKinds.keys()].toSorted()
-    if (kinds.length) params.set('docs', kinds.join(','))
-    const query = params.size ? `?${params}` : ''
-    const current = open(`/api/events${query}`)
+    streamId = undefined
+    const current = open('/api/events')
     source = current
     opened = false
     current.addEventListener('open', () => {
@@ -246,48 +317,54 @@ export function createStore(options: StoreOptions = {}) {
     })
     current.addEventListener('error', () => {
       if (source !== current) return
+      streamId = undefined
       setConnection(opened || state.view ? 'reconnecting' : 'connecting')
       // EventSource retries by itself unless the server answered with an error status.
-      if (current.readyState === CLOSED) {
-        // A conversation that never opened is likely gone (a new home): fall back to the root.
-        if (!opened && state.requested !== undefined && !state.view) {
-          set({ requested: undefined })
-          options.onFallback?.()
-        }
-        retry = setTimeout(connect, options.retryMs ?? 1000)
-      }
+      if (current.readyState === CLOSED) retry = setTimeout(connect, options.retryMs ?? 1000)
     })
     for (const name of names)
       current.addEventListener(name, (event) => {
         if (source !== current) return
         const raw = (event as MessageEvent<string>).data
-        if (name === 'view') receiveView(raw)
-        else handle(name, JSON.parse(raw))
+        if (subscribed.has(name)) {
+          const cut = raw.indexOf('\n')
+          handlers.get(Number(raw.slice(0, cut)))?.(
+            name as Parameters<Handler>[0],
+            raw.slice(cut + 1),
+          )
+        } else if (name === 'stream') {
+          // A new stream, first or after a drop, has no subscriptions: each starts again from a snapshot.
+          streamId = (JSON.parse(raw) as ServerEvents['stream']).id
+          handlers.clear()
+          openMain()
+          // A copy: reopening one moves it to the end of the map.
+          for (const [conversation, stream] of Array.from(docStreams))
+            openDocs(conversation, stream.kinds, stream.view)
+        } else if (snapshots.has(name)) {
+          if (lastRaw[name] !== raw) {
+            lastRaw[name] = raw
+            handle(name, JSON.parse(raw))
+          } else if (name === 'system' && !state.models)
+            // The same system info still retries models a failed fetch left missing.
+            // oxlint-disable-next-line typescript/no-floating-promises -- refreshModels catches fetch failures and retries on the next system event.
+            void refreshModels()
+        } else handle(name, JSON.parse(raw))
       })
   }
-  function scheduleReconnect() {
+  function scheduleMain() {
     if (stopped) return
-    clearTimeout(reconnect)
-    reconnect = setTimeout(connect, 0)
+    clearTimeout(resubscribe)
+    resubscribe = setTimeout(openMain, 0)
   }
 
-  function openDocs(conversation: number, kinds: string) {
+  function openDocs(conversation: number, kinds: string, withView: boolean) {
     closeDocs(conversation)
-    const params = new URLSearchParams({
-      conversation: String(conversation),
-      docs: kinds,
-    })
-    const stream: DocStream = { kinds, source: open(`/api/events?${params}`) }
+    const stream: DocStream = { kinds, view: withView, sub: 0 }
     docStreams.set(conversation, stream)
-    stream.source.addEventListener('error', () => {
-      // EventSource retries by itself unless the server answered with an error status.
-      if (docStreams.get(conversation) === stream && stream.source.readyState === CLOSED)
-        stream.retry = setTimeout(() => openDocs(conversation, kinds), options.retryMs ?? 1000)
-    })
-    for (const name of ['view', 'ops', 'doc', 'docOps'] as const)
-      stream.source.addEventListener(name, (event) => {
-        if (docStreams.get(conversation) !== stream) return
-        const data = JSON.parse((event as MessageEvent<string>).data)
+    stream.sub = subscribe(
+      { conversation, docs: kinds ? kinds.split(',') : [], view: withView },
+      (name, raw) => {
+        const data = JSON.parse(raw)
         if (name === 'view' || name === 'ops') {
           if (!watchedViews.has(conversation)) return
           const current = state.viewsOf[conversation]
@@ -303,15 +380,24 @@ export function createStore(options: StoreOptions = {}) {
         const docs = state.docsOf[conversation] ?? {}
         const next = applyDoc(docs, change)
         if (next !== docs) set({ docsOf: { ...state.docsOf, [conversation]: next } })
-      })
+      },
+      (status) => {
+        // The stream ended: its reconnect resubscribes.
+        if (status !== 410)
+          stream.retry = setTimeout(
+            () => openDocs(conversation, kinds, withView),
+            options.retryMs ?? 1000,
+          )
+      },
+    )
   }
   function closeDocs(conversation: number) {
     const stream = docStreams.get(conversation)
-    stream?.source.close()
+    unsubscribe(stream?.sub)
     clearTimeout(stream?.retry)
     docStreams.delete(conversation)
   }
-  /** Scoped views and explicit document watches share one stream per conversation. */
+  /** Scoped views and explicit document watches share one subscription per conversation. */
   function syncDocs() {
     const conversations = new Set([...watchedOf.keys(), ...watchedViews.keys()])
     for (const conversation of docStreams.keys())
@@ -320,8 +406,11 @@ export function createStore(options: StoreOptions = {}) {
     for (const conversation of conversations) {
       const kinds = watchedOf.get(conversation) ?? new Map<string, number>()
       const list = [...kinds.keys()].toSorted().join(',')
-      if (docStreams.get(conversation)?.kinds !== list) openDocs(conversation, list)
-      // Kinds nobody watches anymore go; the rest keep their value until the new stream's snapshot replaces it.
+      const stream = docStreams.get(conversation)
+      const view = watchedViews.has(conversation)
+      // A view watched again needs a fresh snapshot, so adding or dropping it resubscribes.
+      if (stream?.kinds !== list || stream.view !== view) openDocs(conversation, list, view)
+      // Kinds nobody watches anymore go; the rest keep their value until the new subscription's snapshot replaces it.
       // Unchanged documents stay the same object, so watching another conversation re-renders none of their readers.
       const current = state.docsOf[conversation] ?? {}
       docsOf[conversation] = Object.keys(current).every((kind) => kinds.has(kind))
@@ -365,11 +454,15 @@ export function createStore(options: StoreOptions = {}) {
     stop() {
       stopped = true
       clearTimeout(retry)
-      clearTimeout(reconnect)
+      clearTimeout(resubscribe)
       clearTimeout(sync)
+      // Closing the stream closes its subscriptions.
+      streamId = undefined
+      for (const conversation of docStreams.keys()) closeDocs(conversation)
+      unsubscribe(main)
+      main = undefined
       source?.close()
       source = undefined
-      for (const conversation of docStreams.keys()) closeDocs(conversation)
     },
     /** Show another conversation: its replica replaces the current one, from the start when it was shown before. */
     show(id: number | undefined) {
@@ -381,14 +474,11 @@ export function createStore(options: StoreOptions = {}) {
         restored: kept !== undefined,
         docs: {},
       })
-      scheduleReconnect()
+      scheduleMain()
     },
     /** Retain a live replica without changing the shown conversation. Multiple scopes share one stream. */
     watchConversation(id: number) {
-      const count = watchedViews.get(id) ?? 0
-      watchedViews.set(id, count + 1)
-      // A document-only stream may already have sent its view. Reopen for a fresh snapshot.
-      if (count === 0) closeDocs(id)
+      watchedViews.set(id, (watchedViews.get(id) ?? 0) + 1)
       scheduleSync()
       return () => {
         const left = (watchedViews.get(id) ?? 1) - 1
@@ -401,7 +491,7 @@ export function createStore(options: StoreOptions = {}) {
     watchDoc(kind: string) {
       const count = docKinds.get(kind) ?? 0
       docKinds.set(kind, count + 1)
-      if (count === 0) scheduleReconnect()
+      if (count === 0) scheduleMain()
       return () => {
         const left = (docKinds.get(kind) ?? 1) - 1
         if (left > 0) docKinds.set(kind, left)

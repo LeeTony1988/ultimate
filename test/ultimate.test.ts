@@ -1,6 +1,6 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { afterAll, expect, it } from 'vitest'
+import { afterAll, expect, it, vi } from 'vitest'
 import {
   fauxAssistantMessage,
   fauxProvider,
@@ -494,4 +494,37 @@ it.concurrent('switches a conversation whose pinned model lost its login to its 
   expect((await entries(f.server, dice)).filter((e) => e.kind === 'models.fallback')).toHaveLength(
     1,
   )
+})
+
+it.concurrent('keeps a model whose login check is pending or failed, and never trades a subscription for a pay-per-token login', async () => {
+  const f = await fixture()
+  const dice = await f.subagents.standing('dice', context)
+  const fallbacks = async () =>
+    (await entries(f.server, dice)).filter((e) => e.kind === 'models.fallback')
+  const model = async () =>
+    (await (await f.server.harness.conversation(dice, context))!.agent(context)).model
+  const runtime = f.server.host.modelRuntime
+  // omarchy-config, 2026-10-26: a Claude Code login the snapshot briefly lost switched @ultimate to a paid API key.
+  // A fresh check that still finds the login, or that fails, is no evidence: the model stays and nothing is said.
+  await f.server.harness.commit(
+    (tx) => configure(tx, dice, { model: { provider: 'openrouter', modelId: dead } }),
+    context,
+  )
+  const check = vi.spyOn(runtime, 'checkAuth').mockResolvedValueOnce({ type: 'api_key' })
+  await ask(f.server, dice, 'pending')
+  check.mockRejectedValueOnce(new Error('claude auth status timed out'))
+  await ask(f.server, dice, 'failed')
+  expect(await model()).toEqual({ provider: 'openrouter', modelId: dead })
+  expect(await fallbacks()).toEqual([])
+  check.mockRestore()
+  // A subscription whose login is really gone takes neither the pay-per-token default nor any first model in the
+  // list: it keeps its model and asks once.
+  const subscription = { provider: 'openai-codex', modelId: 'gpt-6.1-sol' }
+  await f.server.harness.commit((tx) => configure(tx, dice, { model: subscription }), context)
+  await ask(f.server, dice, 'subscription')
+  await ask(f.server, dice, 'again')
+  expect(await model()).toEqual(subscription)
+  expect((await fallbacks()).map((e) => e.data)).toEqual([
+    { from: 'openai-codex/gpt-6.1-sol', reason: 'none' },
+  ])
 })

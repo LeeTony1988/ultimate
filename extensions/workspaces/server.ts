@@ -1,13 +1,13 @@
-import { existsSync, watch } from 'node:fs'
-import type { FSWatcher } from 'node:fs'
 import type { JsonValue } from '@earendil-works/chord'
 import { onCommit } from '../../lib/commits.ts'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import { obj, oneOf, opt, str } from '@earendil-works/pi-schema'
+import { obj, opt, str } from '@earendil-works/pi-schema'
+import { strEnum } from '../../lib/schema.ts'
 import {
   configure,
   defineExtension,
   defineTool,
+  GenerationTask,
   hook,
   ROOT_CONVERSATION_ID,
   section,
@@ -19,11 +19,8 @@ import type { ActionInput } from '../../lib/actions.ts'
 import { empty, git, isolatable, noCommit, noRepository } from '../../lib/git.ts'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-// oxlint-disable-next-line no-restricted-imports -- workspace discovery shares the core root watcher
-import { watchRoots } from '../../server/watch-roots.ts'
 import { ConversationsApi, Release } from '../conversations/api.ts'
-import { agentRoots } from '../../lib/agents.ts'
-import { Handoff, WorkspacesApi } from './api.ts'
+import { Branches, WorkspacesApi } from './api.ts'
 import {
   DiskAction,
   GithubAction,
@@ -39,8 +36,6 @@ import { Workspaces, workspaces } from './workspaces.ts'
 export const order = -200
 export const docs = [Workspaces]
 export const userActions = ['setupGit']
-/** A project trust change moves the definition roots: reopening rewatches them and reconfigures the landers. */
-export const reloadOnSettings = true
 const finish = (value: unknown) => ({
   output: [{ type: 'text' as const, text: JSON.stringify(value) }],
 })
@@ -138,35 +133,9 @@ export const actions = {
   stats: implementAction(StatsAction, (_args, { host }) => workspaces(host).stats(context)),
   disk: implementAction(DiskAction, (_args, { host }) => workspaces(host).disk()),
 }
-/** Call `changed` on any change to a definition folder, also one that appears later. */
-async function watchDefinitions(
-  host: Pick<ExtensionHost, 'ultimateRoot' | 'projectRoot' | 'userHome'>,
-  changed: () => void,
-) {
-  const watchers: FSWatcher[] = []
-  const attach = (root: string) => {
-    try {
-      watchers.push(watch(root, changed))
-    } catch {
-      // Gone again; watchRoots reports it when it reappears.
-    }
-  }
-  const roots = (await agentRoots(host.ultimateRoot, host.projectRoot, host.userHome)).map(
-    (root) => root.path,
-  )
-  for (const root of roots) if (existsSync(root)) attach(root)
-  const stopRoots = watchRoots(roots, (root) => {
-    attach(root)
-    changed()
-  })
-  return () => {
-    stopRoots()
-    for (const watcher of watchers) watcher.close()
-  }
-}
 export default function workspaceExtension(host: ExtensionHost) {
-  // The handoff is an extension point, wanted where the lander calls it; conversations is core and always on.
-  host.want(Handoff)
+  // What a landing asks about its branch is an extension point, wanted where the lander calls it.
+  host.want(Branches)
   const conversations = host.need(ConversationsApi)
   const service = workspaces(host)
   host.implement(WorkspacesApi, {
@@ -182,8 +151,6 @@ export default function workspaceExtension(host: ExtensionHost) {
       host.notice(`Lander resume failed: ${String(error)}`)
     })
   let unsubscribe: (() => void) | undefined
-  let stopWatching: (() => void) | undefined
-  let pending: ReturnType<typeof setTimeout> | undefined
   let releasing: Promise<unknown> | undefined
   let releaseController: AbortController | undefined
   // A lander task that faults leaves its queue behind. One run by older code, as on a reload of this code that changed
@@ -200,6 +167,8 @@ export default function workspaceExtension(host: ExtensionHost) {
     releasing = conversations
       .concluded(context)
       .then((ids) => service.release([...ids], context, signal))
+      // Checkouts an earlier chapter made: no record here knows them, so the concluded list never frees them.
+      .then(() => service.sweep(context, signal))
       .catch((error: unknown) => {
         host.notice(`Workspace release failed: ${String(error)}`)
       })
@@ -222,12 +191,6 @@ export default function workspaceExtension(host: ExtensionHost) {
         else void resume()
       }
     })
-    // A definition edit reconfigures every lander conversation before anyone writes to it again.
-    stopWatching?.()
-    stopWatching = await watchDefinitions(host, () => {
-      clearTimeout(pending)
-      pending = setTimeout(() => void stand(), 200)
-    })
     await stand()
     // Checks a crashed host left running would compete with the resumed lander's own run of them.
     await sweepChecks(host.home).catch((error: unknown) => {
@@ -240,9 +203,6 @@ export default function workspaceExtension(host: ExtensionHost) {
     await releasing
     unsubscribe?.()
     unsubscribe = undefined
-    stopWatching?.()
-    stopWatching = undefined
-    clearTimeout(pending)
   })
   return defineExtension({
     name: 'workspaces',
@@ -251,9 +211,16 @@ export default function workspaceExtension(host: ExtensionHost) {
       hook(ToolTask, {
         beforeTool: async (_call, api, caller) => {
           const reason = await service.unavailable(api.conversationId, caller)
-          if (reason) return { block: reason }
-          const landing = await service.landerOwnsCheckout(api.conversationId, caller)
-          return landing ? { block: landing } : undefined
+          return reason ? { block: reason } : undefined
+        },
+      }),
+      // The lander conversation is its log: no model runs there.
+      hook(GenerationTask, {
+        beforeInput: async (_input, api) => {
+          const index = await api.tx.doc(Workspaces, ROOT_CONVERSATION_ID)
+          if (Object.values(index.landerConversations).includes(api.conversationId))
+            throw new Error('The lander runs no model; its conversation is the landing log')
+          return undefined
         },
       }),
     ],
@@ -261,9 +228,9 @@ export default function workspaceExtension(host: ExtensionHost) {
       defineTool({
         name: 'workspace',
         description:
-          'Inspect your workspace and source tips; submit your clean, verified tip to the lander, which merges it into the target branch, runs the configured checks, fast-forwards the target, pushes when configured, and reports back (submit requires divergence from the original request); or land it synchronously by fast-forward (never rebases or pushes).',
+          'Inspect your workspace and source tips, or submit your clean, verified tip to the lander (submit requires divergence from the original request).',
         parameters: obj({
-          action: oneOf(['status', 'submit', 'land']),
+          action: strEnum(['status', 'submit']),
           divergence: opt(
             str({
               description:
@@ -288,40 +255,11 @@ export default function workspaceExtension(host: ExtensionHost) {
             )
               throw new Error(`Only a top-level main conversation can ${action} its own workspace`)
           }, caller)
-          if (action === 'submit')
-            return finish(await service.submit(api.conversationId, divergence ?? '', caller))
-          return finish(await service.land(api.conversationId, caller, true))
+          return finish(await service.submit(api.conversationId, divergence ?? '', caller))
         },
       }),
     ],
     sections: [
-      section('lander_state', async (input, caller) => {
-        const index = await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, caller)
-        const source = Object.entries(index?.landerConversations ?? {}).find(
-          ([, id]) => id === input.conversationId,
-        )?.[0]
-        if (!index || source === undefined) return undefined
-        const queue = index.queue.filter((item) => item.source === source)
-        const results = Object.entries(index.results)
-          .filter(([, result]) => result.lander === input.conversationId)
-          .slice(-8)
-        return [
-          `You are the lander of ${source}. Queue (oldest first):`,
-          ...(queue.length
-            ? queue.map(
-                (item) =>
-                  `- ${item.id} #${item.conversationId} tip ${item.tip.slice(0, 7)} ${item.state}${item.step ? ` · ${item.step}` : ''}`,
-              )
-            : ['- empty']),
-          'Latest results (oldest first):',
-          ...(results.length
-            ? results.map(
-                ([id, result]) =>
-                  `- ${id} ${result.outcome}${result.sha ? ` ${result.sha.slice(0, 7)}` : ''}${result.pushed ? ` pushed to ${result.pushed}` : ''}${result.reason ? ` · ${result.reason}` : ''}${result.fixed ? ` · fixed by lander` : ''}`,
-              )
-            : ['- none yet']),
-        ].join('\n')
-      }),
       section('workspace_workflow', async (input, caller) => {
         await service.ready(input.conversationId, caller)
         const own = await service.get(input.conversationId, caller)
@@ -332,8 +270,8 @@ export default function workspaceExtension(host: ExtensionHost) {
           .harness()
           .commit((tx) => tx.conversation(input.conversationId), caller)
         if (row?.owner)
-          return `${head} You are a subagent: commit your verified work in this worktree and report the commit to your owner, who lands it. Only a top-level conversation can \`workspace submit\` or \`workspace land\`.`
-        return `${head} Finish with \`workspace submit\` once your tip is committed and verified: the lander merges it into ${own.target} with whatever landed meanwhile, runs the project's checks, fast-forwards ${own.target}, pushes when configured, and reports the outcome back to you as a message; keep working meanwhile and do not merge ${own.target} yourself first. \`workspace land\` is the synchronous alternative: it only fast-forwards ${own.target} to your tip and never rebases or pushes.`
+          return `${head} You are a subagent: commit your verified work in this worktree and report the commit to your owner, who lands it. Only a top-level conversation can \`workspace submit\`.`
+        return `${head} Finish with \`workspace submit\` once your tip is committed and verified: the lander merges it into ${own.target} with whatever landed meanwhile, runs the project's checks, fast-forwards ${own.target} and pushes when configured; keep working meanwhile and do not merge ${own.target} yourself first. A failure comes back to you as a message: fix it and submit again. A landing reaches whoever started you as its card, and concludes you unless other work is still under way.`
       }),
     ],
   })

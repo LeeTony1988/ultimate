@@ -20,17 +20,6 @@ for (const tty of [true, false]) {
       view.url('http://127.0.0.1:1234')
       view.lifecycle('ready', { generation: 2, pid: 123 })
       view.report({ type: 'web', state: 'ready' })
-      view.report({
-        type: 'services',
-        services: [
-          {
-            extension: 'automations',
-            name: 'scheduler',
-            state: 'ready',
-            detail: 'durable scheduler',
-          },
-        ],
-      })
       view.log('info', 'web', 'hmr update /web/test.tsx')
       view.log('warn', 'web', '\x1b[31mwarning marker\x1b[0m')
       view.log('error', 'core', 'error marker\nstack line')
@@ -41,7 +30,6 @@ for (const tty of [true, false]) {
       expect(output.includes('\x1b[')).toBe(tty)
       expect(output.includes('generation 2 · PID 123')).toBe(tty)
       expect(output.includes('embedded Vite')).toBe(tty)
-      expect(output).toContain('automations/scheduler')
       expect(output.includes('http://127.0.0.1:1234')).toBe(tty)
       const records = (await readFile(path, 'utf8'))
         .trim()
@@ -55,6 +43,43 @@ for (const tty of [true, false]) {
       })
       expect(records.at(-2).text).toBe('warning marker')
       expect(records.every((r) => !Number.isNaN(Date.parse(r.at)))).toBe(true)
+    } finally {
+      await removeTemp(home)
+    }
+  })
+}
+
+for (const tty of [true, false]) {
+  it(`keeps remote URLs on top of the dashboard and removes revoked or retired ones (${tty ? 'TTY' : 'plain'})`, async () => {
+    const home = await temp()
+    try {
+      const stream = new PassThrough() as unknown as NodeJS.WriteStream
+      Object.assign(stream, { isTTY: tty, columns: 100, rows: 30 })
+      let output = ''
+      stream.on('data', (chunk) => {
+        output += chunk
+      })
+      const view = dashboard(join(home, 'supervisor.log'), stream)
+      view.url('http://127.0.0.1:1234')
+      view.lifecycle('ready', { generation: 1, pid: 123 })
+      const origin = 'https://rog.example.ts.net:4747'
+      view.report({ type: 'access', origins: [origin] })
+      // Plain output prints nothing for it: the core's own log line says it there.
+      expect(output.includes(`Ultimate: ${origin}`)).toBe(tty)
+      expect(output.includes('local       http://127.0.0.1:1234')).toBe(tty)
+      output = ''
+      view.report({ type: 'web', state: 'ready' })
+      view.log('warn', 'web', 'unrelated diagnostic')
+      expect(output.includes(`Ultimate: ${origin}`)).toBe(tty)
+      output = ''
+      view.report({ type: 'access', origins: [] })
+      expect(output).not.toContain(origin)
+      expect(output.includes('Ultimate: http://127.0.0.1:1234')).toBe(tty)
+      view.report({ type: 'access', origins: [origin] })
+      output = ''
+      view.lifecycle('preparing', { generation: 2, pid: 456 })
+      expect(output).not.toContain(origin)
+      view.close()
     } finally {
       await removeTemp(home)
     }

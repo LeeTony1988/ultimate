@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { fauxProvider, fauxAssistantMessage, fauxText } from '@earendil-works/pi-ai/providers/faux'
 import { configure, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
-import type { Tx } from '@earendil-works/pi-durable'
+import type { ConversationId, Tx } from '@earendil-works/pi-durable'
 import type { JsonValue } from '@earendil-works/chord'
 import { afterEach, expect, it, vi } from 'vitest'
 import { context, prepareHarness } from '../server/harness.ts'
@@ -75,7 +75,12 @@ async function fixture() {
     },
   }
   host.provided.set('subagents', {
-    standing: async (name: string) => (name === 'ultimate' ? target : undefined),
+    // As the real one: the standing agent's conversation of the moment, the fixture's target before one is recorded.
+    standing: async (name: string) =>
+      name === 'ultimate'
+        ? ((await opened.harness.snapshot(Standing, ROOT_CONVERSATION_ID, context))?.ultimate ??
+          target)
+        : undefined,
     createChild: (tx: Tx, options: Parameters<SubagentsService['createChild']>[1]) =>
       createChild(host, tx, options),
   })
@@ -193,6 +198,48 @@ it("matches @ultimate's compaction by its conversation when the event comes, acr
   await f.emit('conversations.compacted', { conversation: f.target + 100, entry: 5 })
   await f.settle()
   expect((await f.record(a.id)).fires).toBe(2)
+})
+
+it('wakes an @name subscriber in the conversation the agent has when it fires, across a chapter change', async () => {
+  const f = await fixture()
+  const wake = async (id: ConversationId) =>
+    (await (await f.harness.conversation(id, context))!.context(context)).entries.filter(
+      (e) => e.kind === 'automations.fired',
+    ).length
+  const next = await f.harness.commit(async (tx) => {
+    const child = await tx.createConversation({ ownership: { kind: 'ownerless' } })
+    await configure(tx, child.id, {})
+    ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = f.target
+    return child.id
+  }, context)
+  const a = (await f.action('create', {
+    name: 'Remind',
+    schedule: 'every 1d',
+    subscribers: ['@ultimate'],
+  })) as Automation
+  expect(a.subscribers).toEqual(['@ultimate'])
+  await f.action('run', { id: a.id })
+  await until(async () => (await wake(f.target)) === 1)
+  // A new chapter gives @ultimate a new conversation: the next fire goes there.
+  await f.harness.commit(async (tx) => {
+    ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = next
+  }, context)
+  await f.action('run', { id: a.id })
+  await until(async () => (await wake(next)) === 1)
+  expect(await wake(f.target)).toBe(1)
+  // An automation that would reach nobody is refused.
+  await expect(f.action('unsubscribe', { id: a.id, to: '@ultimate' })).rejects.toThrow(
+    'At least one of prompt or subscribers',
+  )
+})
+
+it('returns the automation a key made instead of a second one, as a create that lost its receipt retries', async () => {
+  const f = await fixture()
+  const args = { name: 'Once', schedule: 'every 1d', key: 'caller:1' }
+  const first = (await f.action('create', args)) as Automation
+  const again = (await f.action('create', { ...args, name: 'Renamed' })) as Automation
+  expect(again).toMatchObject({ id: first.id, name: 'Once', key: 'caller:1' })
+  expect(Object.keys(await f.records())).toEqual([first.id])
 })
 
 it('skips events from its own prompt runs, by trace or by the conversation they name, however old', async () => {

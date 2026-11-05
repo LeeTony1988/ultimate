@@ -28,7 +28,14 @@ import type { ActionArgs, ActionError, ActionOptions } from './api.ts'
 import { actionRef, docRef } from '../../../shared/extension-api.ts'
 import type { ActionRef, DocRef } from '../../../shared/extension-api.ts'
 import { api, registry, store, uiState } from './client.ts'
-import { HOME, compactDocs, compactTools, documentItems, introOf } from './registry.ts'
+import {
+  HOME,
+  compactDocs,
+  compactTools,
+  documentItems,
+  panelItems,
+  shownPanels,
+} from './registry.ts'
 import type { State } from './store.ts'
 import { errorMessage, formatDuration } from './format.ts'
 import type { CompactRow, ToolCallView, UltimateContext } from './types.ts'
@@ -258,6 +265,16 @@ export function useRegionOpen(region: Region) {
   )
   return on === 'desktop' ? shared : own
 }
+/**
+ * The right panel's state: whether it is open, the panel it shows (the chosen one, else the first with a tab) and the
+ * panels in its tab row.
+ */
+export function usePanels() {
+  const panels = panelItems(useExtensions())
+  const open = useRegionOpen('panels')
+  const [selected] = useUiState<string | null>(shellKeys.panel, null)
+  return { open, ...shownPanels(panels, selected) }
+}
 /** `true` → boolean, `'a'` → string: an initial value names its type, not the only value. */
 export type Widen<T> = T extends boolean
   ? boolean
@@ -320,16 +337,15 @@ export function useCompact(): ((call: ToolCall) => boolean) | undefined {
   return useMemo(() => compact && ((call: ToolCall) => compact.keeps(call, docs)), [compact, docs])
 }
 /**
- * Which rows of the shown compact transcript are background that folds into groups, and the line a group shows (`compact` contributions'
- * `quiet` and `summary`), else `undefined`.
+ * Which rows of the shown compact transcript are the thread the reader follows, and the line a receded stretch between
+ * them shows (`compact` contributions' `thread` and `summary`), else `undefined`.
  */
-export function useCompactQuiet() {
+export function useCompactThread() {
   const { compact, docs } = useCompactConfig()
-  return useMemo(
-    () =>
-      compact && { quiet: (row: CompactRow) => compact.quiet(row, docs), summary: compact.summary },
-    [compact, docs],
-  )
+  return useMemo(() => {
+    const thread = compact?.thread
+    return thread && { test: (row: CompactRow) => thread(row, docs), summary: compact.summary }
+  }, [compact, docs])
 }
 function useCompactConfig() {
   const records = useExtensions()
@@ -346,20 +362,6 @@ function useCompactConfig() {
     [records, conversation, docs],
   )
   return { compact, docs }
-}
-const introFailures = new Set<string>()
-function reportIntro(extension: string, error: unknown) {
-  const message = `extension ${extension}: intro is off, its when() threw: ${errorMessage(error)}`
-  if (introFailures.has(message)) return
-  introFailures.add(message)
-  queueMicrotask(() => store.notify({ level: 'error', message }))
-}
-/** The shown conversation's `intro` contribution, if one matches. */
-export function useIntro() {
-  const records = useExtensions()
-  const id = useConversation((conversation) => conversation.id)
-  const conversation = useStore((state) => state.conversations.find((summary) => summary.id === id))
-  return useMemo(() => introOf(records, conversation, reportIntro), [records, conversation])
 }
 /** Document renderers by kind (`documents` contributions); the Documents tab shows the rest as JSON. */
 export function useDocumentRenderers() {

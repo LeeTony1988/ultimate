@@ -49,13 +49,13 @@ function Document({
       open={open}
     >
       <CollapsibleTrigger
-        className="flex h-8 w-full min-w-0 items-center gap-1.5 px-3 text-left font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase hover:bg-accent/40"
+        className="flex h-8 w-full min-w-0 items-center gap-1.5 px-3 text-left section-label hover:bg-accent/40"
         title={`${kind} · ${owner}`}
       >
         <ChevronRightIcon className="size-3 shrink-0 text-muted-foreground/70 transition-transform group-data-[state=open]/document:rotate-90" />
         <Icon className="size-3.5 shrink-0" />
         <span className="min-w-0 truncate text-foreground/85">{renderer?.title ?? kind}</span>
-        <span className="ml-auto shrink-0 pl-2 tracking-normal normal-case text-muted-foreground/60">
+        <span className="ml-auto shrink-0 pl-2 text-muted-foreground/60">
           {renderer ? kind : owner}
         </span>
       </CollapsibleTrigger>
@@ -99,10 +99,10 @@ function DocumentsPanel() {
   const shown = conversations.find((conversation) => conversation.id === conversationId)
   return (
     <div className="py-2">
-      <div className="flex items-center gap-2 px-3 pb-2 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase">
+      <div className="flex items-center gap-2 px-3 pb-2 section-label">
         Documents
         {conversationId !== undefined && (
-          <span className="ml-auto tracking-normal normal-case text-muted-foreground/70">
+          <span className="ml-auto text-muted-foreground/70">
             {conversationId === 1 ? 'main' : (shown?.label ?? 'conversation')} #{conversationId}
           </span>
         )}

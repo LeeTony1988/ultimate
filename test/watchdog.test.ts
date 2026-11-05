@@ -49,7 +49,7 @@ const error = (text = 'invalid model configuration') =>
 const overloaded = 'Our servers are currently overloaded. Please try again later.'
 const concurrency = 'Concurrency limit exceeded for user, please retry later'
 const rateHint =
-  'Still rate limited after Pi’s retries, so Ultimate is paused; once the limit resets (or the agent has another model), press Play and resume this conversation with a message'
+  'Still rate limited after Pi’s retries; once the limit resets (or the agent has another model), resume this conversation with a message'
 const model = { provider: 'faux', modelId: 'faux-1' }
 const Anchor = defineTask<null, { phase: 'done' }, null>({
   name: 'watchdog-test.anchor',

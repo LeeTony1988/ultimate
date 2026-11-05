@@ -16,6 +16,8 @@ import {
 } from '@/sdk'
 import type { EntryRecord } from '@/sdk'
 import { LoginDialog } from './login.tsx'
+import { familyTitle } from '../../lib/families.ts'
+import { agentsPanel, FamilyDot, familyOf, useFamilies } from './families.tsx'
 import { ModelPicker } from './picker.tsx'
 import { nextThinking, openLogin, openPicker, thinkingDialog, useCurrentModel } from './state.tsx'
 import type { ThinkingLevel } from './state.tsx'
@@ -26,7 +28,8 @@ const toolbarButton =
   'flex h-7 max-w-56 shrink-0 items-center gap-1.5 rounded-md px-2 font-mono text-[11.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground'
 
 function ModelButton() {
-  const { ref, loading } = useCurrentModel()
+  const { ref, thinking, loading } = useCurrentModel()
+  const family = familyOf(useFamilies(), ref, thinking)
   const actions = useUltimate()
   return (
     <button
@@ -43,14 +46,22 @@ function ModelButton() {
       }
       type="button"
     >
-      <CpuIcon className="size-3.5 shrink-0" />
+      {family && !loading ? (
+        <FamilyDot color={family.color} className="mx-0.5" />
+      ) : (
+        <CpuIcon className="size-3.5 shrink-0" />
+      )}
       <span
         className={cn(
           'truncate',
           loading ? undefined : ref ? 'text-foreground/85' : 'text-warning',
         )}
       >
-        {loading ? 'model…' : (ref?.modelId ?? 'no model')}
+        {loading
+          ? 'model…'
+          : family
+            ? `${familyTitle(family.name)} (${ref!.modelId})`
+            : (ref?.modelId ?? 'no model')}
       </span>
       <ChevronDownIcon className="size-3 shrink-0 opacity-60 @max-md:hidden" />
     </button>
@@ -95,9 +106,7 @@ function ThinkingButton() {
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-48 p-1 font-mono" side="top">
-        <div className="px-2 pt-1 pb-1.5 text-[10.5px] tracking-wider text-muted-foreground uppercase">
-          Thinking
-        </div>
+        <div className="px-2 pt-1 pb-1.5 section-label">Thinking</div>
         {levels.map((level) => (
           <button
             className={cn(
@@ -155,10 +164,20 @@ function Switched({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
   )
 }
 
-/** A conversation whose model had no login here switched to another as its next run started. */
+const switchedTo: Record<Exclude<Fallback['reason'], 'none'>, string> = {
+  same: 'the same model through another login',
+  pin: 'the model its agent definition pins',
+  default: 'the default model',
+}
+
+/**
+ * A conversation whose model had no login here switched to another as its next run started, or, with no subscription
+ * login to replace it, kept its model and waits for the user.
+ */
 function FellBack({ entry }: { entry: EntryRecord }) {
   const { from, to, reason } = entry.data as Fallback
   const actions = useUltimate()
+  const provider = from.split('/')[0]
   return (
     <section
       className="min-w-0 rounded-md border border-border border-l-2 border-l-warning/60 bg-muted/20"
@@ -166,17 +185,24 @@ function FellBack({ entry }: { entry: EntryRecord }) {
     >
       <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
         <CpuIcon className="size-3.5 text-warning" />
-        <span>model switched</span>
+        <span>{to ? 'model switched' : 'needs you · login missing'}</span>
       </header>
       <div className="space-y-2 px-3 py-3 text-[13px] leading-relaxed">
         <p className="font-mono text-[12px]">
-          <span className="text-muted-foreground line-through">{from}</span>
-          {' → '}
-          <span className="text-foreground">{to}</span>
+          {to ? (
+            <>
+              <span className="text-muted-foreground line-through">{from}</span>
+              {' → '}
+              <span className="text-foreground">{to}</span>
+            </>
+          ) : (
+            <span className="text-foreground">{from}</span>
+          )}
         </p>
         <p className="text-muted-foreground">
-          {from.split('/')[0]} has no login here, so this conversation now runs on{' '}
-          {reason === 'pin' ? 'the model its agent definition pins' : 'the default model'}.{' '}
+          {reason !== 'none'
+            ? `${provider} has no login here, so this conversation now runs on ${switchedTo[reason]}.`
+            : `${provider} has no login here, and no subscription login can take over, so this conversation keeps its model and its requests fail until you log in to ${provider}.`}{' '}
           <button
             className="cursor-pointer text-foreground hover:underline"
             onClick={() => openPicker(actions)}
@@ -203,6 +229,11 @@ export default defineWebExtension({
   entries: { 'pi.assistant': Switched, 'models.fallback': FellBack },
   slots: { 'composer.toolbar': [ModelButton, ThinkingButton], overlay: [ModelPicker, LoginDialog] },
   commands: [
+    {
+      id: 'model.families',
+      title: 'Model families…',
+      run: (context) => context.openPanel(agentsPanel),
+    },
     {
       id: 'model.pick',
       title: 'Pick a model',

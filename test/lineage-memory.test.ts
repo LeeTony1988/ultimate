@@ -14,6 +14,7 @@ import {
   applyMemoryOps,
   Memory,
   MEMORY_LIMIT,
+  MEMORIZE_TOKENS,
   normalizeMemoryOp,
   parseMemoryOps,
 } from '../extensions/lineage/memory.ts'
@@ -60,19 +61,25 @@ async function fixture(settings?: object) {
   servers.push(server)
   const state = {
     memorize: '{"ops":[]}',
-    // Answers to the next memorize requests, before `memorize`.
-    queued: [] as string[],
+    // Answers to the next memorize requests, before `memorize`; `length` ends one cut off at the output budget.
+    queued: [] as (string | { text: string; stopReason: 'length' })[],
     asked: [] as string[],
+    // The output budget of each memorize request.
+    budgets: [] as (number | undefined)[],
     condensed: [] as string[],
     // Holds a compaction's summary request until it resolves.
     gate: undefined as Promise<void> | undefined,
   }
-  const route: FauxResponseFactory = async (transcript) => {
+  const route: FauxResponseFactory = async (transcript, options) => {
     server.host.faux!.appendResponses([route])
     const [system, first] = transcript.messages
     if (system?.role === 'system' && textOf(system.content).startsWith('You keep a software')) {
       state.asked.push(textOf(first.content))
-      return fauxAssistantMessage(state.queued.shift() ?? state.memorize)
+      state.budgets.push(options?.maxTokens)
+      const answer = state.queued.shift() ?? state.memorize
+      return typeof answer === 'string'
+        ? fauxAssistantMessage(answer)
+        : fauxAssistantMessage(answer.text, { stopReason: answer.stopReason })
     }
     if (system?.role === 'system' && textOf(system.content).startsWith('You condense')) {
       state.condensed.push(textOf(first.content))
@@ -149,7 +156,12 @@ it.concurrent('applies memory ops atomically and holds the cap', async () => {
     [[add('fine'), { op: 'update', slug: 'missing', line: 'x' }], 'no memory missing'],
     [[add('fine'), { op: 'delete', slug: 'missing' }], 'no memory missing'],
     [[add('fine'), add('Bad_Slug')], 'slug must match'],
+    [[add('fine'), add('long', 'x'.repeat(121))], 'line is 121 characters; it must be at most 120'],
     [[add('fine'), { ...add('multi'), line: 'one\ntwo' }], 'one non-empty line'],
+    [
+      [add('fine'), { ...add('big'), body: 'x'.repeat(2001) }],
+      'body is 2001 characters; it must be at most 2000',
+    ],
     [[add('fine'), { ...add('odd'), kind: 'opinion' }], 'kind must be'],
   ] as const)
     await expect(apply(server, [...ops])).rejects.toThrow(error)
@@ -381,46 +393,6 @@ it.concurrent('reads memories with memory; only @ultimate writes them with remem
   await expect(run(server, 'memory', {}, ultimate)).rejects.toThrow(
     `#${ultimate} is in no tree and the project has no root yet`,
   )
-
-  // A batch mixing one over-long op with a valid one applies both, so a long field no longer loses the whole batch; the
-  // answer names the memory it shortened and both lengths, and the line is cut at 120 with `…`.
-  await setRoots([1])
-  expect(
-    await run(
-      server,
-      'remember',
-      { ops: [add('kept'), add('long-line', 'x'.repeat(121))] },
-      ultimate,
-    ),
-  ).toBe(
-    "Added kept, long-line in #1's memory. Clipped long-line's line from 121 to 120 characters.",
-  )
-  expect(Object.keys(await memories(server)).toSorted()).toEqual(['kept', 'long-line', 'pnpm'])
-  expect((await memories(server))['long-line']).toMatchObject({ line: `${'x'.repeat(119)}…` })
-  expect((await memories(server)).kept).toMatchObject({ line: 'About kept' })
-  // An over-long body likewise: clipped at 2000, the slug named.
-  expect(
-    await run(
-      server,
-      'remember',
-      { ops: [{ ...add('long-body', 'Short'), body: 'y'.repeat(2001) }] },
-      ultimate,
-    ),
-  ).toBe("Added long-body in #1's memory. Clipped long-body's body from 2001 to 2000 characters.")
-  expect((await memories(server))['long-body']).toMatchObject({
-    line: 'Short',
-    body: `${'y'.repeat(1999)}…`,
-  })
-  // Clipping is for length only: an actually invalid op still refuses the whole batch, writing nothing.
-  await expect(
-    run(server, 'remember', { ops: [add('fine'), add('Bad_Slug')] }, ultimate),
-  ).rejects.toThrow('slug must match')
-  expect(Object.keys(await memories(server)).toSorted()).toEqual([
-    'kept',
-    'long-body',
-    'long-line',
-    'pnpm',
-  ])
 })
 
 const landing = (submission: string, conversationId: number): LandedData => ({
@@ -511,6 +483,8 @@ it.concurrent('distils each landing into memory once and writes nothing from a r
   expect(state.asked[2]).toContain('Op 1: kind must be decision, fact or lesson')
   expect(state.asked[2]).toContain('An opinion')
   expect((await memories(server)).retried).toMatchObject({ line: 'Short enough' })
+  // Distillation asks with a budget far over a summary's 2048 tokens, which batches of long bodies ran out of.
+  expect(state.budgets.every((budget) => budget! > 2048)).toBe(true)
 
   // A line over 120 characters, which the model keeps writing on a retry too, is cut short and written the first
   // time, so there is no retry and no notice.
@@ -532,17 +506,30 @@ it.concurrent('distils each landing into memory once and writes nothing from a r
       .map((data) => data.message)
   expect(await notices()).toEqual([])
 
+  // An answer cut off at the output budget is asked again, told so; the shorter retry is written.
+  state.queued.push(
+    { text: '{"ops":[{"op":"add","slug":"cut","kind":"fact","line":"Cut', stopReason: 'length' },
+    JSON.stringify({ ops: [add('cut', 'Cut short, retried')] }),
+  )
+  await land(landing('cut', id))
+  await settledTasks(server, 4)
+  expect(state.asked).toHaveLength(6)
+  expect(state.asked[5]).toContain(
+    `the answer was cut off at the output limit of ${MEMORIZE_TOKENS} tokens, reasoning included: answer with fewer, shorter ops`,
+  )
+  expect((await memories(server)).cut).toMatchObject({ line: 'Cut short, retried' })
+
   // An empty batch with commentary writes nothing and is not retried, so it leaves no notice.
   state.memorize = '{"ops":[]}\nNothing here is worth remembering.'
   await land(landing('empty', id))
-  await settledTasks(server, 4)
-  expect(state.asked).toHaveLength(5)
+  await settledTasks(server, 5)
+  expect(state.asked).toHaveLength(7)
 
   // A malformed answer, and a batch applyMemoryOps refuses, write nothing, retried or not.
   const before = await memories(server)
   state.memorize = 'Sure! Here are the ops: none'
   await land(landing('s2', id))
-  await settledTasks(server, 5)
+  await settledTasks(server, 6)
   state.memorize = JSON.stringify({
     ops: [
       { op: 'add', slug: 'fine', kind: 'fact', line: 'Fine', body: 'Fine.' },
@@ -550,9 +537,9 @@ it.concurrent('distils each landing into memory once and writes nothing from a r
     ],
   })
   await land(landing('s3', id))
-  await settledTasks(server, 6)
-  expect(state.asked).toHaveLength(9)
-  expect(state.asked[8]).toContain('Op 2: no memory missing')
+  await settledTasks(server, 7)
+  expect(state.asked).toHaveLength(11)
+  expect(state.asked[10]).toContain('Op 2: no memory missing')
   expect(await memories(server)).toEqual(before)
   await until(async () => (await notices()).length === 2)
   expect(await notices()).toEqual([
@@ -570,7 +557,7 @@ it.concurrent('distils each landing into memory once and writes nothing from a r
     for (let index = 0; index < 101; index++)
       await emit(tx, SubmissionLanded, landing(`bulk-${index}`, id))
   }, context)
-  await settledTasks(server, 107)
+  await settledTasks(server, 108)
   const repeat = (await land(landing('s1', id))).id
   await until(
     async () =>
@@ -578,7 +565,7 @@ it.concurrent('distils each landing into memory once and writes nothing from a r
         'lineage/memorize'
       ] ?? 0) >= repeat,
   )
-  expect(await memorizeTasks(server)).toHaveLength(107)
+  expect(await memorizeTasks(server)).toHaveLength(108)
 })
 
 it.concurrent('a fresh memorize reactor skips landings from before it and distils new ones', async () => {

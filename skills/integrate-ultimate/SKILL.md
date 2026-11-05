@@ -61,33 +61,29 @@ Ask the user to choose, offering defaults. Ask only questions whose answers chan
 
 ## Review team and lander
 
-Both work without setup: the shipped `reviewer` reviews alone on the parent's model, or leads any `reviewer-*`
+Both work without setup: the shipped `reviewer` reviews alone on the review model family, or leads any `reviewer-*`
 definitions, and `workspace submit` merges and
-fast-forwards with no checks and no push. Ultimate's own clone is the working example: copy from its `.ultimate/agents/`
-and `.ultimate/settings.json`, then adjust models and commands.
+fast-forwards with no checks and no push. Ultimate's own clone is the working example: the `adopt-ultimate-setup` skill
+tours its `.ultimate/` and adapts the chosen pieces (models, checks, review focus) to the project.
 Worker reports and submissions state divergence from the task as given (agreements, approach, scope), or "None";
 `workspace submit` requires that `divergence` string, and lander reports distinguish any additional changes.
 
 - **Review team:** agent definitions, so it can live in `<project>/.ultimate/agents/` or, for every project, in
   `~/.ultimate/agents/` (a project's file wins by name). Add one `reviewer-<name>.md` per reviewer; the shipped
-  `reviewer` then starts them all in parallel and merges their reports, so never override `reviewer` itself. Each is pinned to a different model the
-  user is logged in to and named after what it checks (`reviewer-correctness.md`, `reviewer-simplicity.md`,
+  `reviewer` then starts them all in parallel and merges their reports, so never override `reviewer` itself. Each runs on a different model the
+  user is logged in to (a model family, ⌘K Model families…, or a `model` pin) and named after what it checks (`reviewer-correctness.md`, `reviewer-simplicity.md`,
   `reviewer-architecture.md`). Details: "Review team" in
   `extensions/subagents/README.md`.
-- **Project tools or settings for a built-in agent** (@ultimate, the lander): never copy its definition. Add
+- **Project tools or settings for a built-in agent** (@ultimate, the coordinator): never copy its definition. Add
   an overlay, a file of the same name marked by `addTools: [tool]` (`[]` when it only changes settings). It may
-  override any setting (`model`, `thinking`, `onFailure`, `description`, …) but never `tools`, and its optional body
+  override any setting (`model`, `thinking`, `description`, …) but never `tools`, and its optional body
   is appended to the built-in instructions as project additions; a copy stops following the built-in and the setup
   check warns about it.
 - **Lander:** checks and push are per project, in `<project>/.ultimate/settings.json` (read once the project is
   chosen): `"lander": { "checks": [...], "push": "origin" }` lists the project's own check commands in order (an array
-  runs as a concurrent group) and the remote to push to; push only with the owner's consent. Checks run in the host's
-  shell and are stopped with their whole process tree: POSIX process groups on macOS/Linux, a Job Object on Windows. The
-  lander's checkout
-  runs the worktree setup below first. To let the lander's model resolve
-  conflicts and failing checks instead of only diagnosing them, add a `lander` definition with `onFailure: fix` and the
-  tools it needs (`.ultimate/agents/lander.md`), per project or in `~/.ultimate/agents/`. Details:
-  `extensions/workspaces/README.md`.
+  runs as a concurrent group) and the remote to push to; push only with the owner's consent. The lander's checkout
+  runs the worktree setup below first. The lander runs no model: a conflict or a failing check goes back to the
+  submitting branch, which fixes it and submits again. Details: `extensions/workspaces/README.md`.
 
 ## Worktree setup
 
@@ -98,9 +94,7 @@ this, even unasked (setup health warns while it is missing), and propose it.
 - **Read:** the package managers and lockfiles, `.env.example` and how `.env` is made, the database config (driver,
   file path), generated files the build or tests need, and the dev-server scripts and their ports.
 - **Write** `isolates.worktree.setup` in `.ultimate/settings.json`: a list of shell commands, run in order in the new
-  worktree with `ULTIMATE_SOURCE` set to the source checkout, before the conversation's first tool call. They run through
-  the host's shell — `bash -c` on macOS and Linux, PowerShell on Windows — so write them for the machine the project runs
-  on; the POSIX recipes and `.sh` scripts below need macOS or Linux. A list that
+  worktree with `ULTIMATE_SOURCE` set to the source checkout, before the conversation's first tool call. A list that
   grows past a few lines goes into `.ultimate/worktree-setup.sh`, referenced as `["sh -e .ultimate/worktree-setup.sh"]` (`sh` ignores the shebang, so `-e` goes here).
   Every command must be safe to repeat, and each has 120 seconds.
 - **Recipes** (no Ultimate support needed):
@@ -109,16 +103,21 @@ this, even unasked (setup health warns while it is missing), and propose it.
   - `.env`: `[ -f .env ] || cp "$ULTIMATE_SOURCE/.env" .env`, so keys work as in the source checkout.
   - SQLite: a copy-on-write clone of the source's file, instant and free until written:
     `cp -c` (macOS) or `cp --reflink=auto` (Linux), only when the worktree has none yet.
-  - A dev port of its own: the worktree folder is named after its conversation id, so
-    `PORT=$((20000 + $(basename "$PWD") % 1000 * 10))` gives a stable block of 10, written into `.env` (APP_URL,
-    the server and Vite ports). Check the dev script actually reads it.
-  - The lander: its checkout lives under `*/lander/*`; skip the database and dev-server steps there
-    (`case "$PWD" in */lander/*) exit 0;; esac`) and keep what the checks need.
+  - A dev port of its own: the worktree folder ends in its conversation id (`<home>/worktrees/<id>`, or
+    `ult-<hash>-<id>` under a configured `isolates.worktree.path`), so `id=$(basename "$PWD"); id=${id##*-}` then
+    `PORT=$((20000 + id % 1000 * 10))` gives a stable block of 10, written into `.env` (APP_URL, the server and Vite
+    ports). Check the dev script actually reads it.
+  - The lander: its checkout is `<home>/lander/<hash>`, or `ult-lander-<hash>` under a configured `path`; skip the
+    database and dev-server steps there (`case "$PWD" in */lander/*|*/ult-lander-*) exit 0;; esac`) and keep what the
+    checks need.
 - **Ask** before Postgres, MySQL or anything needing credentials: whether worktrees share the developer's database
   or get their own (`createdb -T <db> <db>_wt_<id>`, or a dump), and where credentials come from. Never copy
   production data into a worktree without the owner saying so.
-- **Prove it:** `git worktree add --detach <tmp>/1 HEAD` (a numeric folder, like a real worktree), run the commands there with `ULTIMATE_SOURCE` set, run the
-  project's checks or start the dev server, then remove the scratch worktree. Commit the settings and script.
+- **Prove it:** create a scratch worktree the way Ultimate will: `git worktree add --detach <tmp>/1 HEAD` (a numeric
+  folder, like a real worktree), or the project's `isolates.worktree.add` command at its configured `path` when it
+  sets one, since its tooling may refuse worktrees made any other way (`extensions/workspaces/README.md`). Run the
+  commands there with `ULTIMATE_SOURCE` set, run the project's checks or start the dev server, then remove the scratch
+  worktree (with `isolates.worktree.remove` when it is set). Commit the settings and script.
 
 ```sh
 #!/bin/sh
@@ -128,10 +127,11 @@ composer install --no-interaction --prefer-dist
 npm ci --prefer-offline --no-audit --no-fund
 [ -f .env ] || cp "$ULTIMATE_SOURCE/.env" .env
 php artisan wayfinder:generate --with-form
-case "$PWD" in */lander/*) exit 0;; esac
+case "$PWD" in */lander/*|*/ult-lander-*) exit 0;; esac
 [ -f database/database.sqlite ] || cp -c "$ULTIMATE_SOURCE/database/database.sqlite" database/ 2>/dev/null \
   || cp --reflink=auto "$ULTIMATE_SOURCE/database/database.sqlite" database/
-PORT=$((20000 + $(basename "$PWD") % 1000 * 10))
+id=$(basename "$PWD"); id=${id##*-}
+PORT=$((20000 + id % 1000 * 10))
 status=0; grep -v -e '^APP_URL=' -e '^SERVER_PORT=' -e '^VITE_PORT=' .env > .env.tmp || status=$?
 [ "$status" -le 1 ] # 1 only means no other lines
 printf 'APP_URL=http://127.0.0.1:%s\nSERVER_PORT=%s\nVITE_PORT=%s\n' "$PORT" "$PORT" $((PORT + 1)) >> .env.tmp
@@ -147,7 +147,7 @@ settings apply live; nothing needs a restart.
 - **Extensions go to a coordinator branch** (as @ultimate, start one per picked extension with the user's words; a coordinator builds it): one folder per extension in `.ultimate/extensions/<name>/` (`server.ts`, `web.tsx`, `README.md`). Follow `extensions/README.md` in the Ultimate clone.
   - Extensions outside the clone import what built-ins import (`@/sdk`, `@/components/…`, clone packages), and nothing type-checks them.
   - Keep the project's own tooling (type check, lint, format) from scanning `.ultimate/`.
-  - A worktree's `.ultimate/` does not hot-reload the running host. Preview it with `instance start`: a clean instance (every agent on `instance.model`) that runs the worktree as its project and loads its `.ultimate/extensions`.
+  - A worktree's `.ultimate/` does not reach the running host. Preview it with `instance start`: a clean instance (every agent on `instance.model`) that runs the worktree as its project and loads its `.ultimate/extensions`.
 - **Verify against the real project**, not a copy of Ultimate: the preview above, or a temporary `HOME` with the project trusted (`~/.ultimate/trust.json`) and onboarding done, then `node <clone>/bin/ultimate.ts <project> --port <free> --no-open`.
   - Check the extension info for load errors.
   - Call the actions.

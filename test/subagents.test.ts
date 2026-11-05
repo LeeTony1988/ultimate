@@ -2,10 +2,9 @@ import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 // First: helpers mocks the faux provider's token pacing, which must apply before the server modules load.
 import { eventHost, idleNeed, until, temp, removeTemp } from './helpers.ts'
 import { awaitWithContext } from '@earendil-works/chord/context'
-import { decisionRoot, projectSettings } from '../server/project-setup.ts'
+import { projectSettings } from '../server/project-setup.ts'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import {
   fauxAssistantMessage,
   fauxText,
@@ -33,7 +32,7 @@ import type { OpenHost } from '../server/harness.ts'
 import subagents, { actions } from '../extensions/subagents/server.ts'
 import watchdog from '../extensions/watchdog/server.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
-import { Started, Subagents } from '../extensions/subagents/api.ts'
+import { Runs, Started, Subagents } from '../extensions/subagents/api.ts'
 import type { ActionContext } from '../server/actions.ts'
 import codemode from '../extensions/codemode/server.ts'
 import { Metadata } from '../server/metadata.ts'
@@ -163,8 +162,6 @@ async function fixture(
       ...prepared,
       access: { allow: () => () => {} },
       notice: () => {},
-      provide: () => {},
-      use: () => undefined,
       implement: () => {},
       need: () => {
         throw new Error('Not used')
@@ -181,6 +178,7 @@ async function fixture(
       onOpen: () => {},
       onRelease: () => {},
       onClose: () => {},
+      onLoadError: () => {},
       harness: () => {
         throw new Error('Not used')
       },
@@ -408,6 +406,43 @@ it('names the definitions when start omits agent, for every argument shape seen 
     expect(result.text).toContain('Unknown agent: undefined. Pass agent: one of scout')
   }
   expect(await children(f.opened)).toHaveLength(0)
+})
+
+it('makes an agent on the fly from the call, read-only without a worktree, and refuses a model without a login', async () => {
+  const f = await fixture()
+  const noLogin = await call(f.opened, {
+    action: 'start',
+    label: 'dead-code scan',
+    family: 'review',
+    tools: ['read', 'bash'],
+    task: 'Scan',
+  })
+  expect(noLogin.text).toContain('No login for openai-codex/gpt-6-astra (family review)')
+  expect(await children(f.opened)).toHaveLength(0)
+  await call(f.opened, {
+    action: 'start',
+    label: 'dead-code scan',
+    model: 'faux/faux-1',
+    thinking: 'low',
+    tools: ['read', 'bash'],
+    instructions: 'List unused exports.',
+    task: 'Scan',
+  })
+  const [child] = await children(f.opened)
+  expect(child.agent).toBe('dead-code scan')
+  const agent = await (await f.opened.harness.conversation(child.conversationId, context))!.agent(
+    context,
+  )
+  expect(agent.tools.map((tool) => tool.name).toSorted()).toEqual(['bash', 'read'])
+  expect(agent.model).toEqual({ provider: 'faux', modelId: 'faux-1' })
+  expect(agent.instructions).toMatch(/^You were made for one task[\s\S]*List unused exports\.$/)
+  expect(agent.cwd).toBe((await f.opened.root.agent(context)).cwd)
+  expect(await f.opened.harness.snapshot(Runs, f.opened.root.id, context)).toEqual({
+    [child.conversationId]: { model: 'faux-1', adhoc: true },
+  })
+  expect(await f.opened.harness.snapshot(Metadata, child.conversationId, context)).toMatchObject({
+    label: 'dead-code scan',
+  })
 })
 
 it('routes asynchronous leaf reports only to their lead, not the root', async () => {
@@ -1593,7 +1628,6 @@ describe('subagents', () => {
     for (const [name, text] of [
       ['listed', '---\nname: scout\naddTools: [x]\ntools: [read]\n---\n'],
       ['unknown', '---\nname: scout\naddTools: []\ncolour: red\n---\n'],
-      ['badfail', '---\nname: scout\naddTools: []\nonFailure: shrug\n---\n'],
       ['orphan', '---\nname: nobody\naddTools: [x]\n---\n'],
     ])
       await writeFile(join(cwd, `.ultimate/agents/${name}.md`), text)
@@ -1612,26 +1646,22 @@ describe('subagents', () => {
     expect(Object.fromEntries(found.errors.map((file) => [file.name, file.error]))).toEqual({
       listed: expect.stringContaining('adds tools with addTools, not tools'),
       unknown: expect.stringContaining('Unknown field: colour'),
-      badfail: expect.stringContaining('onFailure must be diagnose or fix'),
       orphan: expect.stringContaining('needs an earlier definition named nobody'),
     })
     expect(found.replaced).toEqual([])
   })
-  it('lets an overlay override settings such as model, thinking and onFailure', async () => {
+  it('lets an overlay override settings such as model and thinking', async () => {
     const repo = await directory(),
       home = await directory(),
       cwd = await directory()
     await mkdir(join(repo, 'agents'))
     await mkdir(join(cwd, '.ultimate/agents'), { recursive: true })
     const modelRuntime = await ModelRuntime.create()
-    await writeFile(
-      join(repo, 'agents/scout.md'),
-      definition().replace('tools: [read, bash]\n', 'tools: [read, bash]\nonFailure: diagnose\n'),
-    )
+    await writeFile(join(repo, 'agents/scout.md'), definition())
     // An empty addTools marks a settings-only overlay.
     await writeFile(
       join(cwd, '.ultimate/agents/scout.md'),
-      '---\nname: scout\nmodel: anthropic/claude-opus-4-8\nthinking: high\nonFailure: fix\nfast: true\ndescription: Our scout\naddTools: []\n---\n',
+      '---\nname: scout\nmodel: anthropic/claude-opus-4-8\nthinking: high\nfast: true\ndescription: Our scout\naddTools: []\n---\n',
     )
     new ProjectTrustStore(join(home, '.ultimate')).set(cwd, true)
     const found = await discoverAgents(repo, cwd, home, modelRuntime)
@@ -1640,7 +1670,6 @@ describe('subagents', () => {
       description: 'Our scout',
       model: { provider: 'anthropic', modelId: 'claude-opus-4-8' },
       thinking: 'high',
-      onFailure: 'fix',
       fast: true,
       tools: ['read', 'bash'],
       instructions: 'Original instructions',
@@ -1648,53 +1677,7 @@ describe('subagents', () => {
     expect(found.errors).toEqual([])
     expect(found.replaced).toEqual([])
   })
-  it('merges a project lander overlay into the tools, model and instructions of the built-in lander', async () => {
-    // The built-in lander comes from this repository; the overlay is a fixture, so switching the repository's own
-    // lander model never touches this test.
-    const root = fileURLToPath(new URL('..', import.meta.url)),
-      home = await directory(),
-      cwd = await directory()
-    await mkdir(join(cwd, '.ultimate/agents'), { recursive: true })
-    await writeFile(
-      join(cwd, '.ultimate/agents/lander.md'),
-      '---\nname: lander\nmodel: anthropic/claude-opus-4-8\nthinking: high\nonFailure: fix\naddTools: [workspace, automation, screenshot, browser, codemode, write, edit, instance, web_search, web_fetch, restart]\n---\n\nThe checks are `pnpm check`, then `pnpm test` and `pnpm test:e2e` in parallel.\n\nWhen you fix: read AGENTS.md first. A flaky test is fixed at its cause or deleted, never skipped or given a longer timeout.\n',
-    )
-    new ProjectTrustStore(join(home, '.ultimate')).set(decisionRoot(cwd), true)
-    const found = await discoverAgents(root, cwd, home, await ModelRuntime.create())
-    const lander = found.definitions.find((agent) => agent.name === 'lander')!
-    expect(lander).toMatchObject({
-      source: 'builtin',
-      model: { provider: 'anthropic', modelId: 'claude-opus-4-8' },
-      thinking: 'high',
-      onFailure: 'fix',
-      overlays: [join(cwd, '.ultimate/agents/lander.md')],
-    })
-    expect(lander.tools?.toSorted()).toEqual(
-      [
-        'workspace',
-        'automation',
-        'screenshot',
-        'browser',
-        'codemode',
-        'read',
-        'write',
-        'edit',
-        'bash',
-        'instance',
-        'web_search',
-        'web_fetch',
-        'restart',
-      ].toSorted(),
-    )
-    for (const line of [
-      'pnpm test:e2e',
-      'read AGENTS.md first',
-      'A flaky test is fixed at its cause or deleted, never skipped or given a longer timeout.',
-      '**fix:** resolve it here',
-    ])
-      expect(lander.instructions).toContain(line)
-    expect(found.replaced).toEqual([])
-  })
+
   it('discovers model and thinking settings and reports unknown models', async () => {
     const repo = await directory(),
       home = await directory(),
@@ -1744,13 +1727,6 @@ describe('subagents', () => {
       thinking: 'max',
       tools: ['read', 'bash'],
     })
-    for (const onFailure of ['fix', 'diagnose'])
-      expect(
-        parseDefinition(
-          definition().replace('tools: [read, bash]', `onFailure: ${onFailure}`),
-          'test',
-        ),
-      ).toMatchObject({ onFailure })
     // `summaries: false` survives a save: only the field's off state is written.
     const quiet = parseDefinition(
       definition().replace('tools: [read, bash]', 'summaries: false'),
@@ -1775,7 +1751,6 @@ describe('subagents', () => {
       ['tools: [read, bash]', 'model: " "', 'model must be a nonempty string'],
       ['tools: [read, bash]', 'tool: [read]', 'Unknown field: tool'],
       ['tools: [read, bash]', 'isolate: remote', 'isolate must be none or worktree'],
-      ['tools: [read, bash]', 'onFailure: land', 'onFailure must be diagnose or fix'],
       ['tools: [read, bash]', 'summaries: never', 'summaries must be a boolean'],
       ['Original instructions', '', 'Instructions are required'],
     ])

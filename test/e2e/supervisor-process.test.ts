@@ -16,71 +16,52 @@ it('starts past stale lock sidecars without killing an unrelated live pid', asyn
   await writeFile(join(home, 'storage.lock'), JSON.stringify({ pid: unrelated.pid }))
   const running = await launch(home)
   await until(() => running.output().includes('Ultimate: http://'))
+  // Without Tailscale there is no remote origin and nothing about one.
+  expect(running.output()).not.toContain('(remote)')
   expect(unrelated.exitCode).toBeNull()
   expect(unrelated.signalCode).toBeNull()
   expect(() => process.kill(unrelated.pid!, 0)).not.toThrow()
 }, 60000)
 
-it('ignores retiring core status on swap and drops rows on crash recovery', async () => {
-  const home = await temp('ultimate-presentation-')
+it('logs each remote URL when it is registered and when it is no longer served', async () => {
+  const home = await temp('ultimate-access-log-')
   homes.push(home)
   const root = await sourceCopy(home)
   copies.set(home, root)
   await writeFile(
-    join(root, 'server/main.ts'),
-    `
-import { createServer } from 'node:http'
-const generation = Number(process.env.ULTIMATE_GENERATION)
-const send = (message: unknown) => process.send?.(message as import('node:child_process').Serializable)
-const server = createServer((req, res) => {
-  // A kept-alive socket stays piped to the core that served it; the test's next fetch must reach the new core.
-  res.setHeader('connection', 'close')
-  res.end('ok')
-  if (req.url === '/swap') send({ type: 'swap', requestId: 'test-swap' })
-  if (req.url === '/crash') setTimeout(() => process.exit(1), 50)
-})
-server.listen(0, '127.0.0.1', () => send({ type: 'prepared', port: (server.address() as import('node:net').AddressInfo).port }))
-process.on('message', (message: { type: string; ok?: boolean; requestId?: string }) => {
-  if (message.type === 'go') {
-    send({ type: 'web', state: 'ready' })
-    if (generation < 3) send({ type: 'services', services: [{ extension: 'fixture', name: 'worker', state: 'ready', detail: 'generation ' + generation }] })
-    send({ type: 'ready' })
-  }
-  if (message.type === 'swap-result' && message.ok) send({ type: 'swap-ack', requestId: message.requestId, ok: true })
-  if (message.type === 'release') {
-    send({ type: 'web', state: 'stopped' })
-    send({ type: 'services', services: [{ extension: 'fixture', name: 'stale', state: 'error', detail: 'STALE-ROW' }] })
-    send({ type: 'released' })
-  }
-  if (message.type === 'exit') server.close(() => process.exit(0))
-})
+    join(home, '.ultimate/settings.json'),
+    JSON.stringify({ extensions: { enable: ['tailscale'] } }),
+  )
+  // Real access registration, without touching the machine's Tailscale Serve mappings.
+  await writeFile(
+    join(root, 'extensions/tailscale/server.ts'),
+    `import { defineExtension } from '@earendil-works/pi-durable'
+let remove: (() => void) | undefined
+export default function fixture(host: import('../../server/extensions.ts').ExtensionHost) {
+  host.onOpen(async () => {
+    remove = host.access.allow({ origin: 'https://rog.example.ts.net:5799', verify: () => ({ login: 'owner' }) })
+  })
+  return defineExtension({ name: 'tailscale' })
+}
+export const actions = { revoke: async () => { remove?.(); return true } }
 `,
   )
   const running = await launch(home)
-  await until(() => running.output().includes('Ultimate: http://'))
+  // Registration happens while the extensions open, so the remote line may come before the local one.
+  await until(
+    () =>
+      running.output().includes('Ultimate: https://rog.example.ts.net:5799 (remote)') &&
+      running.output().includes('Ultimate: http://'),
+  )
   const url = /Ultimate: (http:\/\/[^\s]+)/.exec(running.output())![1]
-  await fetch(url + '/swap')
-  await until(() => running.output().includes('fixture/worker: ready · generation 2'))
-  expect(running.output()).not.toContain('STALE-ROW')
-  await fetch(url + '/crash')
-  await until(async () => {
-    const log = await readFile(join(home, 'supervisor.log'), 'utf8')
-    return (
-      log.includes('Core 2 exited unexpectedly') &&
-      log.trim().endsWith('"text":"ready"}') &&
-      // The proxy may still close a connection to the crashed core; the next poll asks again.
-      (await fetch(url).catch(() => undefined))?.status === 200
-    )
-  })
-  const records = (await readFile(join(home, 'supervisor.log'), 'utf8'))
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line))
-  const crash = records.findIndex((r) => r.text === 'Core 2 exited unexpectedly')
-  expect(
-    records.slice(crash).some((r) => r.source === 'services' && r.text.includes('fixture/worker')),
-  ).toBe(false)
-  expect(running.output().includes('\x1b[')).toBe(false)
+  expect((await post(url, '/api/extensions/tailscale/actions/revoke', { args: null })).status).toBe(
+    200,
+  )
+  await until(() =>
+    running
+      .output()
+      .includes('Ultimate: https://rog.example.ts.net:5799 (remote) is no longer served'),
+  )
 }, 60000)
 
 describe('supervisor process ownership', () => {
@@ -224,6 +205,9 @@ process.on('message',(message:{type:string})=>{ if(message.type==='go')process.s
       output += chunk
     })
     await until(() => output.includes('Ultimate: http://'))
+    const original = JSON.parse(await readFile(join(home, 'storage.lock'), 'utf8'))
+    expect(original).toEqual({ pid: core.pid, coreStart: expect.any(String) })
+    expect(original.coreStart).not.toBe('')
     await writeFile(join(home, 'ultimate.lock'), JSON.stringify({ pid: 2147483647, port: 4747 }))
     const exited = once(core, 'exit')
     const supervisor = await launch(home)

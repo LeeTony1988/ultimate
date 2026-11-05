@@ -25,7 +25,7 @@ import { eventHost } from './helpers.ts'
 import { UserInputEvent } from '../shared/events.ts'
 
 describe('server', () => {
-  it('admits registered identities for API, SSE, actions, assets and HMR, then revokes on disposal and unload', async () => {
+  it('admits registered identities for API, SSE, actions and assets, then revokes on disposal and unload', async () => {
     const origin = 'https://rog.example.ts.net:5799'
     const { server, options } = await fixture(false, {
       access: `import { defineExtension } from '@earendil-works/pi-durable'
@@ -61,10 +61,6 @@ export const actions = { ping: async () => 'pong', revoke: async () => { remove(
           },
         )
         req.on('error', reject)
-        req.on('upgrade', (_response, socket) => {
-          resolve(101)
-          socket.destroy()
-        })
         req.end(method === 'POST' ? '{"args":null}' : undefined)
       })
     for (const path of ['/', '/api/models', '/api/events', '/api/extensions/access/actions/ping']) {
@@ -102,14 +98,6 @@ export const actions = { ping: async () => 'pong', revoke: async () => { remove(
         })
       ).json(),
     ).toEqual({ result: 'pong' })
-    const upgrade = {
-      connection: 'Upgrade',
-      upgrade: 'websocket',
-      'sec-websocket-version': '13',
-      'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==',
-      'sec-websocket-protocol': 'vite-hmr',
-    }
-    const wsPath = '/?token=' + server.vite.config.webSocketToken
     for (const forwarded of ['x-forwarded-for', 'x-forwarded-host', 'forwarded']) {
       for (const login of [null, 'other', 'owner']) {
         for (const originHeader of ['', server.url]) {
@@ -118,7 +106,6 @@ export const actions = { ping: async () => 'pong', revoke: async () => { remove(
             expect(
               await wire(path, login, headers, path.includes('actions') ? 'POST' : 'GET'),
             ).toBe(403)
-          expect(await wire(wsPath, login, { ...upgrade, ...headers })).toBe(403)
         }
       }
     }
@@ -138,22 +125,13 @@ export const actions = { ping: async () => 'pong', revoke: async () => { remove(
       expect(await wire('/', 'owner', { ...navigation, 'sec-fetch-dest': 'iframe' })).toBe(403)
       expect(await wire('/', 'owner', { origin: '', 'sec-fetch-site': site })).toBe(403)
       // Navigation metadata cannot turn API, SSE, assets or other paths into documents.
-      for (const path of ['/api/models', '/api/events', '/@vite/client', '/other'])
+      for (const path of ['/api/models', '/api/events', '/assets/index.js', '/other'])
         expect(await wire(path, 'owner', navigation)).toBe(403)
       expect(await wire('/api/extensions/access/actions/ping', 'owner', navigation, 'POST')).toBe(
         403,
       )
-      expect(await wire(wsPath, 'owner', { ...upgrade, 'sec-fetch-site': site })).toBe(403)
-      expect(await wire(wsPath, 'owner', { ...upgrade, ...navigation, origin })).toBe(403)
     }
     expect(await wire('/api/models', 'owner', { 'sec-fetch-site': 'none' })).toBe(200)
-    expect(await wire(wsPath, 'owner', upgrade)).toBe(101)
-    expect(await wire(wsPath, 'other', upgrade)).toBe(403)
-    expect(await wire(wsPath, null, upgrade)).toBe(403)
-    expect(await wire(wsPath, 'owner', { ...upgrade, host: 'unknown.example:5799' })).toBe(403)
-    expect(
-      await wire(wsPath, null, { ...upgrade, host: new URL(server.url).host, origin: server.url }),
-    ).toBe(101)
     await until(() => server.system.current().access.origins.includes(origin))
     expect(await wire('/api/extensions/access/actions/revoke', 'owner', {}, 'POST')).toBe(200)
     expect(await wire('/api/models')).toBe(403)
@@ -165,7 +143,6 @@ export const actions = { ping: async () => 'pong', revoke: async () => { remove(
           'sec-fetch-dest': 'document',
         }),
       ).toBe(403)
-    expect(await wire(wsPath, 'owner', upgrade)).toBe(403)
     // Reload the facet to create a new registration, then disable it.
     await writeFile(
       join(options.ultimateRoot, 'extensions/access/server.ts'),
@@ -177,9 +154,8 @@ export const actions = { ping: async () => 'pong', revoke: async () => { remove(
       '{"extensions":{"disable":["access"]}}',
     )
     await until(async () => (await wire('/api/models')) === 403)
-    expect(await wire(wsPath, 'owner', upgrade)).toBe(403)
   })
-  it('revokes a deferred verifier in flight for HTTP and upgrades', async () => {
+  it('revokes a deferred verifier in flight', async () => {
     const { server } = await fixture(false, {
       deferred: `import { defineExtension } from '@earendil-works/pi-durable'
 
@@ -191,41 +167,26 @@ waiting: async () => Boolean(resolve),
 finish: async () => { remove(); resolve({login:'owner'}); return true }
 }`,
     })
-    for (const upgrade of [false, true]) {
-      await post(server, '/api/extensions/deferred/actions/arm', { args: null })
-      const pending = new Promise<number>((resolve, reject) => {
-        const req = request(
-          server.url + (upgrade ? '/?token=' + server.vite.config.webSocketToken : '/api/models'),
-          {
-            headers: {
-              host: 'remote.example:5799',
-              ...(upgrade
-                ? {
-                    connection: 'Upgrade',
-                    upgrade: 'websocket',
-                    'sec-websocket-version': '13',
-                    'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==',
-                    'sec-websocket-protocol': 'vite-hmr',
-                  }
-                : {}),
-            },
-          },
-          (res) => {
-            resolve(res.statusCode!)
-            res.destroy()
-          },
-        )
-        req.on('error', reject)
-        req.end()
-      })
-      await until(
-        async () =>
-          (await post(server, '/api/extensions/deferred/actions/waiting', { args: null })).data
-            .result === true,
+    await post(server, '/api/extensions/deferred/actions/arm', { args: null })
+    const pending = new Promise<number>((resolve, reject) => {
+      const req = request(
+        server.url + '/api/models',
+        { headers: { host: 'remote.example:5799' } },
+        (res) => {
+          resolve(res.statusCode!)
+          res.destroy()
+        },
       )
-      await post(server, '/api/extensions/deferred/actions/finish', { args: null })
-      expect(await pending).toBe(403)
-    }
+      req.on('error', reject)
+      req.end()
+    })
+    await until(
+      async () =>
+        (await post(server, '/api/extensions/deferred/actions/waiting', { args: null })).data
+          .result === true,
+    )
+    await post(server, '/api/extensions/deferred/actions/finish', { args: null })
+    expect(await pending).toBe(403)
   })
 
   it('cleans up facet lifecycles on reload but retains reload-stable resource lifecycles until shutdown', async () => {
@@ -537,7 +498,7 @@ export default host => { host.resource('cleanup.process',()=>{
     const { server, options } = await fixture()
     const created = await post(server, '/api/conversations')
     const first = await attach(server)
-    const second = await attach(server, `?conversation=${created.data.id as number}`)
+    const second = await attach(server, { conversation: created.data.id as number })
     expect(
       await post(server, '/api/ui', { set: { 'shell.panel': 'tasks', 'app.count': 2 } }),
     ).toEqual({ status: 200, data: { ok: true, rev: 1 } })
@@ -620,9 +581,12 @@ export default host => { host.resource('cleanup.process',()=>{
   it('streams a SQLite tool turn as ops that exactly replicate the committed view', async () => {
     const { server } = await fixture()
     const stream = await attach(server)
-    expect(stream.events.slice(0, 3).map((event) => event.name)).toEqual([
+    expect(stream.events.slice(0, 6).map((event) => event.name)).toEqual([
+      'stream',
       'system',
       'conversations',
+      'ui',
+      'tasks',
       'view',
     ])
     expect(await (await fetch(server.url)).text()).toContain('Ultimate server is running')
@@ -804,7 +768,7 @@ export default host => { host.resource('cleanup.process',()=>{
       cwd: server.host.projectRoot,
     })
     expect(created.status).toBe(201)
-    const stream = await attach(server, '?conversation=' + created.data.id)
+    const stream = await attach(server, { conversation: created.data.id as number })
     const summaries = stream.events.find((event) => event.name === 'conversations')!.data
     expect(summaries).toEqual(
       expect.arrayContaining([
@@ -865,7 +829,7 @@ export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`
   })
   it('streams extension document snapshots and deltas, with a notice for unknown kinds', async () => {
     const { server } = await fixture(true)
-    const stream = await attach(server, '?docs=test.counter,missing')
+    const stream = await attach(server, { docs: ['test.counter', 'missing'] })
     await until(() => stream.events.some((event) => event.name === 'doc'))
     expect(stream.events.find((event) => event.name === 'doc')!.data).toEqual({
       kind: 'test.counter',
@@ -887,6 +851,62 @@ export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`
     expect(value).toEqual({ count: 1 })
     await stream.close()
   })
+  it("streams a conversation's pi.live alone, without its view", async () => {
+    const { server } = await fixture(true)
+    const stream = await attach(server, { docs: ['pi.live'], view: false })
+    await until(() => stream.events.some((event) => event.name === 'doc'))
+    expect(stream.events.some((event) => event.name === 'view')).toBe(false)
+    expect(stream.events.some((event) => event.name === 'notice')).toBe(false)
+    server.host.faux!.setResponses([
+      fauxAssistantMessage([fauxToolCall('increment', {})], { stopReason: 'toolUse' }),
+      fauxAssistantMessage('Incremented'),
+    ])
+    await post(server, '/api/conversations/1/submit', { text: 'increment' })
+    await server.harness.waitForIdle(context)
+    // The run started and ended in pi.live.
+    await until(() => stream.events.filter((event) => event.name === 'docOps').length > 1)
+    expect(stream.events.some((event) => event.name === 'view')).toBe(false)
+    await stream.close()
+  })
+  it('carries subscriptions opened and closed on one stream, each event tagged with its id', async () => {
+    const { server } = await fixture(true)
+    const stream = await attach(server, { docs: ['test.counter'] })
+    const { id } = stream.events.find((event) => event.name === 'stream')!.data as { id: string }
+    const call = (method: string, sub: number, data?: unknown) =>
+      fetch(`${server.url}/api/events/${id}/${sub}`, {
+        method,
+        headers: { Origin: server.url },
+        ...(data !== undefined && { body: JSON.stringify(data) }),
+      }).then((response) => response.status)
+    const docs = { docs: ['test.counter'], view: false }
+    expect(await call('POST', 5, docs)).toBe(200)
+    expect(await call('POST', 6, docs)).toBe(200)
+    expect(await call('DELETE', 6)).toBe(200)
+    // A close that overtakes its open wins.
+    expect(await call('DELETE', 7)).toBe(200)
+    expect(await call('POST', 7, docs)).toBe(200)
+    expect(await call('POST', 8, { conversation: 999 })).toBe(404)
+    expect(
+      (await fetch(`${server.url}/api/events/${crypto.randomUUID()}/1`, { method: 'DELETE' }))
+        .status,
+    ).toBe(410)
+    const of = (name: string) =>
+      stream.events.filter((event) => event.name === name).map((event) => event.sub)
+    await until(() => of('doc').length === 3)
+    expect(of('doc')).toEqual([0, 5, 6])
+    expect(of('view')).toEqual([0])
+    server.host.faux!.setResponses([
+      fauxAssistantMessage([fauxToolCall('increment', {})], { stopReason: 'toolUse' }),
+      fauxAssistantMessage('Incremented'),
+    ])
+    await post(server, '/api/conversations/1/submit', { text: 'increment' })
+    await server.harness.waitForIdle(context)
+    await until(() => of('docOps').length === 2)
+    expect(of('docOps')).toEqual([0, 5])
+    // Closing the stream ends it with all its subscriptions.
+    await stream.close()
+    await until(async () => (await call('DELETE', 5)) === 410)
+  })
   it('runs logins in the models extension: prompt, answer, cancel, no credential leak, dead flows cancelled', async () => {
     const { server, options } = await fixture(false, {
       models: `export { default, actions, docs, userActions } from ${JSON.stringify(resolvePath('extensions/models/server.ts'))}`,
@@ -905,7 +925,7 @@ export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`
         return { type: 'api_key', key: answered }
       },
     )
-    const stream = await attach(server, '?docs=models.login')
+    const stream = await attach(server, { docs: ['models.login'] })
     const action = (name: string, args: unknown, conversationId = 1) =>
       post(server, `/api/extensions/models/actions/${name}`, { args, conversationId })
     const flows = async (id = 1) =>

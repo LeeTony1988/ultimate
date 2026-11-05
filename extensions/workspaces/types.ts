@@ -27,8 +27,6 @@ export type QueueEntry = {
   steps: LanderStep[]
   /** What its fast-forward landed: recorded with it, so any later lander task pushes and reports that. */
   landed?: Landed
-  /** Set while the lander's model works on its failure, by the definition's `onFailure`. */
-  agent?: 'fix' | 'diagnose'
 }
 /** A submission's landing: the target moved from `base` to `sha`, which brought `commits` and `paths`. */
 export type Landed = {
@@ -68,10 +66,6 @@ export type LanderOutcome = {
   output?: string
   /** What the submitter does next, for a failure. */
   hint?: string
-  /** The lander model's explanation of a failure it did not fix. */
-  diagnosis?: string
-  /** Commits the lander's model added to make it land. */
-  fixed?: string[]
 }
 /** One line of a lander conversation's log (entry kind `ultimate.lander`): a step, a check result, or the outcome. */
 export type LanderEntry = {
@@ -87,14 +81,6 @@ export type LanderEntry = {
   /** On the submission's first line and its outcome. */
   subject?: ConversationSubject
 } & Partial<LanderOutcome>
-/** The lander task handing a failure to its model (entry kind `ultimate.lander-ask`); the model reads the prompt. */
-export type LanderAsk = Pick<
-  LanderEntry,
-  'submission' | 'conversationId' | 'tip' | 'target' | 'at'
-> & {
-  mode: 'fix' | 'diagnose'
-  reason: string
-}
 export type WorkspaceIndex = {
   items: Record<string, Workspace>
   queue: QueueEntry[]

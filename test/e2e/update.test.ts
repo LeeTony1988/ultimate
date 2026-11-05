@@ -29,10 +29,7 @@ beforeEach(async () => {
   await git(upstream, 'config', 'user.name', 'Test')
   await push({ 'README.md': 'hello\n', 'pnpm-lock.yaml': 'lockfileVersion: 9\n' }, 'first')
   clone = join(await temp('ultimate-update-clone-'), 'clone')
-  // The checkout holds the bytes upstream committed: Git for Windows ships `core.autocrlf=true`, which would rewrite this
-  // fixture's LF lockfile to CRLF and make `installOwed` correctly report an install. The clone keeps the setting, so
-  // nothing after it rewrites the worktree either.
-  await git(process.cwd(), 'clone', '-q', '-c', 'core.autocrlf=false', upstream, clone)
+  await git(process.cwd(), 'clone', '-q', upstream, clone)
   await git(clone, 'config', 'user.email', 'test@example.com')
   await git(clone, 'config', 'user.name', 'Test')
 })

@@ -1,6 +1,7 @@
 import { FlagIcon } from 'lucide-react'
 import { defineWebExtension, useDocOf, useUltimate } from '@/sdk'
 import { talkToUltimate } from '../subagents/ui.tsx'
+import { GoalCall } from './call.tsx'
 import { ReportCard, StartedCard } from './cards.tsx'
 import { GoalDialog, goalDialog } from './dialog.tsx'
 import { GoalDoc } from './refs.ts'
@@ -25,6 +26,7 @@ function HandsOff() {
 }
 
 export default defineWebExtension({
+  tools: { goal: GoalCall },
   entries: {
     'goal.started': StartedCard,
     'goal.report': ReportCard,

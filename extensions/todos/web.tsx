@@ -1,8 +1,10 @@
 import { ListTodoIcon } from 'lucide-react'
 import { defineWebExtension } from '@/sdk'
+import { TodoCall } from './call.tsx'
 import { Todos } from './panel.tsx'
 
 export default defineWebExtension({
+  tools: { todo: TodoCall },
   // @ultimate's changed-list reminder is model context, not something to read in the transcript.
   entries: { 'todos.note': () => null },
   panels: [{ id: 'todos', title: 'To-dos', icon: ListTodoIcon, component: Todos, order: 0 }],

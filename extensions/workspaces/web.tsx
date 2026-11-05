@@ -1,9 +1,11 @@
-import { ChevronRightIcon } from 'lucide-react'
+import type { ReactNode } from 'react'
+import { ChevronRightIcon, GitMergeIcon } from 'lucide-react'
 import { MentionText } from '@/components/ai/message'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { defineWebExtension, useTranscript } from '@/sdk'
+import { defineWebExtension, useConversation, useTranscript } from '@/sdk'
+import { useWorkspaceIndex } from './data.tsx'
 import { CommitCount, LandingCard, useGithubRepo } from './landing.tsx'
-import { LanderAskEntry, LanderLogEntry, LanderReport, WorkspaceCall } from './log.tsx'
+import { LanderLogEntry, LanderReport, WorkspaceCall } from './log.tsx'
 import { compareUrl } from '../../lib/compare.ts'
 import type { EntryRecord } from '@earendil-works/pi-durable'
 
@@ -106,7 +108,27 @@ function LandingNote({ entry }: { entry: EntryRecord }) {
   )
 }
 
+/** The lander's conversation is its log: in place of a composer, a line saying what it is. */
+function LanderComposer({ core, dock }: { core: ReactNode; dock?: boolean }) {
+  const id = useConversation((conversation) => conversation.id)
+  const landers = Object.values(useWorkspaceIndex().landerConversations)
+  if (id === undefined || !landers.includes(id)) return core
+  return (
+    <div className={`${dock ? 'w-full px-4' : 'mx-auto w-full max-w-[46rem] px-3 sm:px-6'} pb-3`}>
+      <div
+        className="flex items-center gap-2.5 rounded-lg border border-border/70 bg-muted/30 px-3.5 py-2.5 text-[12.5px] text-muted-foreground"
+        data-lander-log={id}
+      >
+        <GitMergeIcon className="size-4 shrink-0 text-brand" />
+        The landing log. The lander is code, not a model: each submission's outcome goes back to its
+        branch.
+      </div>
+    </div>
+  )
+}
+
 export default defineWebExtension({
+  composer: LanderComposer,
   tools: { workspace: WorkspaceCall },
   entries: {
     'lineage.note': ({ entry, core }) =>
@@ -116,7 +138,6 @@ export default defineWebExtension({
         core
       ),
     'ultimate.lander': LanderLogEntry,
-    'ultimate.lander-ask': LanderAskEntry,
     'workspaces.lander-report': LanderReport,
   },
 })

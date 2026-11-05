@@ -35,7 +35,7 @@ export type Group = {
  */
 
 /** Who process `pid` is, the same on every read while it lives (its start time), or undefined once it is gone. */
-function identify(pid: number): string | undefined {
+export function identify(pid: number): string | undefined {
   if (process.platform === 'win32') return identifyWindows(pid)
   if (process.platform === 'darwin') {
     try {

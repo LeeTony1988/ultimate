@@ -26,9 +26,7 @@ function ClaudeCodePanel() {
   return (
     <div className="space-y-6 p-4 text-sm">
       <div className="space-y-2 border-b pb-4">
-        <p className="font-mono text-[10px] tracking-widest text-muted-foreground uppercase">
-          External provider / experimental
-        </p>
+        <p className="section-label">External provider / experimental</p>
         <h2 className="text-lg font-medium">Claude Code</h2>
         <p className="text-muted-foreground">
           Claude owns the login. Ultimate owns the conversation and tool execution.
@@ -55,7 +53,7 @@ function ClaudeCodePanel() {
         </Button>
       </section>
       <section className="space-y-3">
-        <h3 className="font-mono text-xs text-muted-foreground uppercase">In your terminal</h3>
+        <h3 className="section-label">In your terminal</h3>
         <p>Install Claude Code if needed, then sign in outside Ultimate:</p>
         <pre className="overflow-x-auto rounded-md border bg-background p-3 text-xs">
           <code>

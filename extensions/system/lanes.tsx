@@ -6,7 +6,7 @@ import { cn, formatDuration, useConversationSummary, useUltimate } from '@/sdk'
 import type { ConversationSummary } from '@/sdk'
 import { stateTone, stateWord } from '../messages/ui.tsx'
 import type { ConversationState } from '../messages/ui.tsx'
-import { AgentMark, agentTitle, ConversationRef } from '../conversations/ui.tsx'
+import { AgentMark, AgentTitle, ConversationRef } from '../conversations/ui.tsx'
 import { block, duration, label, ticks } from './layout.ts'
 import type { TreeRow, WindowName } from './layout.ts'
 import type { Lane, LaneRun } from './refs.ts'
@@ -114,6 +114,7 @@ function Block({
                 'absolute bottom-0 h-1.5 w-px',
                 call.ok ? 'bg-foreground/25' : 'h-full w-0.5 bg-error',
               )}
+              // oxlint-disable-next-line react/no-array-index-key -- Run calls have no per-call id; traces can repeat.
               key={index}
               style={{
                 left: `${(end > start ? (Date.parse(call.at) - start) / (end - start) : 0) * 100}%`,
@@ -146,6 +147,7 @@ function Calls({ run }: { run: LaneRun }) {
   return (
     <ul className="my-1 max-h-72 overflow-y-auto rounded-md border border-border/70 bg-muted/20 py-1 font-mono text-[10.5px] leading-[18px] text-muted-foreground">
       {run.calls.map((call, index) => (
+        // oxlint-disable-next-line react/no-array-index-key -- Run calls have no per-call id; traces can repeat.
         <li key={index}>
           <button
             className="flex w-full min-w-0 cursor-pointer items-start gap-1.5 px-2 py-px text-left hover:bg-muted/50"
@@ -203,6 +205,7 @@ export function Guide({
           on && (
             <span
               className={cn(dotted, 'inset-y-0 border-l')}
+              // oxlint-disable-next-line react/no-array-index-key -- Guide columns are addressed by tree depth.
               key={index}
               style={{ left: x(index + 1) }}
             />
@@ -295,7 +298,7 @@ export function LaneRow({
             <span className="flex min-w-0 flex-1 flex-col">
               {standing ? (
                 <span className="truncate text-[12.5px] leading-5 font-semibold text-foreground">
-                  {agentTitle(standing)}
+                  <AgentTitle name={standing} />
                   <span className="ml-1.5 font-mono text-[10px] font-normal text-muted-foreground/70">
                     #{lane.conversation}
                   </span>

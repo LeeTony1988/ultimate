@@ -120,14 +120,14 @@ it('runs a definition with fast: true on the priority tier, and only on OpenAI m
       `---\nname: ${name}\ndescription: ${name}\n${extra}---\n\nWork.\n`,
     )
   await agent('worker', 'fast: true\n')
-  await agent('lander')
+  await agent('coordinator')
   const providers = new Map<string, { streamSimple: ReturnType<typeof fastStream> }>()
   const resources = new Map<string, unknown>()
-  // 1: an automation run of worker (label 'automation'), 2: the lander, 3: a worker on the OpenAI API,
+  // 1: an automation run of worker (label 'automation'), 2: a branch (labelled coordinator), 3: a worker on the OpenAI API,
   // 4: a worker on another provider.
   const conversations: Record<number, { label: string; definition?: string; provider: string }> = {
     1: { label: 'automation', definition: 'worker', provider: 'openai-codex' },
-    2: { label: 'lander', provider: 'openai-codex' },
+    2: { label: 'coordinator', provider: 'openai-codex' },
     3: { label: 'worker', definition: 'worker', provider: 'openai' },
     4: { label: 'worker', definition: 'worker', provider: 'anthropic' },
   }

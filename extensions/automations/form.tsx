@@ -46,10 +46,11 @@ interface Draft {
   filters: Record<string, string>
   filterTypes: Record<string, 'string' | 'number' | 'boolean'>
   of: string
-  above: number
-  cooldownMinutes: number
+  /** The number fields hold what was typed, so a cleared field stays empty instead of reading 0. */
+  above: string
+  cooldownMinutes: string
   /** Hours without the user's input before it may fire; 0 for none. */
-  idleHours: number
+  idleHours: string
   name: string
   prompt: string
   /** What a script watches for, in plain words; its watcher writes the script from it. */
@@ -105,9 +106,9 @@ function draftOf(automation?: Automation): Draft {
     filters: {},
     filterTypes: {},
     of: '@ultimate',
-    above: 80,
-    cooldownMinutes: 60,
-    idleHours: 0,
+    above: '80',
+    cooldownMinutes: '60',
+    idleHours: '0',
     name: '',
     prompt: '',
     ask: '',
@@ -139,9 +140,9 @@ function draftOf(automation?: Automation): Draft {
         ]),
       ),
       of: automation.condition?.of ?? '@ultimate',
-      above: automation.condition?.above ?? 80,
-      cooldownMinutes: (automation.condition?.cooldownMs ?? 3600000) / 60000,
-      idleHours: (automation.condition?.idleFor ?? 0) / 3600000,
+      above: String(automation.condition?.above ?? 80),
+      cooldownMinutes: String((automation.condition?.cooldownMs ?? 3600000) / 60000),
+      idleHours: String((automation.condition?.idleFor ?? 0) / 3600000),
     }
   if (automation?.script)
     return {
@@ -191,6 +192,36 @@ function scheduleOf(draft: Draft): string | undefined {
   // A date and time without an offset is local to this browser, which runs on the machine Ultimate runs on.
   const local = /^\d{4}-\d\d-\d\d[ T]\d\d:\d\d(:\d\d)?$/.test(at) && new Date(at.replace(' ', 'T'))
   return `at ${local && Number.isFinite(local.getTime()) ? local.toISOString() : at}`
+}
+
+/** An empty field is no number: `Number('')` would read it as 0. */
+const amount = (text: string) => (text.trim() === '' ? Number.NaN : Number(text))
+
+/** The context condition the draft describes, or undefined while a field is empty or out of range. */
+export function contextCondition(
+  draft: Pick<Draft, 'of' | 'above' | 'cooldownMinutes' | 'idleHours'>,
+) {
+  const above = amount(draft.above)
+  const cooldownMinutes = amount(draft.cooldownMinutes)
+  const idleHours = amount(draft.idleHours)
+  if (
+    !/^(@[a-zA-Z0-9_-]+|#[1-9]\d*)$/.test(draft.of) ||
+    !Number.isInteger(above) ||
+    above < 1 ||
+    above > 99 ||
+    !Number.isFinite(cooldownMinutes) ||
+    cooldownMinutes < 0 ||
+    !Number.isFinite(idleHours) ||
+    idleHours < 0
+  )
+    return undefined
+  return {
+    metric: 'context' as const,
+    of: draft.of,
+    above,
+    cooldownMs: cooldownMinutes * 60000,
+    idleFor: idleHours * 3600000,
+  }
 }
 
 const matches = (draft: Draft, preset: Partial<Draft>) =>
@@ -435,6 +466,7 @@ export function AutomationForm({
   const ultimate = draft.trigger === 'ultimate'
   const wakeable = script || ultimate
   const schedule = scheduleOf(draft)
+  const condition = contextCondition(draft)
   const prompt = draft.prompt.trim()
   // A fire needs something to do: wake a conversation, run a prompt, or both. An edit keeps its subscribers.
   const acts = !!prompt || (automation ? automation.subscribers.length > 0 : wakeable && draft.wake)
@@ -450,14 +482,7 @@ export function AutomationForm({
                 ? value === 'true' || value === 'false'
                 : draft.filterTypes[key] !== 'number' || Number.isFinite(Number(value))),
           )
-        : /^(@[a-zA-Z0-9_-]+|#[1-9]\d*)$/.test(draft.of) &&
-          Number.isInteger(draft.above) &&
-          draft.above >= 1 &&
-          draft.above <= 99 &&
-          Number.isFinite(draft.cooldownMinutes) &&
-          draft.cooldownMinutes >= 0 &&
-          Number.isFinite(draft.idleHours) &&
-          draft.idleHours >= 0
+        : condition !== undefined
       : schedule !== undefined
   const ready = draft.name.trim() && validTrigger && acts && !saving
   const save = async () => {
@@ -482,15 +507,7 @@ export function AutomationForm({
         : ultimate
           ? draft.ultimate === 'event'
             ? { event: { name: draft.event, where } }
-            : {
-                condition: {
-                  metric: 'context' as const,
-                  of: draft.of,
-                  above: draft.above,
-                  cooldownMs: draft.cooldownMinutes * 60000,
-                  idleFor: draft.idleHours * 3600000,
-                },
-              }
+            : { condition: condition! }
           : { schedule }
       const fields = { name: draft.name.trim(), ...trigger, ...(prompt ? { prompt } : {}) }
       const saved = automation
@@ -705,7 +722,7 @@ export function AutomationForm({
                           id={`${ids}-above`}
                           max={99}
                           min={1}
-                          onChange={(event) => set({ above: Number(event.target.value) })}
+                          onChange={(event) => set({ above: event.target.value })}
                           type="number"
                           value={draft.above}
                         />
@@ -716,7 +733,7 @@ export function AutomationForm({
                           id={`${ids}-cooldown`}
                           min={0}
                           step="any"
-                          onChange={(event) => set({ cooldownMinutes: Number(event.target.value) })}
+                          onChange={(event) => set({ cooldownMinutes: event.target.value })}
                           type="number"
                           value={draft.cooldownMinutes}
                         />
@@ -728,20 +745,26 @@ export function AutomationForm({
                         id={`${ids}-idle`}
                         min={0}
                         step="any"
-                        onChange={(event) => set({ idleHours: Number(event.target.value) })}
+                        onChange={(event) => set({ idleHours: event.target.value })}
                         placeholder="0: no pause needed"
                         type="number"
                         value={draft.idleHours}
                       />
                     </Field>
                     <p className="text-[11.5px] leading-relaxed text-muted-foreground">
-                      {draft.idleHours > 0 &&
-                        `Waits until you gave it no input for ${draft.idleHours === 1 ? 'an hour' : `${draft.idleHours} hours`}. `}
-                      Fires once, again after it drops below {draft.above - 10}% and{' '}
-                      {draft.cooldownMinutes === 60
-                        ? 'an hour has'
-                        : `${draft.cooldownMinutes} minutes have`}{' '}
-                      passed.
+                      {condition ? (
+                        <>
+                          {condition.idleFor > 0 &&
+                            `Waits until you gave it no input for ${condition.idleFor === 3600000 ? 'an hour' : `${condition.idleFor / 3600000} hours`}. `}
+                          Fires once, again after it drops below {condition.above - 10}% and{' '}
+                          {condition.cooldownMs === 3600000
+                            ? 'an hour has'
+                            : `${condition.cooldownMs / 60000} minutes have`}{' '}
+                          passed.
+                        </>
+                      ) : (
+                        'Fill in each number: context 1–99%, cooldown and pause 0 or more.'
+                      )}
                     </p>
                   </>
                 )}

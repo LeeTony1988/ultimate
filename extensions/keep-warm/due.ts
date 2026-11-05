@@ -17,13 +17,17 @@ export type Activity = {
   failedAfter?: number
 }
 
+/** A ping failed at `failedAt` and no request renewed the cache since: a newer cached answer supersedes the failure. */
+export const failing = (failedAt: number | undefined, lastRequest: number | undefined) =>
+  failedAt !== undefined && (lastRequest === undefined || failedAt >= lastRequest)
+
 /**
  * Whether to ping now: the cache is still warm but about to expire, the user wrote within `IDLE_STOP`, and no ping
  * failed since the last request. A cache already past its hour is cold; a ping would only pay to rebuild it.
  */
 export function due({ now, lastRequest, inputAt, failedAfter }: Activity) {
   if (lastRequest === undefined || inputAt === undefined) return false
-  if (failedAfter !== undefined && failedAfter >= lastRequest) return false
+  if (failing(failedAfter, lastRequest)) return false
   const age = now - lastRequest
   return age >= LEAD && age < TTL && now - inputAt < IDLE_STOP
 }

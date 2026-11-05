@@ -98,20 +98,16 @@ function split(hint: string) {
 
 function Heading({ children, meta }: { children: ReactNode; meta?: ReactNode }) {
   return (
-    <div className="flex items-center gap-2 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase">
+    <div className="flex items-center gap-2 section-label">
       {children}
-      {meta !== undefined && (
-        <span className="ml-auto flex items-center gap-1.5 tracking-normal normal-case">
-          {meta}
-        </span>
-      )}
+      {meta !== undefined && <span className="ml-auto flex items-center gap-1.5">{meta}</span>}
     </div>
   )
 }
 
 const dot = (tone: string) => <span className={cn('size-1.5 rounded-full', tone)} />
 
-function Ready({ url, allow }: { url: string; allow: string[] }) {
+function Ready({ url, allow, hint }: { url: string; allow: string[]; hint?: string }) {
   const { copied, copy } = useCopy()
   return (
     <>
@@ -150,7 +146,13 @@ function Ready({ url, allow }: { url: string; allow: string[] }) {
       <p className="mt-3 flex items-start gap-1.5 text-[12px] leading-snug text-muted-foreground">
         <ShieldCheckIcon className="mt-px size-3.5 shrink-0 text-success" />
         <span className="min-w-0 break-words">
-          Only <span className="text-foreground/90">{allow.join(', ')}</span> can open it
+          {allow.length ? (
+            <>
+              Only <span className="text-foreground/90">{allow.join(', ')}</span> can open it
+            </>
+          ) : (
+            hint
+          )}
         </span>
       </p>
       <p className="mt-1 pl-5 text-[12px] leading-snug text-muted-foreground/80">
@@ -270,7 +272,9 @@ function Details({ status }: { status: ReturnType<typeof useStatus> }) {
           {errorMessage(error)}
         </p>
       )}
-      {state === 'ready' && data?.url && <Ready allow={data.allow} url={data.url} />}
+      {state === 'ready' && data?.url && (
+        <Ready allow={data.allow} hint={data.hint} url={data.url} />
+      )}
       {state && state in problems && <Trouble hint={data?.hint} state={state as Problem} />}
       {/* Ready too: it serves the mapping again if something removed it behind this server's back. */}
       {(state === 'ready' || (state && state in problems)) && <CheckAgain onChecked={refetch} />}
@@ -351,7 +355,8 @@ function Indicator() {
 }
 
 export default defineWebExtension({
-  slots: { 'statusline.right': [Indicator] },
+  // Left of `live · gen N` and the build item, which stay together at the right end.
+  slots: { 'statusline.right': [{ component: Indicator, order: -0.5 }] },
   commands: [
     {
       id: 'tailscale.panel',

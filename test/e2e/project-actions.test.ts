@@ -1,8 +1,7 @@
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { mkdir, rm, writeFile, symlink } from 'node:fs/promises'
-import { basename, join, posix, resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { normalizePath } from 'vite-plus'
 import {
   fauxServer as createServer,
   temp as tempDirectory,
@@ -10,7 +9,6 @@ import {
   until,
   post as requestPost,
   sourceCopy,
-  linkDirectory,
 } from '../helpers.ts'
 import { context } from '../../server/harness.ts'
 import { actionExec } from '../../server/actions.ts'
@@ -91,11 +89,12 @@ it('survives invalid settings at boot and mid-run and clears errors after repair
   await until(() => !server.system.current().project.settingsError)
 })
 
-it('discovers late project and user roots and follows linked extension directories', async () => {
+it('discovers late project and user roots and follows extension symlinks with broken-link diagnostics', async () => {
   const projectRoot = await temp()
   const userHome = await temp()
   const external = await temp()
   await mkdir(join(projectRoot, '.ultimate/extensions'), { recursive: true })
+  await symlink(join(external, 'missing'), join(projectRoot, '.ultimate/extensions/broken-link'))
   const server = await createServer({
     ultimateRoot: resolve('.'),
     projectRoot,
@@ -105,7 +104,7 @@ it('discovers late project and user roots and follows linked extension directori
     port: 0,
   })
   servers.push(server)
-  await server.vite.ssrLoadModule('virtual:ultimate/web-facets')
+  await server.web.facets()
   for (const [root, name] of [
     [join(projectRoot, '.ultimate'), 'late-project'],
     [join(userHome, '.ultimate'), 'late-user'],
@@ -114,49 +113,20 @@ it('discovers late project and user roots and follows linked extension directori
     await until(
       () => !!server.extensions.info().find((entry) => entry.name === name)?.server?.loadedAt,
     )
-    await until(
-      async () =>
-        !!(await server.vite.ssrLoadModule('virtual:ultimate/web-facets')).loaders[
-          normalizePath(join(path, 'web.tsx'))
-        ],
-    )
+    await until(async () => (await server.web.facets()).includes(join(path, 'web.tsx')))
   }
+  expect(
+    server.extensions.info().find((entry) => entry.name === 'broken-link')?.server?.error,
+  ).toBeTruthy()
   const target = await extension(external, 'linked', 'linked')
   const link = join(projectRoot, '.ultimate/extensions/linked')
-  await linkDirectory(target, link)
+  await symlink(target, link)
   await until(
     () => !!server.extensions.info().find((entry) => entry.name === 'linked')?.server?.loadedAt,
   )
   expect((await post(server.url, '/api/extensions/linked/actions/hello')).data.result.value).toBe(
     'linked',
   )
-})
-
-it('reports a dangling extension directory link', async () => {
-  const projectRoot = await temp()
-  const userHome = await temp()
-  const external = await temp()
-  await mkdir(join(projectRoot, '.ultimate/extensions'), { recursive: true })
-  await symlink(
-    join(external, 'missing'),
-    join(projectRoot, '.ultimate/extensions/broken-link'),
-    process.platform === 'win32' ? 'junction' : 'dir',
-  )
-  const server = await createServer({
-    ultimateRoot: resolve('.'),
-    projectRoot,
-    userHome,
-    home: join(userHome, 'state'),
-    faux: fauxProvider(),
-    port: 0,
-  })
-  servers.push(server)
-  await until(
-    () => !!server.extensions.info().find((entry) => entry.name === 'broken-link')?.server?.error,
-  )
-  expect(
-    server.extensions.info().find((entry) => entry.name === 'broken-link')?.server?.error,
-  ).toBeTruthy()
 })
 
 it('loads external project facets over user and built-in names, actions and transitive reloads', async () => {
@@ -179,7 +149,7 @@ it('loads external project facets over user and built-in names, actions and tran
   servers.push(server)
   expect(server.system.current().project).toEqual({
     root: projectRoot,
-    name: basename(projectRoot),
+    name: projectRoot.split('/').at(-1),
     config: true,
     decision: true,
     settings: { defaultSurface: 'workbench', custom: 1 },
@@ -194,26 +164,14 @@ it('loads external project facets over user and built-in names, actions and tran
   })
   expect(record().server?.error).toBeUndefined()
   const added = join(projectRoot, '.ultimate/extensions/added')
+  const facets = () => server.web.facets()
+  expect(await facets()).not.toContain(join(added, 'web.tsx'))
   await mkdir(added, { recursive: true })
   await writeFile(join(added, 'web.tsx'), 'export default {}')
-  await until(
-    async () =>
-      !!(await server.vite.ssrLoadModule('virtual:ultimate/web-facets')).loaders[
-        normalizePath(join(added, 'web.tsx'))
-      ],
-  )
+  await until(async () => (await facets()).includes(join(added, 'web.tsx')))
   await rm(added, { recursive: true })
-  await until(
-    async () =>
-      !(await server.vite.ssrLoadModule('virtual:ultimate/web-facets')).loaders[
-        normalizePath(join(added, 'web.tsx'))
-      ],
-  )
-  const browser = await fetch(
-    server.url + posix.join('/@fs/', normalizePath(join(path, 'web.tsx'))),
-  )
-  expect(browser.status).toBe(200)
-  expect(await browser.text()).toContain('defineWebExtension')
+  await until(async () => !(await facets()).includes(join(added, 'web.tsx')))
+  expect(await facets()).toContain(join(path, 'web.tsx'))
   expect(
     await post(server.url, '/api/extensions/coding-tools/actions/hello', { ok: true }),
   ).toEqual({

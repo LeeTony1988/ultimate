@@ -1,6 +1,6 @@
 import { createElement } from 'react'
-import { renderToStaticMarkup } from 'react-dom/server'
 import type { ReactNode } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { expect, it, vi } from 'vitest'
 import type { ConversationId, TaskGraphNode, TaskId } from '@earendil-works/pi-durable'
 
@@ -10,12 +10,6 @@ vi.mock('@/sdk', () => ({
   formatDuration: (ms: number) => `${ms}ms`,
   provide: () => ({}),
   RunStart: {},
-  useAction: () => () => undefined,
-  useConversation: () => undefined,
-  useNow: () => 0,
-  useTasks: () => undefined,
-  useUltimate: () => ({ conversationId: undefined, switchConversation: () => undefined }),
-  useUiState: () => ({}),
 }))
 vi.mock('@/components/ai/tool', () => ({
   ToolStatusIcon: ({ state }: { state: string }) => createElement('i', { 'data-state': state }),
@@ -23,6 +17,8 @@ vi.mock('@/components/ai/tool', () => ({
 vi.mock('../../extensions/workspaces/ui.tsx', () => ({}))
 vi.mock('../../extensions/conversations/ui.tsx', () => ({}))
 vi.mock('../../extensions/plan/ui.tsx', () => ({}))
+vi.mock('../../extensions/messages/ui.tsx', () => ({}))
+vi.mock('@/components/ui/collapsible', () => ({}))
 const { TaskRow } = await import('../../extensions/tasks/web.tsx')
 
 const task = (blocked?: TaskGraphNode['blocked']): TaskGraphNode => ({
@@ -39,28 +35,40 @@ const tree = {
   children: new Map(),
   roots: new Map(),
   summaries: new Map(),
-  tools: new Map(),
+  meanings: new Map(),
   started: {},
   features: new Map(),
   now: 0,
 }
-const row = (node: TaskGraphNode, depth = 0, rails: readonly boolean[] = [], last = true) =>
-  renderToStaticMarkup(
-    createElement(TaskRow, { task: node, tree, depth, rails, last }) as ReactNode,
-  )
 
-it('names a blocked reason without offering a Retry, since Pi ends a task cut off restartLimit times', () => {
-  const html = row(task('missing_task'))
+it('names why a blocked task cannot run', () => {
+  const html = renderToStaticMarkup(
+    createElement(TaskRow, { task: task('missing_task'), tree, depth: 0 }) as ReactNode,
+  )
   expect(html).toContain('blocked · missing task')
-  expect(html).not.toContain('data-retry')
   expect(html).toContain('data-state="interrupted"')
 })
 
 it('draws elbows to children, a rail past an ancestor with siblings below, and none at the top', () => {
-  // A top row has no line above it; a middle row with siblings below runs full height; a last row is half height.
-  expect(row(task(), 0, [], true)).not.toContain('border-dashed')
-  const middle = row(task(), 1, [true], false)
-  expect(middle).toContain('bottom-0')
-  const lastChild = row(task(), 2, [true, true], true)
-  expect(lastChild).toContain('h-1/2')
+  const child = (id: number) => ({ ...task(), id: id as TaskId })
+  const nested = {
+    ...tree,
+    children: new Map([
+      [7, [child(8), child(9)]],
+      [8, [child(10)]],
+    ]),
+  }
+  const html = renderToStaticMarkup(
+    createElement(TaskRow, { task: task(), tree: nested, depth: 0 }) as ReactNode,
+  )
+  // Rows in order 7, 8, 10, 9: the top row has no lines; 8 continues down to its sibling 9 (full height), 9 is last
+  // (half height); 10 is last under 8 but keeps 8's rail because 9 follows.
+  const rows = html.split('<div class="relative').slice(1)
+  expect(rows).toHaveLength(4)
+  expect(rows[0]).not.toContain('border-dashed')
+  expect(rows[1]).toContain('bottom-0')
+  expect(rows[2]).toContain('inset-y-0')
+  expect(rows[2]).toContain('h-1/2')
+  expect(rows[3]).toContain('h-1/2')
+  expect(rows[3]).not.toContain('inset-y-0')
 })

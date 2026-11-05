@@ -5,6 +5,7 @@ import { projectHome } from './project.ts'
 import type { Source } from './project.ts'
 import { compareExtensions } from './discovery.ts'
 import { acquireLock } from './lock.ts'
+import { identify } from '../lib/process-group.ts'
 import { join } from 'node:path'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import type { FauxProviderHandle } from '@earendil-works/pi-ai/providers/faux'
@@ -14,6 +15,8 @@ import type { Context } from '@earendil-works/chord'
 import { UiState } from './ui-state.ts'
 import { listModels } from './models.ts'
 import { guardToolArguments, modelTrace } from './tool-arguments.ts'
+import { readFamilies } from '../lib/families-settings.ts'
+import { refOf } from '../lib/families.ts'
 import { callTrace } from './trace.ts'
 import { projectSkills } from './skills.ts'
 import { requestSwap } from './supervisor-protocol.ts'
@@ -125,7 +128,8 @@ export interface HostOptions {
 export async function prepareHarness(options: HostOptions) {
   const { ultimateRoot } = options
   const projectRoot = await realpath(options.projectRoot ?? ultimateRoot)
-  const userHome = options.userHome ?? homedir()
+  // ULTIMATE_USER_HOME: where `.ultimate/` user config lives when it is not HOME's (a preview's private copy).
+  const userHome = options.userHome ?? process.env.ULTIMATE_USER_HOME ?? homedir()
   const builds = createBuild(ultimateRoot)
   const home = options.home ?? process.env.ULTIMATE_HOME ?? projectHome(projectRoot, userHome)
   await mkdir(home, { recursive: true })
@@ -164,7 +168,8 @@ export async function prepareHarness(options: HostOptions) {
   /** The default model, read when the harness opens, after extensions registered theirs. */
   const preferred = async () => {
     if (faux) return { provider: faux.getModel().provider, modelId: faux.getModel().id }
-    return defaultModel(await modelRuntime.getAvailable(), settings)
+    const family = (await readFamilies(userHome, projectRoot)).families.default
+    return defaultModel(await modelRuntime.getAvailable(), settings, refOf(family.model))
   }
   let active:
     | {
@@ -216,9 +221,12 @@ export async function prepareHarness(options: HostOptions) {
     extensionSources,
     faux,
     async open(resume = true) {
+      // The supervisor checks this start identity before it signals a stale owner (retireStorageOwner).
+      const coreStart = identify(process.pid)
+      if (!coreStart) throw new Error(`Cannot identify Ultimate core pid ${process.pid}`)
       const owner = await acquireLock(
         join(home, 'storage.lock'),
-        { pid: process.pid },
+        { pid: process.pid, coreStart },
         process.env.ULTIMATE_SUPERVISED === '1' ? 10000 : 0,
       )
       let harness: Harness | undefined
@@ -266,9 +274,11 @@ export async function prepareHarness(options: HostOptions) {
           context,
         )
         const model = await preferred()
-        const root = await harness.root(context, {
-          agent: { cwd: projectRoot, thinkingLevel: settings.getDefaultThinkingLevel() },
-        })
+        // The default family's thinking, else Pi's default level.
+        const thinkingLevel =
+          (await readFamilies(userHome, projectRoot)).families.default.thinking ??
+          settings.getDefaultThinkingLevel()
+        const root = await harness.root(context, { agent: { cwd: projectRoot, thinkingLevel } })
         await root.commit(async (tx) => {
           await tx.doc(UiState, root.id)
           // The root runs no turns, but what reads its agent (tally compaction, inheriting callers) gets a model with a

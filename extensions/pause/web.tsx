@@ -4,6 +4,8 @@ import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   api,
+  attention,
+  Card,
   cn,
   defineWebExtension,
   formatDuration,
@@ -23,7 +25,7 @@ import { ConversationRef } from '../conversations/ui.tsx'
 import { lasted } from './lasted.ts'
 import { parkedConversations } from './parked.ts'
 import { AutoPlayAction, PauseAction, PauseDoc, PlayAction, StateAction } from './refs.ts'
-import type { AutoPlayed, PauseNote, PauseState, RateLimit } from './refs.ts'
+import type { AutoPlayed, HeldNote, PauseNote, PauseState, RateLimit } from './refs.ts'
 
 const statusButton =
   '-mx-1 flex cursor-pointer items-center gap-1.5 rounded-sm px-1 transition-colors hover:bg-accent'
@@ -99,7 +101,7 @@ function Popup({
   const { limit } = state
   return (
     <>
-      <div className="border-b border-border/70 px-3 py-2 text-[10.5px] tracking-wider text-muted-foreground uppercase">
+      <div className="border-b border-border/70 px-3 py-2 section-label">
         {limit ? 'Rate limited' : 'Pause'}
       </div>
       <div className="space-y-2 px-3 py-2 text-[11.5px] leading-[1.55]">
@@ -335,6 +337,35 @@ function Note({ entry }: { entry: EntryRecord }) {
   )
 }
 
+/** In a parent held by the pause: which subagent hit the rate limit. One quiet divider; the child opens on click. */
+function Held({ entry }: { entry: EntryRecord }) {
+  const data = (entry.data ?? {}) as Partial<HeldNote>
+  const { switchConversation } = useUltimate()
+  if (data.child === undefined || data.provider === undefined) return null
+  const child = data.child
+  return (
+    <div
+      className="flex items-center gap-3 font-mono text-[11px] text-muted-foreground/80 before:h-px before:flex-1 before:bg-warning/25 after:h-px after:flex-1 after:bg-warning/25"
+      data-pause-held
+    >
+      <span className="flex min-w-0 items-center gap-1.5">
+        <PauseIcon className="size-3 shrink-0 text-warning" />
+        <button
+          className="min-w-0 cursor-pointer truncate text-foreground hover:underline"
+          onClick={() => switchConversation(child)}
+          type="button"
+        >
+          <ConversationRef id={child} />
+        </button>
+        <span className="truncate">
+          hit {data.provider}’s rate limit ·{' '}
+          <span className="text-warning">Ultimate paused until Play</span>
+        </span>
+      </span>
+    </div>
+  )
+}
+
 /** The card a rate limit leaves in @ultimate's transcript: who limited what, and Play while this pause holds. */
 function Limit({ entry }: { entry: EntryRecord }) {
   const limit = (entry.data ?? {}) as Partial<RateLimit>
@@ -346,10 +377,7 @@ function Limit({ entry }: { entry: EntryRecord }) {
   if (limit.error === undefined || limit.conversationId === undefined) return null
   const conversationId = limit.conversationId
   return (
-    <section
-      className="min-w-0 rounded-md border border-border border-l-2 border-l-warning/60 bg-muted/20"
-      data-pause-limit
-    >
+    <Card attention={holding} className="border-l-warning/60" data-pause-limit>
       <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
         <PauseIcon className="size-3.5 text-warning" />
         <span className="text-foreground">{limit.provider}</span>
@@ -409,7 +437,7 @@ function Limit({ entry }: { entry: EntryRecord }) {
           </span>
         )}
       </footer>
-    </section>
+    </Card>
   )
 }
 
@@ -452,7 +480,12 @@ export default defineWebExtension({
     ],
     'composer.status': [Hint],
   },
-  entries: { 'pause.note': Note, 'pause.limit': Limit, 'pause.autoplay': AutoPlayedNote },
+  entries: {
+    'pause.note': Note,
+    'pause.limit': attention(Limit),
+    'pause.autoplay': AutoPlayedNote,
+    'pause.held': Held,
+  },
   commands: [
     {
       id: 'pause.pause',

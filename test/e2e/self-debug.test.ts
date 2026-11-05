@@ -3,12 +3,36 @@ import { once } from 'node:events'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
-import { sourceCopy, cleanEnv, until, temp, removeTemp } from '../helpers.ts'
+import { sourceCopy, until, temp, removeTemp } from '../helpers.ts'
+import { running } from './process-helpers.ts'
 
 it('terminates an isolated instance after its owner is SIGKILLed', async () => {
   const home = await temp('ultimate-owner-test-')
   const ultimateRoot = await sourceCopy(home)
   const resultPath = join(home, 'instance.json')
+  const environmentPath = join(home, 'environment.json')
+  const keys = [
+    'ULTIMATE_SUPERVISED',
+    'ULTIMATE_PUBLIC_URL',
+    'ULTIMATE_GENERATION',
+    'ULTIMATE_PREVIOUS_BUILD',
+    'ULTIMATE_HOME',
+    'ULTIMATE_PORT',
+    'ULTIMATE_NO_OPEN',
+    'ULTIMATE_INSTANCE_OWNER',
+    'ANTHROPIC_API_KEY',
+    'HTTPS_PROXY',
+    'NODE_EXTRA_CA_CERTS',
+    'ULTIMATE_CHROMIUM',
+  ]
+  const main = join(ultimateRoot, 'server/main.ts')
+  await writeFile(
+    main,
+    `import {writeFileSync as recordEnvironment} from 'node:fs';
+     if (process.env.ULTIMATE_INSTANCE_OWNER) recordEnvironment(${JSON.stringify(environmentPath)},
+       JSON.stringify({pid:process.pid, env:Object.fromEntries(${JSON.stringify(keys)}.map(key => [key, process.env[key]]))}));
+    ` + (await readFile(main, 'utf8')),
+  )
   // Faux previews publish on Tailscale; keep this one off the machine's real tailnet.
   await mkdir(join(home, '.ultimate'), { recursive: true })
   await writeFile(
@@ -30,7 +54,12 @@ it('terminates an isolated instance after its owner is SIGKILLed', async () => {
   const owner = spawn(process.execPath, ['--input-type=module', '-e', code], {
     cwd: ultimateRoot,
     env: {
-      ...cleanEnv({ HOME: home }),
+      PATH: process.env.PATH,
+      TMPDIR: process.env.TMPDIR,
+      PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
+      PI_CLAUDE_CODE_COMMAND: process.env.PI_CLAUDE_CODE_COMMAND,
+      TAILSCALE_COMMAND: process.env.TAILSCALE_COMMAND,
+      HOME: home,
       ULTIMATE_HOME: home,
       ULTIMATE_PORT: '12345',
       ULTIMATE_PUBLIC_URL: 'http://parent.invalid',
@@ -40,7 +69,16 @@ it('terminates an isolated instance after its owner is SIGKILLed', async () => {
       NODE_EXTRA_CA_CERTS: '/etc/ssl/certs/ca-certificates.crt',
       ULTIMATE_CHROMIUM: '/instance-test/chromium',
       ULTIMATE_SUPERVISED: '1',
-      ULTIMATE_PREVIOUS_BUILD: 'null',
+      ULTIMATE_PREVIOUS_BUILD: JSON.stringify({
+        id: 'parent-build',
+        at: new Date().toISOString(),
+        generation: 98,
+        changed: [],
+        core: 'parent-core',
+        lib: 'parent-lib',
+        extensions: {},
+        history: [],
+      }),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -63,20 +101,9 @@ it('terminates an isolated instance after its owner is SIGKILLed', async () => {
     const port = Number(new URL(instance!.url).port)
     expect(port).toBeGreaterThan(0)
     expect(port).toBeLessThanOrEqual(65535)
-    const environment = await readFile(`/proc/${instance!.pid}/environ`, 'utf8')
-    expect(environment).not.toContain('ULTIMATE_SUPERVISED=')
-    expect(environment).not.toContain('ULTIMATE_PUBLIC_URL=')
-    expect(environment).not.toContain('ULTIMATE_GENERATION=')
-    expect(environment).not.toContain('ULTIMATE_PREVIOUS_BUILD=')
-    const env = Object.fromEntries(
-      environment
-        .split('\0')
-        .filter(Boolean)
-        .map((entry) => {
-          const separator = entry.indexOf('=')
-          return [entry.slice(0, separator), entry.slice(separator + 1)]
-        }),
-    )
+    const { pid, env } = JSON.parse(await readFile(environmentPath, 'utf8'))
+    expect(pid).toBe(instance!.pid)
+    for (const key of keys.slice(0, 4)) expect(env).not.toHaveProperty(key)
     expect(env).toMatchObject({
       ULTIMATE_HOME: instance!.home,
       ULTIMATE_PORT: '0',
@@ -90,13 +117,7 @@ it('terminates an isolated instance after its owner is SIGKILLed', async () => {
     const exited = once(owner, 'exit')
     owner.kill('SIGKILL')
     await exited
-    await until(async () => {
-      try {
-        return /\) Z /.test(await readFile(`/proc/${instance!.pid}/stat`, 'utf8'))
-      } catch {
-        return true
-      }
-    }, 5000)
+    await until(() => !running(instance!.pid), 5000)
   } finally {
     if (owner.exitCode === null && owner.signalCode === null) {
       const exited = once(owner, 'exit')

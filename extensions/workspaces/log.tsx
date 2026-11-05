@@ -1,6 +1,5 @@
 import { cn } from 'cn'
 import {
-  BotIcon,
   CheckIcon,
   ChevronRightIcon,
   CircleDotIcon,
@@ -12,7 +11,6 @@ import {
 } from 'lucide-react'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
-import { MentionText } from '@/components/ai/message'
 import { Tool, ToolContent, ToolHeader, ToolOutput, ToolSection } from '@/components/ai/tool'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
@@ -28,9 +26,8 @@ import type { EntryRecord, ToolCallView } from '@/sdk'
 import { useWorkspaceIndex } from './data.tsx'
 import { LandingCard, Open, Subject } from './landing.tsx'
 import type { LandingTone } from './landing.tsx'
-import { inProgress, runningStep, superseded } from './steps.tsx'
+import { inProgress, superseded, tookFor } from './steps.tsx'
 import type {
-  LanderAsk,
   LanderEntry,
   LanderOutcome,
   LanderStep,
@@ -67,22 +64,6 @@ function OutcomeBody({ outcome }: { outcome: LanderOutcome }) {
           ))}
         </ul>
       )}
-      {outcome.fixed && outcome.fixed.length > 0 && (
-        <div className="space-y-0.5">
-          <p className="flex items-center gap-1.5 text-brand">
-            <BotIcon className="size-3" />
-            fixed by lander
-          </p>
-          <ul className="space-y-0.5">
-            {outcome.fixed.map((commit) => (
-              <li className="truncate" key={commit} title={commit}>
-                <span className="text-muted-foreground">{commit.split(' ')[0]}</span>{' '}
-                {commit.slice(commit.indexOf(' ') + 1)}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
       {outcome.flaky?.map((command) => (
         <p className="text-warning" key={command}>
           flaky: {command}
@@ -90,17 +71,6 @@ function OutcomeBody({ outcome }: { outcome: LanderOutcome }) {
       ))}
       {outcome.needsRestart && <p className="text-warning">Needs restart.</p>}
       {outcome.hint && <p className="text-muted-foreground">{outcome.hint}</p>}
-      {outcome.diagnosis && (
-        <div className="space-y-0.5 border-l border-border pl-2">
-          <p className="flex items-center gap-1.5 text-muted-foreground">
-            <BotIcon className="size-3" />
-            lander's diagnosis
-          </p>
-          <p className="font-sans text-[12.5px] leading-relaxed whitespace-pre-wrap text-foreground/90">
-            <MentionText text={outcome.diagnosis} />
-          </p>
-        </div>
-      )}
       {outcome.output && <OutputTail output={outcome.output} />}
     </>
   )
@@ -216,7 +186,7 @@ function StepLine({
         icon={<LoaderCircleIcon className="size-3 shrink-0 animate-spin" />}
         took={<Elapsed since={row.at} />}
       >
-        <span className="animate-pulse">{row.step}</span>
+        <span>{row.step}</span>
       </Line>
     )
   const duration = took !== undefined && took >= 1000 ? formatDuration(took) : undefined
@@ -248,9 +218,7 @@ function StepLine({
     <Line
       at={row.at}
       icon={
-        row.step.startsWith('deploy warning: ') ? (
-          <TriangleAlertIcon className="size-3 shrink-0 text-warning" />
-        ) : failed ? (
+        failed ? (
           <XIcon className="size-3 shrink-0 text-error" />
         ) : done ? (
           <CheckIcon className="size-3 shrink-0 text-success/70" />
@@ -288,17 +256,6 @@ function Steps({
 }) {
   const { switchConversation } = useUltimate()
   const rows = steps.filter((row, index) => !superseded(row, steps.slice(index + 1)))
-  // A step runs until the next one starts; a check result's time is its whole check, from its "checking" step.
-  const took = (row: LanderStep, index: number) => {
-    if (row.check) {
-      const start = steps.findLast(
-        (other) => other.at <= row.at && runningStep.exec(other.step)?.[1] === row.check!.command,
-      )
-      return start ? row.at - start.at : undefined
-    }
-    const next = rows[index + 1]
-    return next && (next.check ? undefined : next.at - row.at)
-  }
   return (
     <Collapsible className="group/steps" onOpenChange={onOpenChange} open={open}>
       <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 font-mono text-[11px] text-muted-foreground hover:text-foreground">
@@ -311,9 +268,10 @@ function Steps({
             active={running && inProgress(row, rows.slice(index + 1))}
             done={index < rows.length - 1 || ended === 'landed'}
             failed={ended === 'failed' && index === rows.length - 1}
+            // oxlint-disable-next-line react/no-array-index-key -- Progress rows have no id; steps and times may repeat.
             key={index}
             row={row}
-            took={took(row, index)}
+            took={tookFor(row, index, rows, steps)}
           />
         ))}
         <button
@@ -332,7 +290,10 @@ function Steps({
 export function LanderLogEntry({ entry }: { entry: EntryRecord }) {
   const data = entry.data as LanderEntry
   const entries = useTranscript()
-  const busy = useConversation((conversation) => conversation.busy)
+  // The lander is a task, not a model run, so the conversation is never busy: its queue says whether it lands.
+  const running = useWorkspaceIndex().queue.some(
+    (item) => item.id === data.submission && item.state === 'landing',
+  )
   const own = (other: EntryRecord) =>
     other.kind === 'ultimate.lander' && (other.data as LanderEntry).submission === data.submission
   const after = entries.filter((other) => other.id > entry.id && own(other))
@@ -348,15 +309,22 @@ export function LanderLogEntry({ entry }: { entry: EntryRecord }) {
   // right before a failed outcome is where it stopped.
   const next = after[0]?.data as LanderEntry | undefined
   const failed = next?.outcome === 'failed'
-  const deploy = data.step?.startsWith('deploy')
-  const done = deploy || (next !== undefined && !failed)
+  const done = next !== undefined && !failed
   const landing =
-    !deploy &&
-    busy &&
+    running &&
     inProgress(
       data as LanderStep,
       after.map((other) => other.data as LanderStep),
     )
+  // How long this step took, as the submitter's card shows it.
+  const steps = entries
+    .filter((other) => own(other) && (other.data as LanderEntry).step)
+    .map((other) => other.data as LanderStep)
+  const rows = steps.filter((row, index) => !superseded(row, steps.slice(index + 1)))
+  const took = (row: LanderStep) => {
+    const index = rows.findIndex((other) => other.at === row.at && other.step === row.step)
+    return index < 0 ? undefined : tookFor(row, index, rows, steps)
+  }
   if (data.outcome) {
     const outcome = data as LanderEntry & LanderOutcome
     return (
@@ -381,8 +349,6 @@ export function LanderLogEntry({ entry }: { entry: EntryRecord }) {
   }
   // A later submission is queued while an earlier one lands: its group starts when it starts, with its queued line.
   if (data.step === 'queued') return null
-  // The question to the model follows with the reason.
-  if (data.step === 'fixing' || data.step === 'diagnosing') return null
   if (data.step === 'started') {
     const queued = entries.find(
       (other) => own(other) && (other.data as LanderEntry).step === 'queued',
@@ -397,12 +363,28 @@ export function LanderLogEntry({ entry }: { entry: EntryRecord }) {
           </span>
           <Open id={data.conversationId} />
         </div>
-        {queued && <StepLine row={queued.data as LanderStep} />}
-        <StepLine active={landing} done={done} failed={failed} row={data as LanderStep} />
+        {queued && (
+          <StepLine row={queued.data as LanderStep} took={took(queued.data as LanderStep)} />
+        )}
+        <StepLine
+          active={landing}
+          done={done}
+          failed={failed}
+          row={data as LanderStep}
+          took={took(data as LanderStep)}
+        />
       </div>
     )
   }
-  const line = <StepLine active={landing} done={done} failed={failed} row={data as LanderStep} />
+  const line = (
+    <StepLine
+      active={landing}
+      done={done}
+      failed={failed}
+      row={data as LanderStep}
+      took={took(data as LanderStep)}
+    />
+  )
   if (!data.output) return line
   return (
     <div className="font-mono text-[11px]">
@@ -410,20 +392,6 @@ export function LanderLogEntry({ entry }: { entry: EntryRecord }) {
       <div className="pl-9">
         <OutputTail output={data.output} />
       </div>
-    </div>
-  )
-}
-
-/** The lander task handing a failure to its model: a quiet line naming the mode, above the model's run. */
-export function LanderAskEntry({ entry }: { entry: EntryRecord }) {
-  const data = entry.data as LanderAsk
-  return (
-    <div className="flex items-center gap-2 pl-4 font-mono text-[11px] leading-5 text-brand">
-      <BotIcon className="size-3 shrink-0" />
-      <span className="min-w-0 flex-1 truncate">
-        {data.mode === 'fix' ? 'fixing' : 'diagnosing'}: {data.reason}
-      </span>
-      <time className="shrink-0 text-muted-foreground/60">{time(data.at)}</time>
     </div>
   )
 }

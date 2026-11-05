@@ -2,7 +2,6 @@ import { appendFileSync } from 'node:fs'
 import { stripVTControlCharacters } from 'node:util'
 import { createLogUpdate } from 'log-update'
 import type { CoreReport } from '../server/supervisor-protocol.ts'
-import type { ServiceInfo } from '../server/services.ts'
 
 const plain = (text: string) =>
   // Child diagnostics must not be able to control the terminal, including carriage returns.
@@ -17,7 +16,7 @@ export function dashboard(logPath: string, output: NodeJS.WriteStream = process.
   let url = ''
   let core: { generation: number; pid?: number } | undefined
   let web = 'waiting'
-  let services: ServiceInfo[] = []
+  let origins: string[] = []
   let last = ''
   let logFailed = false
   let closed = false
@@ -25,14 +24,16 @@ export function dashboard(logPath: string, output: NodeJS.WriteStream = process.
     if (closed || !render) return
     render(
       [
-        `Ultimate: ${url || 'starting'}`,
+        `Ultimate: ${row(origins[0] ?? url) || 'starting'}`,
+        ...(origins.length
+          ? [
+              `  local       ${url}`,
+              ...origins.slice(1).map((origin) => `  remote      ${row(origin)}`),
+            ]
+          : []),
         `  supervisor  ${phase}`,
         `  core        ${core ? `generation ${core.generation} · PID ${core.pid ?? '?'} ` : ''}${core ? (phase === 'checking' ? 'ready' : phase) : 'waiting'}`,
         `  web         ${web} · embedded Vite`,
-        ...services.map(
-          (service) =>
-            `  ${row(service.extension + '/' + service.name)}  ${service.state}${service.detail ? ' · ' + row(service.detail) : ''}`,
-        ),
         `  last        ${row(last) || '—'}`,
         `  log         ${logPath}`,
       ].join('\n'),
@@ -70,7 +71,7 @@ export function dashboard(logPath: string, output: NodeJS.WriteStream = process.
       phase = value
       if (child?.generation !== core?.generation || !child) {
         web = 'waiting'
-        services = []
+        origins = []
       }
       core = child
       log('info', 'supervisor', value)
@@ -81,17 +82,9 @@ export function dashboard(logPath: string, output: NodeJS.WriteStream = process.
         web = message.state
         log('info', 'web', message.state)
       } else {
-        services = message.services
-        log(
-          'info',
-          'services',
-          services
-            .map(
-              (service) =>
-                `${service.extension}/${service.name}: ${service.state}${service.detail ? ' · ' + service.detail : ''}`,
-            )
-            .join(', ') || 'none',
-        )
+        // The core logs each change itself (`Ultimate: … (remote)`); the dashboard only keeps the current ones on top.
+        origins = message.origins
+        draw()
       }
     },
     close() {

@@ -20,17 +20,26 @@ Never claim a UI change works without an image of it.
   `theme: 'light'` and `'dark'` for both themes. Omit `path` so the PNG stays outside your checkout.
 - Built-in fallback: `browser {url, steps}` to drive a state: `click`, `fill` (`#composer-input` is the composer), `press`
   (`Control+k` opens ⌘K), `wait`, `eval`. The result lists console errors and failed requests: read them.
+- `eval` takes one expression and returns its value: `document.title`,
+  `[...document.querySelectorAll('[data-entry-id]')].length`. Statements or `await` go in an async IIFE:
+  `(async () => { const r = await fetch('/api/x'); return r.status })()`. A bare `const x = …; return x` fails.
+- Scope selectors to the card or panel under test: `[data-entry-id="42"] button:has-text("Retry")`, not
+  `button:has-text("Retry")`, which clicks the first match anywhere on the page.
 - Wait on Ultimate's state, never a guessed time: `{send: 'prompt'}` submits without the composer, then
   `{until: 'idle'}` returns when that turn is done, `{until: 'quiet'}` when nothing runs (branches and subagents
   included), `{until: {entry: 'pi.tool-result'}}` or `{until: {event: 'workspaces.landed', where: {…}}}` when that
   appears. A timeout says what was still busy. `conversation: <id>` targets another conversation. Click and fill only
-  when the interaction itself is under test.
+  when the interaction itself is under test; never a fixed `wait <ms>`.
+- Set up state (model, thinking, Play/Pause, abort) through the page's SDK in one `eval`, or curl the preview's HTTP
+  API, not by clicking menus: `{eval: "window.ultimate.api.configure({model: {provider: 'openai-codex', modelId:
+  'gpt-6.1-sol'}}, 2)"}`. Also `api.abort(id)`, `api.compact(undefined, id)`, `api.action({extension: 'pause', name:
+  'play'}, null)`; `extensions/browser/README.md` has the rest.
 - `where` matches only fields the event carries, and events never carry text: after a send, match
   `{event: 'user.input', where: {conversation: <id>, kind: 'prompt'}}`, not the prompt. Each event's fields are in
   `extensions/browser/README.md` and its `defineEvent`. Tool calls live inside `pi.assistant`; there is no
   `pi.toolCall` entry.
-- Open a conversation with `?conversation=<id>`. Right-panel section titles are uppercased by CSS: find them with
-  `textContent.startsWith('Skills')`, not by their shown text.
+- Open a conversation with `?conversation=<id>`. Right-panel section titles show their source text in sentence case
+  (the `section-label` utility); match them with `textContent.startsWith('Skills')`, since counts and meta follow.
 - Seed real state with real prompts on a preview; do not inject entries.
 
 ## What to check

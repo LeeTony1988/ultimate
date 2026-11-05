@@ -5,8 +5,9 @@ import { join } from 'node:path'
 import { BACKGROUND_CONTEXT, withCancel } from '@earendil-works/chord/context'
 import type { Context } from '@earendil-works/chord'
 import type { JsonValue } from '@earendil-works/chord'
-import { bool, int, obj, oneOf, opt, str } from '@earendil-works/pi-schema'
-import type { AssistantMessage } from '@earendil-works/pi-ai'
+import { arr, bool, int, obj, opt, str } from '@earendil-works/pi-schema'
+import { strEnum } from '../../lib/schema.ts'
+import type { AssistantMessage, ModelThinkingLevel } from '@earendil-works/pi-ai'
 import {
   AgentDoc,
   AssistantEntry,
@@ -39,21 +40,24 @@ import {
   definitionAgent,
   deleteDefinition,
   discoverAgents,
+  hasLogin,
   hostDefaultModel,
-  runtimeDefinition,
-  runtimeToolNames,
+  previewModel,
   saveDefinition,
   saveOverlay,
 } from '../../lib/agents.ts'
-import type { DefinitionFields, AgentDefinition } from '../../lib/agents.ts'
+import type { AgentDefinition, DefinitionFields } from '../../lib/agents.ts'
 import { createChild, started } from './children.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { exec } from '../../lib/exec.ts'
 import { shortTitle } from '../../lib/title.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
-import { ConversationsApi } from '../conversations/api.ts'
+import { ConversationsApi, Marks } from '../conversations/api.ts'
+import type { AgentMarkStyle } from '../conversations/refs.ts'
 import { Pin } from '../models/api.ts'
-import { Profile, Standing, Subagents, SubagentsApi } from './api.ts'
+import { Profile, Runs, Standing, Subagents, SubagentsApi } from './api.ts'
+import { definitionRuns, refName, refOf } from '../../lib/families.ts'
+import { readFamilies } from '../../lib/families-settings.ts'
 import {
   DefinitionAction,
   DefinitionsAction,
@@ -61,9 +65,36 @@ import {
   SaveDefinitionAction,
   StandingAction,
 } from './refs.ts'
-import type { Definition, Shown } from './refs.ts'
 
-export const docs = [Subagents, Standing, Profile]
+export const docs = [Subagents, Standing, Profile, Runs]
+
+/** The instructions of an agent `subagent start` makes on the fly, before the caller's own. */
+const ADHOC = `You were made for one task: do what your brief asks, and only that. Read the code and the repository instructions it touches first. Never delegate or push. Report problems instead of working around them. Answer with conclusions and their evidence (\`path:line\`, commands with their output), not dumps; say what you could not confirm.`
+const WRITE_TOOLS = ['edit', 'write']
+
+/** Record standing agent `definition`'s title and how its mark looks in conversations' marks doc, or that it asks for nothing. */
+const setMark = (
+  marks: Record<string, AgentMarkStyle>,
+  { name, title, icon, tint }: AgentDefinition,
+) => {
+  if (title || icon || tint)
+    marks[name] = {
+      ...(title ? { title } : {}),
+      ...(icon ? { icon } : {}),
+      ...(tint ? { tint } : {}),
+    }
+  else delete marks[name]
+}
+
+/** What a definition runs on, as `<subagents>` shows it: `review: openai-codex/gpt-6-astra · high`; the default family runs on the parent's model. */
+export const runsLabel = (runs: AgentDefinition['runs']) =>
+  [
+    runs?.family && (runs.model ? `${runs.family}:` : runs.family),
+    runs?.model && `${runs.model.provider}/${runs.model.modelId}`,
+    runs?.thinking && `· ${runs.thinking}`,
+  ]
+    .filter(Boolean)
+    .join(' ')
 const Anchor = defineTask<null, { phase: 'done' }, null>({
   name: 'ultimate.subagent-anchor',
   version: 1,
@@ -284,12 +315,6 @@ const reply = (text: string, info?: ReturnType<typeof details>) => ({
   ...(info === undefined ? {} : { details: info }),
 })
 
-/** The valid child ids for an error: `#<id> <agent>` each, or that the conversation has none yet. */
-const listChildren = (agents: Record<string, { conversationId: ConversationId; agent: string }>) =>
-  Object.values(agents)
-    .map((child) => `#${child.conversationId} ${child.agent}`)
-    .join(', ') || 'this conversation has no children yet'
-
 /** Stop only these local waits; child and reporter ownership never changes. */
 async function waitInterruptibly(
   api: ToolExecutionApi,
@@ -356,24 +381,6 @@ async function waitInterruptibly(
 /** Extension-owned standing definitions retire when their extension is disabled live. */
 export const reloadOnSettings = true
 
-/**
- * A definition as the Agents tab shows it: `addTools` only where they name something of their own — a definition that
- * lists `tools` already carries them there, while one that inherits every tool keeps them as the deferred tools it adds.
- */
-function withAddedTools(definition: AgentDefinition) {
-  const { addTools, tools, ...result } = runtimeDefinition(definition)
-  return { ...result, ...(tools ? { tools } : {}), ...(addTools && !tools ? { addTools } : {}) }
-}
-
-const browserDefinition = (definition: AgentDefinition & { source: Source }): Definition => {
-  const { instructions: _instructions, ...result } = withAddedTools(definition)
-  return { ...result, source: definition.source }
-}
-
-const browserShownDefinition = (
-  definition: AgentDefinition & { source: Source },
-): Shown['definition'] => ({ ...withAddedTools(definition), source: definition.source })
-
 /** Browser actions for the Agents tab. */
 export const actions = {
   /** `{name}`: open the current definition's standing conversation. */
@@ -398,7 +405,7 @@ export const actions = {
       .harness()
       .conversation(ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT))!.agent(BACKGROUND_CONTEXT)
     return {
-      definitions: definitions.map(browserDefinition),
+      definitions: definitions.map(({ instructions: _instructions, ...definition }) => definition),
       errors,
       main: {
         ...(main.model ? { model: main.model } : {}),
@@ -433,8 +440,7 @@ export const actions = {
     for (const root of await agentRoots(host.ultimateRoot, host.projectRoot, host.userHome))
       if (existsSync(join(root.path, `${name}.md`))) files.push(root.source)
     return {
-      ...(definition ? { definition: browserShownDefinition(definition) } : {}),
-
+      ...(definition ? { definition } : {}),
       ...(invalid ? { invalid } : {}),
       source: shown.source,
       path: shown.path,
@@ -444,7 +450,7 @@ export const actions = {
   }),
   /** `{name, scope, frontmatter, instructions}`: write `<scope>/agents/<name>.md`; invalid input writes nothing. */
   saveDefinition: implementAction(SaveDefinitionAction, async (args, { host }) => {
-    const { name, scope, frontmatter, instructions, create } = (args ?? {}) as Record<
+    const { name, scope, frontmatter, instructions, create, overlay } = (args ?? {}) as Record<
       string,
       JsonValue
     >
@@ -457,11 +463,11 @@ export const actions = {
       description,
       model,
       thinking,
+      family,
       tools,
       denyTools,
       isolate,
       resident,
-      onFailure,
       fast,
       summaries,
     } = frontmatter
@@ -469,6 +475,8 @@ export const actions = {
     if (model !== undefined && typeof model !== 'string') throw new Error('model must be a string')
     if (thinking !== undefined && typeof thinking !== 'string')
       throw new Error('thinking must be a string')
+    if (family !== undefined && typeof family !== 'string')
+      throw new Error('family must be a string')
     if (
       tools !== undefined &&
       (!Array.isArray(tools) || !tools.every((tool) => typeof tool === 'string'))
@@ -481,8 +489,6 @@ export const actions = {
       throw new Error('denyTools must be a list of tool names')
     if (isolate !== undefined && isolate !== 'none' && isolate !== 'worktree')
       throw new Error('isolate must be none or worktree')
-    if (onFailure !== undefined && onFailure !== 'diagnose' && onFailure !== 'fix')
-      throw new Error('onFailure must be diagnose or fix')
     if (resident !== undefined && typeof resident !== 'boolean')
       throw new Error('resident must be a boolean')
     if (fast !== undefined && typeof fast !== 'boolean') throw new Error('fast must be a boolean')
@@ -500,17 +506,22 @@ export const actions = {
       description,
       ...(model ? { model } : {}),
       ...(thinking ? { thinking } : {}),
-      ...(tools ? { tools: runtimeToolNames(tools) } : {}),
-      ...(denyTools?.length ? { denyTools: runtimeToolNames(denyTools) } : {}),
+      ...(family ? { family } : {}),
+      ...(tools ? { tools } : {}),
+      ...(denyTools?.length ? { denyTools } : {}),
       ...(isolate ? { isolate } : {}),
       ...(resident !== undefined ? { resident } : {}),
-      ...(onFailure ? { onFailure } : {}),
       ...(fast ? { fast } : {}),
       ...(!summaries ? { summaries } : {}),
+      // The form has no control for these: a save keeps them as discovery read them.
+      ...(existing?.title ? { title: existing.title } : {}),
+      ...(existing?.icon ? { icon: existing.icon } : {}),
+      ...(existing?.tint ? { tint: existing.tint } : {}),
     }
     // The form shows the merged definition; a whole copy would freeze the overlays' additions and the base's
-    // instructions, so the save becomes an overlay holding only what differs from the base.
-    if (existing?.overlays?.length) {
+    // instructions, so the save becomes an overlay holding only what differs from the base. `overlay` asks for one
+    // too over a definition from another scope (a built-in moved to another family).
+    if (existing?.overlays?.length || (overlay === true && existing && existing.source !== scope)) {
       await saveOverlay(host, host.modelRuntime, scope, name, fields, instructions)
       const { definitions: saved } = await discoverAgents(
         host.ultimateRoot,
@@ -578,6 +589,10 @@ export default function subagents(
         .map((definition) => definition.name),
     )
     await host.harness().commit(async (tx) => {
+      const marks = await tx.doc(Marks, ROOT_CONVERSATION_ID)
+      for (const name of Object.keys(marks)) delete marks[name]
+      for (const definition of definitions)
+        if (definition.resident === true) setMark(marks, definition)
       const index = await tx.doc(Standing, ROOT_CONVERSATION_ID)
       for (const name of Object.keys(index)) {
         const id = index[name]
@@ -601,7 +616,10 @@ export default function subagents(
   // as a label. Its pin, read fresh, is what a conversation whose model lost its login switches to first.
   host.implement(Pin, {
     async pin(tx, id) {
-      const name = (await tx.doc(Profile, id)).definition ?? (await tx.doc(host.metadata, id)).label
+      const profile = await tx.doc(Profile, id)
+      // Made on the fly: its label names no definition, and its model is the one it was started on.
+      if (profile.adhoc) return undefined
+      const name = profile.definition ?? (await tx.doc(host.metadata, id)).label
       if (!name) return undefined
       const { definitions } = await discoverAgents(
         host.ultimateRoot,
@@ -609,7 +627,8 @@ export default function subagents(
         host.userHome,
         host.modelRuntime,
       )
-      return definitions.find((definition) => definition.name === name)?.model
+      const definition = definitions.find((item) => item.name === name)
+      return definition?.runs ? definition.runs.model : definition?.model
     },
   })
   host.implement(SubagentsApi, {
@@ -638,7 +657,7 @@ export default function subagents(
         let created: ConversationRecord | undefined
         // A new conversation starts on the default model; an existing one keeps the model and thinking level chosen
         // in it, so a refresh changes them only where the definition pins them.
-        let base = { ...main, model: hostDefaultModel(host) }
+        let base = { ...main, model: await hostDefaultModel(host) }
         if (id !== undefined && (await tx.conversation(id))) {
           const own = await tx.doc(AgentDoc, id)
           base = {
@@ -658,12 +677,84 @@ export default function subagents(
         await conversations.setAutomaticSummaries(tx, id, false)
         await conversations.setStanding(tx, id, true)
         ;(await tx.doc(Profile, id)).definition = name
+        setMark(await tx.doc(Marks, ROOT_CONVERSATION_ID), definition)
         // Only a new conversation starts: a refresh reconfigures one that already runs.
         if (created) await started(host, tx, created, name, 'standing')
         return id
       }, ctx)
     },
   })
+  /**
+   * The definition a `start` runs: the named one with the call's family, model and thinking over its own, or, without
+   * `agent`, one made on the fly from the call (`label`, neutral instructions plus the caller's, the parent's tools or a
+   * subset, a worktree when it can edit or write). A family or model the call names must have a login here: unlike a
+   * definition's pin, it is the point of the spawn, so it never falls back to the parent's model.
+   */
+  const spawnDefinition = async (
+    args: {
+      agent?: string
+      label?: string
+      family?: string
+      model?: string
+      thinking?: ModelThinkingLevel
+      tools?: string[]
+      instructions?: string
+    },
+    definitions: AgentDefinition[],
+  ): Promise<AgentDefinition> => {
+    const named =
+      args.agent === undefined ? undefined : definitions.find((d) => d.name === args.agent)
+    if (!named && (args.agent !== undefined || !args.label?.trim()))
+      throw new Error(
+        `Unknown agent: ${args.agent}. Pass agent: one of ${definitions.map((agent) => agent.name).join(', ')}; or, for an agent made on the fly, label with family or model, tools and instructions`,
+      )
+    if (named && (args.tools || args.instructions))
+      throw new Error('tools and instructions make an agent on the fly: leave out agent')
+    const families = await readFamilies(host.userHome, host.projectRoot)
+    if (args.family !== undefined && !Object.hasOwn(families.families, args.family))
+      throw new Error(
+        `Unknown family: ${args.family}. Families: ${Object.keys(families.families).join(', ')}`,
+      )
+    const pinned = args.model === undefined ? undefined : refOf(args.model)
+    if (args.model !== undefined && !pinned?.modelId)
+      throw new Error(`model must be provider/modelId, not ${args.model}`)
+    const base: AgentDefinition = named ?? {
+      name: args.label!.trim(),
+      description: 'Made on the fly by subagent start',
+      path: '',
+      instructions: [ADHOC, args.instructions?.trim()].filter(Boolean).join('\n\n'),
+      family: 'default',
+      ...(args.tools ? { tools: args.tools } : {}),
+      isolate: WRITE_TOOLS.some((tool) => !args.tools || args.tools.includes(tool))
+        ? 'worktree'
+        : 'none',
+      summaries: false,
+    }
+    const chosen = args.family !== undefined || pinned !== undefined || !named
+    const definition = {
+      ...base,
+      ...(pinned ? { model: pinned } : args.family !== undefined ? { family: args.family } : {}),
+      ...(args.thinking ? { thinking: args.thinking } : {}),
+    }
+    if (args.family !== undefined && !pinned) delete definition.model
+    const runs = definitionRuns(definition, families)
+    // A preview runs every agent on its one model, whatever the call names.
+    if (chosen && runs.model && !previewModel()) {
+      const available = host.modelRuntime.getAvailableSnapshot()
+      if (!hasLogin(available, runs.model)) {
+        const usable = Object.entries(families.families).flatMap(([name, spec]) => {
+          const ref = refOf(spec.model)
+          return !ref || hasLogin(available, ref)
+            ? [`${name} (${spec.model ?? 'parent model'})`]
+            : []
+        })
+        throw new Error(
+          `No login for ${refName(runs.model)}${runs.via === 'family' ? ` (family ${runs.family})` : ''}. Usable families: ${usable.join(', ')}`,
+        )
+      }
+    }
+    return { ...definition, runs }
+  }
   const Reporter = createReporter()
   let unsubscribe: (() => void) | undefined
   let recovery = Promise.resolve()
@@ -863,7 +954,10 @@ export default function subagents(
           host.modelRuntime,
         )
         const definitions = discovered.definitions
-          .map((agent) => `${agent.name}: ${agent.description}`)
+          .map((agent) => {
+            const runs = runsLabel(agent.runs)
+            return `${agent.name}${runs ? ` (${runs})` : ''}: ${agent.description}`
+          })
           .join('\n')
         return `Available definitions:\n${definitions}`
       }),
@@ -876,15 +970,43 @@ export default function subagents(
         // Call-id receipts deduplicate starts/messages; memoized targets and guards protect stop/workspace replays.
         replay: 'safe',
         parameters: obj({
-          action: oneOf(['start', 'message', 'wait', 'stop', 'list', 'land', 'discard']),
-          agent: opt(str({ description: 'Required for start: an Available definitions name.' })),
+          action: strEnum(['start', 'message', 'wait', 'stop', 'list', 'land', 'discard']),
+          agent: opt(
+            str({
+              description:
+                'For start: an Available definitions name. Leave it out to make an agent on the fly from label, family or model, thinking, tools and instructions.',
+            }),
+          ),
+          label: opt(
+            str({
+              description:
+                'For start: what the child does, a few words ("dead-code scan"); the sidebar shows it. Required without agent.',
+            }),
+          ),
+          family: opt(
+            str({ description: 'For start: the model family to run on (fast, review…).' }),
+          ),
+          model: opt(str({ description: 'For start: provider/modelId, instead of a family.' })),
+          thinking: opt(strEnum(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])),
+          tools: opt(
+            arr(str(), {
+              description:
+                'Without agent: a subset of your tools (default: all but subagent). Leave out edit and write for a read-only agent; it runs in a worktree when it has either.',
+            }),
+          ),
+          instructions: opt(
+            str({
+              description:
+                'Without agent: its standing instructions, after a short neutral base; the task stays its first input.',
+            }),
+          ),
           task: opt(str()),
           background: opt(bool()),
           fork: opt(bool()),
           id: opt(int({ minimum: 1 })),
           text: opt(str()),
           steer: opt(bool()),
-          isolate: opt(oneOf(['none', 'worktree'])),
+          isolate: opt(strEnum(['none', 'worktree'])),
         }),
         execute: async (args, api, context) => {
           const cached = await api.memo<ReturnType<typeof reply>>('result', context)
@@ -910,9 +1032,7 @@ export default function subagents(
             args.action !== 'start' &&
             (!args.id || !Object.hasOwn(index.agents, String(args.id)))
           )
-            throw new Error(
-              `id must be one of this conversation's children: ${listChildren(index.agents)} (got ${JSON.stringify(args.id)})`,
-            )
+            throw new Error('id must identify a child of this conversation')
           if (args.action === 'land' || args.action === 'discard') {
             if (await api.memo<boolean>('workspace-operation', context))
               throw new Error('Workspace operation interrupted; call again')
@@ -941,17 +1061,10 @@ export default function subagents(
                     )
                   ).definitions
                 : undefined
-            const definition = definitions?.find((agent) => agent.name === args.agent)
-            if (definitions && !definition)
-              throw new Error(
-                `Unknown agent: ${args.agent}. Pass agent: one of ${definitions.map((agent) => agent.name).join(', ')}`,
-              )
-            if (
-              definition?.tools?.some(
-                (name) => !parent.tools.some((tool) => tool.name === runtimeToolNames([name])[0]),
-              )
-            )
+            const definition = definitions && (await spawnDefinition(args, definitions))
+            if (definition?.tools?.some((name) => !parent.tools.some((tool) => tool.name === name)))
               throw new Error('Definition tools must be a subset of parent tools')
+            const label = definition && (args.agent ? (args.label ?? definition.name) : args.label!)
             const isolated =
               definition && (args.isolate ?? definition.isolate ?? 'none') === 'worktree'
             const warning =
@@ -978,7 +1091,7 @@ export default function subagents(
                 await conversations.requestSummary(
                   tx,
                   api.conversationId,
-                  { reason: 'spawn', answer: assistant!, agent: definition.name, task: text },
+                  { reason: 'spawn', answer: assistant!, agent: label!, task: text },
                   model,
                 )
                 const owner = await tx.createTask(Anchor, null, {
@@ -991,8 +1104,9 @@ export default function subagents(
                   parentAgent: parent,
                   modelRuntime: host.modelRuntime,
                   metadata: host.metadata,
-                  label: definition.name,
+                  label: label!,
                   title: shortTitle(text),
+                  ...(args.agent ? {} : { adhoc: true as const }),
                   excludeTools: definition.tools?.includes('subagent') ? [] : ['subagent'],
                   excludeExtensions: definition.tools?.includes('subagent') ? [] : ['subagents'],
                   ...(forkAt === undefined
@@ -1001,10 +1115,16 @@ export default function subagents(
                   cwd: parent.cwd ?? host.projectRoot,
                 })
                 conversationId = child.id
-                await started(host, tx, child, definition.name, 'child')
+                await started(host, tx, child, label!, 'child')
+                const runs = await tx.doc(Runs, ROOT_CONVERSATION_ID)
+                const { model: ran } = await tx.doc(AgentDoc, child.id)
+                runs[String(child.id)] = {
+                  ...(ran ? { model: ran.modelId } : {}),
+                  ...(args.agent ? {} : { adhoc: true as const }),
+                }
                 state.agents[String(child.id)] = {
                   conversationId,
-                  agent: definition.name,
+                  agent: label!,
                   background: args.background === true,
                   reported: [],
                 }

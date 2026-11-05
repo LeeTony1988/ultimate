@@ -11,6 +11,7 @@ import {
 } from '@/sdk'
 import type { CommandContribution } from '@/sdk'
 import { CompactAction, getRoots } from '../lineage/ui.tsx'
+import { PanelActions } from './panel-actions.tsx'
 
 /** The conversation in a centred column, with the sidebar and the right panel beside it. */
 function Agent() {
@@ -67,6 +68,8 @@ const commands: CommandContribution[] = [
 ]
 
 export default defineWebExtension({
+  // After the other items, just before the command palette button.
+  slots: { 'titlebar.right': [{ component: PanelActions, order: 100 }] },
   surfaces: [
     {
       id: 'agent',

@@ -17,7 +17,7 @@ export async function readJson<T>(path: string, fallback: T): Promise<T> {
  * settings kept in a dotfiles repository) stays linked. A dangling link resolves to its missing target, which the write
  * then creates.
  */
-async function writeTarget(path: string): Promise<string> {
+export async function writeTarget(path: string): Promise<string> {
   try {
     return await realpath(path)
   } catch (error) {

@@ -18,6 +18,7 @@ export function Shortcut({ keys }: { keys: string }) {
   return (
     <span className="flex items-center gap-1">
       {formatKeys(keys).map((chord, index) => (
+        // oxlint-disable-next-line react/no-array-index-key -- Chord positions in a fixed shortcut sequence.
         <KbdGroup key={index}>
           {chord.map((key) => (
             <Kbd key={key}>{key}</Kbd>
@@ -47,7 +48,7 @@ export function CommandPalette() {
       showCloseButton={false}
     >
       <CommandInput className="text-[13px]" placeholder="Run a command…" />
-      <CommandList className="max-h-[50vh]">
+      <CommandList className="max-h-[50vh]" data-ui="palette">
         <CommandEmpty className="py-6 text-center text-[12px] text-muted-foreground">
           No matching command.
         </CommandEmpty>

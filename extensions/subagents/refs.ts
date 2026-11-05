@@ -19,13 +19,16 @@ export type Definition = {
   source: Source
   model?: ModelRef
   thinking?: string
+  /** The model family its file names (lib/families.ts). */
+  family?: string
+  /** What it runs on once the families apply: its pin, its family, else the default. */
+  runs?: { family?: string; model?: ModelRef; thinking?: string; via: 'pin' | 'family' }
   tools?: string[]
   /** The deferred tools it adds to a definition that inherits every tool; once it lists `tools`, they are in there. */
   addTools?: string[]
   denyTools?: string[]
   isolate?: 'none' | 'worktree'
   resident?: boolean
-  onFailure?: 'diagnose' | 'fix'
   fast?: boolean
   summaries?: boolean
   /** Overlay files merged into it, in order; saving it writes an overlay, not a whole copy. */
@@ -59,11 +62,11 @@ export type DefinitionFields = {
   description: string
   model?: string
   thinking?: string
+  family?: string
   tools?: string[]
   denyTools?: string[]
   isolate?: 'none' | 'worktree'
   resident?: boolean
-  onFailure?: 'diagnose' | 'fix'
   fast?: boolean
   summaries?: boolean
 }
@@ -82,6 +85,14 @@ export const Started = defineEvent<{
   kind: 'child' | 'standing' | 'branch'
 }>('subagents.started')
 
+/**
+ * What a `subagent start` child was started on: its model id (`gpt-6-astra`) and whether it was made on the fly, without
+ * a definition (`adhoc`).
+ */
+export type Run = { model?: string; adhoc?: true }
+/** `{ [conversationId]: Run }` of the children `subagent start` made, on conversation 1. */
+export const RunsDoc = docRef<Record<string, Run>>('subagents.runs')
+
 /** `{ [name]: conversationId }` of the standing agents, on conversation 1. */
 export const StandingDoc = docRef<Record<string, number>>('ultimate.standing-agents')
 
@@ -92,8 +103,9 @@ export const DefinitionsAction = actionRef<null, Discovery>('subagents', 'defini
 /** `{ name }` → the definition that applies to `name`, its source and path, the raw file, and the scopes with one. */
 export const DefinitionAction = actionRef<{ name: string }, Shown>('subagents', 'definition')
 /**
- * `{ name, scope, frontmatter, instructions, create? }` → the saved definition: write `<scope>/agents/<name>.md`.
- * Invalid input writes nothing; with `create`, an existing definition of that name fails it.
+ * `{ name, scope, frontmatter, instructions, create?, overlay? }` → the saved definition: write
+ * `<scope>/agents/<name>.md`. Invalid input writes nothing; with `create`, an existing definition of that name fails
+ * it; with `overlay`, a definition from another scope gets an overlay holding only what differs, not a whole copy.
  */
 export const SaveDefinitionAction = actionRef<
   {
@@ -102,6 +114,7 @@ export const SaveDefinitionAction = actionRef<
     frontmatter: DefinitionFields
     instructions: string
     create?: boolean
+    overlay?: boolean
   },
   Definition
 >('subagents', 'saveDefinition')

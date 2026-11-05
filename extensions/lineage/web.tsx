@@ -3,6 +3,8 @@ import {
   BrainIcon,
   ChevronRightIcon,
   CircleCheckIcon,
+  CodeIcon,
+  ExternalLinkIcon,
   GitBranchIcon,
   GitForkIcon,
   ScrollTextIcon,
@@ -46,10 +48,11 @@ import type { EntryRecord, ToolCallView } from '@/sdk'
 import { store } from '@/sdk/client'
 import { ConversationRef, Unsummarized } from '../conversations/ui.tsx'
 import { talkToUltimate } from '../subagents/ui.tsx'
-import { Open } from '../workspaces/ui.tsx'
-import { ForgetAction, MemoryDoc, TallyDoc } from './refs.ts'
+import { Open, useGithubRepo } from '../workspaces/ui.tsx'
+import { ForgetAction, MemoryDoc, OpenEditorAction, TallyDoc } from './refs.ts'
 import type { MemoryItem } from './refs.ts'
 import { column, MEMORY_FOCUS, MEMORY_SURFACE, MemoryHeader, useRoots } from './ui.tsx'
+import { MemoryCall, NotifyCall, RememberCall } from './calls.tsx'
 import { GoBackAction, Rewound, RewoundDependent } from './rewind.tsx'
 
 function userText(entry: EntryRecord) {
@@ -223,12 +226,6 @@ function Abstract({ entry }: { entry: EntryRecord }) {
   )
 }
 
-/**
- * In a compact transcript these notes are background, folded into a group whose line already names them. When the note
- * is the group's only row, opening it shows the content directly: the card's header goes.
- */
-const soleRowHeader = 'group-data-[compact-quiet=1]/quiet:hidden'
-
 /** A conversation this one asked `notify` about has finished: its title and last answer. */
 function Finished({ entry }: { entry: EntryRecord }) {
   const { switchConversation } = useUltimate()
@@ -238,12 +235,7 @@ function Finished({ entry }: { entry: EntryRecord }) {
       className="min-w-0 rounded-md border border-l-2 border-border border-l-success/70 bg-muted/20"
       data-lineage-finished={from}
     >
-      <header
-        className={cn(
-          'flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground',
-          soleRowHeader,
-        )}
-      >
+      <header className="flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
         <CircleCheckIcon className="size-3.5 shrink-0 text-success" />
         <button
           className="flex min-w-0 cursor-pointer items-center gap-1.5 text-left text-foreground hover:underline"
@@ -280,12 +272,7 @@ function NoteCard({
       className="min-w-0 rounded-md border border-l-2 border-note/25 border-l-note/60 bg-note/6"
       data-lineage-note={note}
     >
-      <header
-        className={cn(
-          'flex min-w-0 items-center gap-2 border-b border-note/15 px-3 py-2 font-mono text-[11px] text-foreground',
-          note === 'received' && soleRowHeader,
-        )}
-      >
+      <header className="flex min-w-0 items-center gap-2 border-b border-note/15 px-3 py-2 font-mono text-[11px] text-foreground">
         <StickyNoteIcon className="size-3.5 shrink-0 text-note" />
         {label}
         {typeof id === 'number' ? (
@@ -325,12 +312,7 @@ function Note({ entry, core }: { entry: EntryRecord; core: React.ReactNode }) {
 function Catchup({ text }: { text: string }) {
   return (
     <Card data-lineage-note="main">
-      <header
-        className={cn(
-          'flex items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-foreground',
-          soleRowHeader,
-        )}
-      >
+      <header className="flex items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-foreground">
         <GitBranchIcon className="size-3.5 text-brand" />
         Catch-up
       </header>
@@ -405,6 +387,7 @@ function RootComposer({ core, dock }: { core: ReactNode; dock?: boolean }) {
 
 function HistoryBanner({ id, dock }: { id: number; dock?: boolean }) {
   const actions = useUltimate()
+  const github = useGithubRepo()
   return (
     <div className={cn(column(dock), 'pb-3')}>
       <div
@@ -412,7 +395,7 @@ function HistoryBanner({ id, dock }: { id: number; dock?: boolean }) {
         data-lineage-history={id}
       >
         <ScrollTextIcon className="size-4 shrink-0 text-brand" />
-        <div className="min-w-0 flex-1">
+        <div className="min-w-56 flex-1">
           <p className="text-[13.5px] font-medium text-foreground">
             You're reading the project's history
           </p>
@@ -421,15 +404,46 @@ function HistoryBanner({ id, dock }: { id: number; dock?: boolean }) {
             @ultimate.
           </p>
         </div>
-        <Button className="ml-auto" onClick={() => void talkToUltimate(actions)}>
-          <ArrowLeftIcon />
-          Back to @ultimate
-          <KbdGroup className="hidden sm:inline-flex pointer-coarse:hidden">
-            {formatKeys('mod+0')[0].map((key) => (
-              <Kbd key={key}>{key}</Kbd>
-            ))}
-          </KbdGroup>
-        </Button>
+        <div className="ml-auto flex items-center gap-1">
+          {/* Zed opens on the machine Ultimate runs on, so a phone gets only the GitHub link. */}
+          <Button
+            className="pointer-coarse:hidden"
+            onClick={() =>
+              void api
+                .action(OpenEditorAction)
+                .catch((error: unknown) =>
+                  store.notify({ level: 'error', message: errorMessage(error) }),
+                )
+            }
+            title="Open the project folder in Zed, on the machine Ultimate runs on"
+            variant="ghost"
+          >
+            <CodeIcon />
+            Open in Zed
+          </Button>
+          {github && (
+            <Button asChild size="icon" variant="ghost">
+              <a
+                aria-label="Open on GitHub"
+                href={`https://${github}`}
+                rel="noreferrer"
+                target="_blank"
+                title={`The code as it landed, on ${github}`}
+              >
+                <ExternalLinkIcon />
+              </a>
+            </Button>
+          )}
+          <Button onClick={() => void talkToUltimate(actions)}>
+            <ArrowLeftIcon />
+            Back to @ultimate
+            <KbdGroup className="hidden sm:inline-flex pointer-coarse:hidden">
+              {formatKeys('mod+0')[0].map((key) => (
+                <Kbd key={key}>{key}</Kbd>
+              ))}
+            </KbdGroup>
+          </Button>
+        </div>
       </div>
     </div>
   )
@@ -668,7 +682,7 @@ function RootMemory({
             if (!shown.length) return null
             return (
               <div className="mt-6" data-memory-kind={kind} key={kind}>
-                <h3 className="flex items-center gap-1.5 border-b border-border/60 pb-1.5 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase">
+                <h3 className="flex items-center gap-1.5 border-b border-border/60 pb-1.5 section-label">
                   <span className={cn('size-1.5 rounded-full', kindDots[kind])} />
                   {title}
                   <span className="text-muted-foreground/60">{shown.length}</span>
@@ -700,7 +714,7 @@ function Roots() {
 }
 
 export default defineWebExtension({
-  tools: { note: NoteCall },
+  tools: { note: NoteCall, notify: NotifyCall, memory: MemoryCall, remember: RememberCall },
   entries: {
     'lineage.branched': Branched,
     'lineage.note': Note,

@@ -1,14 +1,13 @@
-import { LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
-import type { ConversationId, Tx } from '@earendil-works/pi-durable'
+import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import type { Tx } from '@earendil-works/pi-durable'
 import { expect, it, vi } from 'vitest'
 import { abstract } from '../extensions/lineage/server.ts'
 import { SubmissionLanded } from '../extensions/workspaces/api.ts'
 import type { LandedData } from '../extensions/workspaces/api.ts'
 import { emit, EventLog } from '../server/events.ts'
 import { context } from '../server/harness.ts'
-import { UiState } from '../server/ui-state.ts'
 import { until } from './helpers.ts'
-import { branchFrom, fixture, notifyFixture, servers, settled } from './lineage-fixture.ts'
+import { branchFrom, fixture, servers, settled } from './lineage-fixture.ts'
 import type { Server } from './lineage-fixture.ts'
 
 const landing = (submission: string, conversationId: number): LandedData => ({
@@ -30,50 +29,12 @@ const land = async (server: Server, data: LandedData) =>
   (await server.harness.commit((tx) => emit(tx, SubmissionLanded, data), context)).id
 const notes = async (server: Server) =>
   (await server.root.context(context)).entries.filter((entry) => entry.kind === 'lineage.note')
-const concluded = async (server: Server) =>
-  ((await server.harness.snapshot(UiState, ROOT_CONVERSATION_ID, context))?.[
-    'ext.conversations.concluded'
-  ] ?? []) as number[]
-/** Whether the conclude task of `submission`'s landing in `id` has ended. */
-const concludeEnded = async (server: Server, id: ConversationId, submission: string) =>
-  (
-    await server.harness.commit(
-      (tx) => tx.scanTasks({ conversationId: id, kind: 'lineage.conclude-landed' }, 10),
-      context,
-    )
-  ).items.some(
-    (task) =>
-      (task.input as { submission: string }).submission === submission &&
-      task.state.status === 'terminal',
-  )
 /** How far lineage's landing reactor has read the event log. */
 const cursor = async (server: Server) =>
   (await server.harness.snapshot(EventLog, ROOT_CONVERSATION_ID, context))?.cursors[
     'lineage/landing-notes'
   ] ?? 0
 
-it.concurrent('concludes a landed branch only when its report run answered, never after a Stop', async () => {
-  const { server } = await notifyFixture()
-  const id = await branchFrom(server, { from: 1, prompt: 'Land me' })
-  const branch = await settled(server, id)
-  // The lander's report starts a run that the person stops before it answers.
-  await branch.submit({ type: 'input', content: 'HOLD', requestId: 'lander:s1' }, context)
-  await until(async () => !!(await server.harness.snapshot(LiveDoc, id, context))?.run)
-  await land(server, landing('s1', id))
-  const run = (await server.harness.snapshot(LiveDoc, id, context))!.run!.taskId
-  await server.harness.abortTask(run, context)
-  await server.harness.waitForTask(run, context)
-  expect(
-    await server.harness.commit((tx) => tx.submissionByRequest(id, 'lander:s1'), context),
-  ).toMatchObject({ status: 'unanswered', reason: 'aborted' })
-  await until(() => concludeEnded(server, id, 's1'))
-  expect(await concluded(server)).not.toContain(id)
-
-  // A report that is answered concludes it.
-  await branch.submit({ type: 'input', content: 'Landed.', requestId: 'lander:s2' }, context)
-  await land(server, landing('s2', id))
-  await until(async () => (await concluded(server)).includes(id))
-})
 it.concurrent('notes a landing in its tree root once, across a failed attempt and a restart', async () => {
   const { server, home } = await fixture()
   const first = await branchFrom(server, { from: 1, prompt: 'Land me' })

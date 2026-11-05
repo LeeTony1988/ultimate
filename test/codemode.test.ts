@@ -18,11 +18,9 @@ import {
   temp,
   removeTemp,
   linkDependencies,
-  moduleURL,
   post,
 } from './helpers.ts'
 import { context } from '../server/harness.ts'
-import { shell } from '../lib/shell.ts'
 import { FIRST_CHAPTER, requestChapter } from '../lib/chapters.ts'
 import { Store, SummaryDoc } from '../extensions/codemode/server.ts'
 import { Summarized } from '../extensions/codemode/refs.ts'
@@ -51,17 +49,18 @@ async function fixture() {
   await copyApis(ultimateRoot)
   await mkdir(join(ultimateRoot, 'web'), { recursive: true })
   await linkDependencies(ultimateRoot)
+  // Immutable after boot; do not restart Vite for a replay of the fixture's initial config write.
   await writeFile(
     join(ultimateRoot, 'vite.config.ts'),
-    "import { defineConfig } from 'vite-plus'; export default defineConfig({ root: 'web', cacheDir: '.vite-cache', optimizeDeps: { noDiscovery: true } })",
+    "import { fileURLToPath } from 'node:url'; import { defineConfig } from 'vite-plus'; export default defineConfig({ root: 'web', cacheDir: '.vite-cache', optimizeDeps: { noDiscovery: true }, server: { watch: { ignored: [(file) => file === fileURLToPath(import.meta.url)] } } })",
   )
   await writeFile(join(ultimateRoot, 'web/index.html'), '<html>Codemode</html>')
   // The copy reaches the definitions module in the checkout, as `ultimate.agents()` reads them through it.
   await writeFile(
     join(ultimateRoot, 'extensions/codemode/server.ts'),
     (await readFile(resolve('extensions/codemode/server.ts'), 'utf8'))
-      .replace("'../../lib/agents.ts'", JSON.stringify(moduleURL('lib/agents.ts')))
-      .replace("'../../lib/api-files.ts'", JSON.stringify(moduleURL('lib/api-files.ts'))),
+      .replace("'../../lib/agents.ts'", JSON.stringify(resolve('lib/agents.ts')))
+      .replace("'../../lib/api-files.ts'", JSON.stringify(resolve('lib/api-files.ts'))),
   )
   for (const file of ['api.ts', 'chapters.ts', 'projects.ts', 'refs.ts', 'summary.ts'])
     await cp(resolve('extensions/codemode', file), join(ultimateRoot, 'extensions/codemode', file))
@@ -110,7 +109,7 @@ it('reads an inactive chapter through the sandbox and rejects project with chapt
     next,
     `return {
     entries: await ultimate.entries(${server.root.id}, { chapter: '${FIRST_CHAPTER}', kinds: ['chapter.note'] }),
-    search: await ultimate.search('closed-chapter-needle', { chapter: '${FIRST_CHAPTER}', limit: 1 }),
+    search: await ultimate.search('closed-chapter-needle', { chapter: '${FIRST_CHAPTER}', limit: 1, full: true }),
     conversations: await ultimate.conversations({ chapter: '${FIRST_CHAPTER}' })
   };`,
   )
@@ -152,7 +151,7 @@ it('keeps codemode guidance without repeating top-level tool schemas', async () 
   expect(text).toContain(
     'Discover extension contracts with ultimate.apis() and read one with ultimate.api(name); act on them through ultimate.action.',
   )
-  expect(text).toContain(`Available: read, write, edit, ${shell.name}`)
+  expect(text).toContain('Available: read, write, edit, bash')
   expect(text).not.toContain('declare const tools')
   const withRestart = await section.render(
     {
@@ -204,7 +203,7 @@ const shape = (calls: CallTree[]): unknown[] =>
 
 it('traces a tool a codemode script calls, and its service call, inside the codemode call', async () => {
   const { server, options } = await fixture()
-  const token = `import { defineApi } from ${JSON.stringify(moduleURL('shared/extension-api.ts'))}
+  const token = `import { defineApi } from ${JSON.stringify(resolve('shared/extension-api.ts'))}
     const Echo = defineApi()('trace-echo')`
   for (const [name, source] of [
     [
@@ -421,6 +420,33 @@ it("returns workspaces' refs.ts with its api.ts, so agents see its actions and e
   expect(source).toContain("actionRef<{ id: number }, WorkspaceInfo | null>('workspaces', 'info')")
 })
 
+// Three projects saw a script's later automation calls get the first call's receipt: nested calls share one task.
+it('applies each automation call in one script to its own arguments', async () => {
+  const home = await temp('ultimate-codemode-automation-')
+  directories.push(home)
+  await mkdir(join(home, 'project'))
+  const server = await createServer({
+    ultimateRoot: resolve('.'),
+    projectRoot: join(home, 'project'),
+    userHome: home,
+    home: join(home, 'state'),
+  })
+  servers.push(server)
+  const result = await run(
+    server,
+    `const created = await tools.automation({action:'create', name:'Probe', schedule:'every 1d'});
+     const id = created.split(' ')[0];
+     await tools.automation({action:'subscribe', id, to:'@ultimate'});
+     await tools.automation({action:'unsubscribe', id, to:'#${server.root.id}'});
+     const [stored] = await ultimate.action('automations', 'list');
+     return { line: await tools.automation({action:'list'}), subscribers: stored.subscribers };`,
+  )
+  expect(result.data.details.value).toEqual({
+    line: 'A1 Probe — Every 1 day — enabled → @ultimate',
+    subscribers: ['@ultimate'],
+  })
+})
+
 it('reserves trust and secret writes for the UI while allowing normal actions', async () => {
   const { server, options } = await fixture()
   await mkdir(join(options.ultimateRoot, 'server'), { recursive: true })
@@ -484,16 +510,16 @@ it('composes read and bash with private nested results and final JSON details', 
   const path = join(server.host.home, 'scratch.txt')
   const result = await run(
     server,
-    `const source = await tools.read({path:${JSON.stringify(path)}}); const output = await tools.${shell.name}({command:'echo nested-private'}); text(source.trim()); return {length:output.trim().length};`,
+    `const source = await tools.read({path:${JSON.stringify(path)}}); const shell = await tools.bash({command:'echo nested-private'}); text(source.trim()); return {length:shell.length};`,
   )
   expect(result.text).toContain('Script completed')
   expect(result.text).toContain('before')
   expect(result.text).not.toContain('nested-private')
   expect(result.data.details.calls.map((call) => [call.name, call.status])).toEqual([
     ['read', 'ok'],
-    [shell.name, 'ok'],
+    ['bash', 'ok'],
   ])
-  expect(result.data.details.value).toEqual({ length: 'nested-private'.length })
+  expect(result.data.details.value).toEqual({ length: 15 })
   const view = await server.root.context(context)
   expect(view.entries.filter((entry) => entry.kind === 'pi.tool-result')).toHaveLength(1)
   server.host.registry.install(
@@ -721,6 +747,36 @@ it('reads stored history and documents from before a reset', async () => {
   expect((result.data.details.value as { old: number }).old).toBeGreaterThan(0)
 })
 
+it('searches compactly by default, filters kinds, and returns whole entries with full', async () => {
+  const { server } = await fixture()
+  await run(server, `return 1;`, `kinds-needle ${'padding '.repeat(500)}`)
+  const { value } = (
+    await run(
+      server,
+      `return {
+        compact: await ultimate.search('kinds-needle', { kinds: ['pi.user'] }),
+        none: await ultimate.search('kinds-needle', { kinds: ['board.message'] }),
+        full: await ultimate.search('kinds-needle', { kinds: ['pi.user'], full: true }),
+      };`,
+    )
+  ).data.details as {
+    value: { compact: { excerpt: string }[]; none: unknown[]; full: { data: unknown }[] }
+  }
+  expect(value.compact).toEqual([
+    {
+      conversation: server.root.id,
+      id: expect.any(Number),
+      kind: 'pi.user',
+      at: expect.any(String),
+      excerpt: expect.stringContaining('kinds-needle'),
+    },
+  ])
+  expect(value.compact[0].excerpt.length).toBeLessThan(250)
+  expect(value.none).toEqual([])
+  expect(value.full).toHaveLength(1)
+  expect(JSON.stringify(value.full[0])).toContain('padding '.repeat(500))
+})
+
 it('persists store over two calls and harness close/reopen; discards failed writes', async () => {
   const { server, options } = await fixture()
   expect(
@@ -754,7 +810,7 @@ it('aborts nested work without committing store writes', async () => {
     fauxAssistantMessage(
       [
         fauxToolCall('codemode', {
-          code: `await tools.read({path:${JSON.stringify(join(server.host.home, 'scratch.txt'))}}); await tools.${shell.name}({command:'sleep 30'}); store('aborted', true);`,
+          code: `await tools.read({path:${JSON.stringify(join(server.host.home, 'scratch.txt'))}}); await tools.bash({command:'sleep 30'}); store('aborted', true);`,
         }),
       ],
       { stopReason: 'toolUse' },
@@ -953,7 +1009,7 @@ it('recovers an unsafe interrupted script with its committed nested-call log', a
     fauxAssistantMessage(
       [
         fauxToolCall('codemode', {
-          code: `await tools.read({path:${JSON.stringify(join(server.host.home, 'scratch.txt'))}}); await tools.${shell.name}({command:'sleep 30'}); store('finished', true);`,
+          code: `await tools.read({path:${JSON.stringify(join(server.host.home, 'scratch.txt'))}}); await tools.bash({command:'sleep 30'}); store('finished', true);`,
         }),
       ],
       { stopReason: 'toolUse' },

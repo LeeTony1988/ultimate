@@ -3,7 +3,8 @@
  * otherwise ask them, records each decision with its reason, and ends the goal with a report. Only the user starts or
  * ends a goal early; @ultimate hears it on every run through a per-input note.
  */
-import { arr, int, lit, obj, oneOf, opt, str, union } from '@earendil-works/pi-schema'
+import { arr, int, lit, obj, opt, str, union } from '@earendil-works/pi-schema'
+import { strEnum } from '../../lib/schema.ts'
 import {
   defineDoc,
   defineExtension,
@@ -16,7 +17,7 @@ import type { ConversationId, EntryId, Tx } from '@earendil-works/pi-durable'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { actingAs } from '../../lib/acting-as.ts'
 import { implementAction } from '../../lib/actions.ts'
-import { imagesOf } from '../../lib/entries.ts'
+import { imagesOf, latestImagesEntry } from '../../lib/entries.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { AutomationsApi } from '../automations/api.ts'
 import { Standing } from '../subagents/api.ts'
@@ -28,7 +29,6 @@ import type { Criterion, Decision, Ending, Goal } from './refs.ts'
 /** Failed tries after which a criterion is blocked; work goes on with the others. */
 export const TRIES = 3
 const TEXT_CHARS = 2000
-const SCAN_PAGE = 200
 
 export const Goals = defineDoc<{ next: number; goals: Goal[] }>({
   kind: GoalDoc.kind,
@@ -113,7 +113,7 @@ export function noteText(goal: Goal, reminded = false) {
   ].join('\n\n')
 }
 
-/** The newest entry of conversation `id` with images, or entry `ref` when it has some. */
+/** The newest entry with images in this turn of conversation `id`, or entry `ref` when it has some. */
 async function imagesEntry(tx: Tx, id: ConversationId, ref: 'latest' | number) {
   if (ref !== 'latest') {
     const entry = await tx.entry(ref as EntryId)
@@ -121,14 +121,7 @@ async function imagesEntry(tx: Tx, id: ConversationId, ref: 'latest' | number) {
       throw new Error(`images: entry ${ref} in your conversation has no images`)
     return ref
   }
-  let cursor: Parameters<Tx['scanEntries']>[2]
-  do {
-    const page = await tx.scanEntries({ conversationId: id }, SCAN_PAGE, cursor)
-    const found = page.items.find((item) => imagesOf(item).length > 0)
-    if (found) return found.id as number
-    cursor = page.next
-  } while (cursor !== undefined)
-  throw new Error('images: "latest" found no entry with images in your conversation')
+  return (await latestImagesEntry(tx, id)).id as number
 }
 
 type ToolArgs = {
@@ -339,7 +332,7 @@ export default function goalExtension(host: ExtensionHost) {
         description:
           "The hands-off goal the user put you on (only while one is open; the goal note names it): criteria {criteria: [...]} writes what done means, each checkable; decide {question, picked, reason, conversation?, images?} records a decision you took instead of asking the user (images: \"latest\" or an entry id of your conversation with screenshots you judged); met {n} / failed {n} mark criterion n; finish {outcome: 'met' | 'blocked', summary} ends the goal and leaves the report card; pause {reason} when you are truly blocked on the user stops the 30-minute goal reminder and shows them what you wait on, resume turns it back on once you can go on.",
         parameters: obj({
-          action: oneOf(['criteria', 'decide', 'met', 'failed', 'finish', 'pause', 'resume']),
+          action: strEnum(['criteria', 'decide', 'met', 'failed', 'finish', 'pause', 'resume']),
           criteria: opt(arr(str())),
           n: opt(int({ minimum: 1 })),
           question: opt(str()),
@@ -347,7 +340,7 @@ export default function goalExtension(host: ExtensionHost) {
           reason: opt(str()),
           conversation: opt(int({ minimum: 1 })),
           images: opt(union([lit('latest'), int({ minimum: 1 })])),
-          outcome: opt(oneOf(['met', 'blocked'])),
+          outcome: opt(strEnum(['met', 'blocked'])),
           summary: opt(str()),
         }),
         // Not replay-safe (the default): an interrupted call is never rerun, so a decision is recorded at most once.

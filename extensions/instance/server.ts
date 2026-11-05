@@ -1,12 +1,15 @@
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import {
+  cp,
   mkdtemp,
   mkdir,
+  readdir,
   readFile,
   realpath,
   rename,
   rm,
   stat,
+  symlink,
   unlink,
   writeFile,
 } from 'node:fs/promises'
@@ -15,8 +18,8 @@ import { basename, join, resolve as resolvePath } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { setTimeout as sleep } from 'node:timers/promises'
 import type { Context } from '@earendil-works/chord'
-import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { int, obj, oneOf, opt, str } from '@earendil-works/pi-schema'
+import { int, obj, opt, str } from '@earendil-works/pi-schema'
+import { strEnum } from '../../lib/schema.ts'
 import type { ConversationId, ToolExecutionApi } from '@earendil-works/pi-durable'
 import { defineExtension, defineTool, section } from '@earendil-works/pi-durable'
 import type { ExtensionAction } from '../../server/actions.ts'
@@ -30,21 +33,28 @@ import { implementAction } from '../../lib/actions.ts'
 import { git, isolatable } from '../../lib/git.ts'
 import { spawnGroup, stopGroup } from '../../lib/process-group.ts'
 import type { Group, GroupProcess } from '../../lib/process-group.ts'
-import { InstanceApi } from './api.ts'
+import { Previews } from '../conversations/api.ts'
 import { ListAction } from './refs.ts'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
+import { readFamilies } from '../../lib/families-settings.ts'
+import { BUILTIN_FAMILIES, DEFAULT_FAMILY, FEATURES } from '../../lib/families.ts'
 
-/** Previews run every agent on this model unless `instance.model` names another or is `null`. */
-export const DEFAULT_PREVIEW_MODEL = 'openai-codex/gpt-6.1-sol'
+/** Previews run every agent on the previews family's model unless `instance.model` names another or is `null`. */
+export const DEFAULT_PREVIEW_MODEL = BUILTIN_FAMILIES[FEATURES.preview.family].model!
 
-/** The `instance.model` setting, project over user: the `provider/id` a preview runs every agent on, or none. */
+/**
+ * The `instance.model` setting, project over user: the `provider/id` a preview runs every agent on, or none. Without
+ * it, the model of the family previews are assigned to (`modelFamilies`, default `fast`).
+ */
 export async function previewModelSetting(
-  host: Pick<ExtensionHost, 'userHome' | 'projectSettings'>,
+  host: Pick<ExtensionHost, 'userHome' | 'projectSettings' | 'projectRoot'> &
+    Partial<Pick<ExtensionHost, 'settings'>>,
 ): Promise<string | undefined> {
   // Invalid settings JSON is reported where settings load; here it counts as unset.
   const user: JsonObject = await readSettings(userSettingsPath(host.userHome)).catch(() => ({}))
-  for (const settings of [await host.projectSettings(), user]) {
+  const project = await host.projectSettings()
+  for (const settings of [project, user]) {
     const instance = settings.instance
     if (instance && typeof instance === 'object' && !Array.isArray(instance))
       if (Object.hasOwn(instance, 'model')) {
@@ -57,7 +67,68 @@ export async function previewModelSetting(
         return model
       }
   }
+  const families = await readFamilies(host.userHome, host.projectRoot, project)
+  const assigned = families.assign.preview ?? FEATURES.preview.family
+  const family = Object.hasOwn(families.families, assigned) ? assigned : DEFAULT_FAMILY
+  const own = families.families[family].model
+  if (own) return own
+  // A default family without a model of its own runs Pi's default model.
+  if (family === DEFAULT_FAMILY) {
+    const provider = host.settings?.getDefaultProvider()
+    const id = host.settings?.getDefaultModel()
+    return provider && id ? `${provider}/${id}` : DEFAULT_PREVIEW_MODEL
+  }
   return DEFAULT_PREVIEW_MODEL
+}
+
+/** What a preview's private user config starts as: copies, symlinks resolved, so its writes never reach the real files. */
+const COPIED = [
+  'settings.json',
+  'model-families.json',
+  'trust.json',
+  'onboarding.json',
+  'secrets.json',
+  'claude-accounts.json',
+  'agents',
+  'skills',
+]
+/**
+ * Shared with the host through a link: user extensions are code the UI never writes (and some find their repository
+ * through their real path), and the Tailscale registry is how every server on the machine picks a distinct port.
+ */
+const LINKED = ['extensions', 'tailscale.json']
+
+/** Seed `<to>/.ultimate` from the user's `<from>/.ultimate`; what the user has not got is left out. */
+export async function seedUserHome(from: string, to: string) {
+  const source = join(from, '.ultimate')
+  const target = join(to, '.ultimate')
+  await mkdir(target, { recursive: true, mode: 0o700 })
+  const missing = (error: NodeJS.ErrnoException) => {
+    if (error.code !== 'ENOENT') throw error
+  }
+  for (const name of COPIED)
+    await cp(join(source, name), join(target, name), {
+      recursive: true,
+      dereference: true,
+      errorOnExist: true,
+      force: false,
+    }).catch(missing)
+  // Linked even when missing: the first server to register creates the one registry every server shares.
+  for (const name of LINKED) await symlink(join(source, name), join(target, name))
+}
+
+/**
+ * Make `to` a whole home: every entry of `from` but `.ultimate` is linked back, so logins, caches and dotfiles stay
+ * shared while `~/.ultimate` is the private copy. Entries already there are kept, so it runs on every start.
+ */
+export async function linkHome(from: string, to: string) {
+  for (const name of await readdir(from)) {
+    if (name === '.ultimate') continue
+    await symlink(join(from, name), join(to, name)).catch((error: NodeJS.ErrnoException) => {
+      // Already linked, or a private copy the preview wrote over the link: keep it.
+      if (error.code !== 'EEXIST') throw error
+    })
+  }
 }
 
 /** The branch a preview with this home lands on; it shares the prefix of the preview's workspace branches. */
@@ -98,9 +169,11 @@ function includeIn(parent: NodeJS.ProcessEnv, common: string, config: string) {
 }
 
 /**
- * A preview keeps ordinary parent variables, but gets its own host identity, no inherited cloud settings, and
- * `ULTIMATE_MODEL` only when `model` is set. In a git project (`git`: its real common dir, the preview's branch and its
- * `guardConfig`) it never pushes and moves only its own branches; its lander lands on `ULTIMATE_PREVIEW_BRANCH`.
+ * A preview keeps ordinary parent variables, but gets its own host identity, its own home (`HOME` and
+ * `ULTIMATE_USER_HOME`, linked back by `linkHome` so `~` reaches its private `.ultimate` and the shared rest), no
+ * inherited cloud settings, and `ULTIMATE_MODEL` only when `model` is set. In a git project (`git`: its real common
+ * dir, the preview's branch and its `guardConfig`) it never pushes and moves only its own branches; its lander lands on
+ * `ULTIMATE_PREVIEW_BRANCH`.
  */
 export function previewEnv(
   parent: NodeJS.ProcessEnv,
@@ -123,6 +196,7 @@ export function previewEnv(
             'ULTIMATE_GENERATION',
             'ULTIMATE_PREVIOUS_BUILD',
             'ULTIMATE_HOME',
+            'ULTIMATE_USER_HOME',
             'ULTIMATE_PORT',
             'ULTIMATE_CLOUD_URL',
             'ULTIMATE_CLOUD_TOKEN',
@@ -135,6 +209,7 @@ export function previewEnv(
     ULTIMATE_HOME: options.home,
     ULTIMATE_PROJECT: options.project,
     HOME: options.userHome,
+    ULTIMATE_USER_HOME: options.userHome,
     ULTIMATE_PORT: '0',
     ULTIMATE_NO_OPEN: '1',
     ULTIMATE_INSTANCE_OWNER: String(options.ownerPid),
@@ -286,6 +361,10 @@ export const actions: Record<string, ExtensionAction> = {
 }
 
 /**
+ * The workspace a preview of conversation `id` serves: its own, else the nearest owner's (a subagent without an isolate
+ * works in its parent's worktree, at any depth); undefined means the host checkout.
+ */
+/**
  * The previewed repository, the branch a preview lands on (created at the project's tip unless a reused home made it
  * already) and the guard config written into its home; none outside git or before a first commit.
  */
@@ -300,10 +379,6 @@ async function previewGit(project: string, home: string) {
   return { common: await realpath(common), branch, config }
 }
 
-/**
- * The workspace a preview of conversation `id` serves: its own, else the nearest owner's (a subagent without an isolate
- * works in its parent's worktree, at any depth); undefined means the host checkout.
- */
 export async function previewWorkspace(
   host: Pick<ExtensionHost, 'harness'>,
   workspaces: Pick<WorkspaceService, 'get'>,
@@ -393,10 +468,14 @@ export default function instanceExtension(
       context.abortSignal?.throwIfAborted()
       // Explicit homes are retained even when their name matches the automatic sweep's prefix.
       if (args.home) await writeFile(join(home, 'instance-preserve'), '')
+      const userHome = join(home, 'user')
+      // A restarted explicit home keeps the config its preview changed.
+      if (!existsSync(userHome)) await seedUserHome(host.userHome, userHome)
+      await linkHome(host.userHome, userHome)
       const env = previewEnv(process.env, {
         home,
         project,
-        userHome: host.userHome,
+        userHome,
         ownerPid: process.pid,
         model: await previewModelSetting(host),
         git: await previewGit(project, home),
@@ -534,30 +613,41 @@ export default function instanceExtension(
     return { cwd, project, conversationId }
   }
 
-  host.implement(InstanceApi, {
-    start: (args) =>
-      start(args, BACKGROUND_CONTEXT, async () => ({
-        cwd: host.ultimateRoot,
-        project: host.projectRoot,
-      })),
-    stop: (id) => stop(instances, id),
+  // Concluding a conversation stops the previews it started; previews outlive an ordinary stop of its run.
+  host.implement(Previews, {
+    stop: async (ids) => {
+      const concluded = new Set(ids)
+      const ended = []
+      // Deleting the visited entry while iterating a Map is safe.
+      for (const item of instances.values()) {
+        if (item.conversationId === undefined || !concluded.has(item.conversationId)) continue
+        await stop(instances, item.id)
+        if (item.url) remember(host, item)
+        ended.push(item.id)
+      }
+      return ended
+    },
   })
   return defineExtension({
     name: 'instance',
     sections: [
-      section('test_core_changes', () =>
-        ownSource
-          ? 'Before restarting after core changes, start a second instance, check its API and UI using browser/screenshot, then stop it. An instance runs every agent on the `instance.model` setting (default openai-codex/gpt-6.1-sol, fast) and spends tokens; drive it with real prompts. Instances are temporary and process-local.'
-          : "To check changes to this project's .ultimate/ extensions, agents or settings, start a second instance: it runs this Ultimate with your workspace as its project. Look at it with browser/screenshot, then stop it. It runs every agent on the `instance.model` setting (default openai-codex/gpt-6.1-sol, fast) and spends tokens. It does not run the project's own app.",
-      ),
+      section('test_core_changes', async () => {
+        const model = await previewModelSetting(host)
+        const runs = model
+          ? `every agent on ${model} (the \`instance.model\` setting)`
+          : 'the configured models (`instance.model` is null)'
+        return ownSource
+          ? `Before restarting after core changes, start a second instance, check its API and UI using browser/screenshot, then stop it. An instance runs ${runs} and spends tokens; drive it with real prompts. Instances are temporary and process-local.`
+          : `To check changes to this project's .ultimate/ extensions, agents or settings, start a second instance: it runs this Ultimate with your workspace as its project. Look at it with browser/screenshot, then stop it. It runs ${runs} and spends tokens. It does not run the project's own app.`
+      }),
     ],
     tools: [
       defineTool({
         name: 'instance',
         description:
-          'Start, inspect logs, list or stop isolated standalone Ultimate test servers (maximum three). Defaults to the calling workspace; set subagent to preview an owned child worktree. Instances run every agent on `instance.model` (default openai-codex/gpt-6.1-sol, fast).',
+          'Start, inspect logs, list or stop isolated standalone Ultimate test servers (maximum three). Defaults to the calling workspace; set subagent to preview an owned child worktree.',
         parameters: obj({
-          action: oneOf(['start', 'stop', 'logs', 'list']),
+          action: strEnum(['start', 'stop', 'logs', 'list']),
           id: opt(str()),
           home: opt(str()),
           subagent: opt(int({ minimum: 1 })),

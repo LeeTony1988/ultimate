@@ -2,12 +2,12 @@ import { execFile, spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
-import { join, basename, resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { promisify } from 'node:util'
 import { expect, it } from 'vitest'
 import { projectHome } from '../../server/project.ts'
-import { cleanEnv, moduleURL, temp } from '../helpers.ts'
+import { cleanEnv, temp } from '../helpers.ts'
 
 const run = promisify(execFile)
 const script = resolve('scripts/reset.ts')
@@ -19,12 +19,10 @@ async function fixture() {
   await mkdir(project)
   const home = projectHome(project, user)
   await mkdir(join(home, 'worktrees', '7'), { recursive: true })
-  // A parked state keeps a timestamp in its name, without the colons of the ISO form: no file name Windows accepts
-  // has one, so those could never be parked there.
   for (const name of [
     'state.sqlite',
     'trace.sqlite',
-    'state.stale-2026-10-18T11-01-59.676Z.sqlite',
+    'state.stale-2026-10-18T11:01:59.676Z.sqlite',
   ]) {
     const db = new DatabaseSync(join(home, name))
     db.exec('CREATE TABLE t (x)')
@@ -36,30 +34,26 @@ async function fixture() {
   return { user, project, home }
 }
 const reset = (user: string, ...args: string[]) =>
-  run(process.execPath, [script, ...args], { env: cleanEnv(userEnv(user)) })
-
-/** `user` as the Windows account folder Node reads there: `os.homedir()` asks `USERPROFILE`, which `HOME` never sets. */
-const userEnv = (user: string) =>
-  process.platform === 'win32' ? { USERPROFILE: user } : { HOME: user }
+  run(process.execPath, [script, ...args], { env: cleanEnv({ HOME: user }) })
 
 it('moves the state into a backup folder and keeps worktrees and project.json', async () => {
   const { user, project, home } = await fixture()
 
   const dry = await reset(user, project, '--dry-run')
   expect(dry.stdout).toContain('move state.sqlite')
-  expect(dry.stdout).toContain('move state.stale-2026-10-18T11-01-59.676Z.sqlite')
+  expect(dry.stdout).toContain('move state.stale-2026-10-18T11:01:59.676Z.sqlite')
   expect(existsSync(join(home, 'state.sqlite'))).toBe(true)
 
   const { stdout } = await reset(user, project, '--yes')
   const backups = join(user, '.ultimate', 'backups')
   const [folder] = await readdir(backups)
-  const backup = join(backups, folder, basename(home))
+  const backup = join(backups, folder, home.split('/').at(-1)!)
   expect(stdout).toContain(`Moved to ${backup}`)
   expect(stdout).toContain('To restore')
   expect((await readdir(backup)).toSorted()).toEqual([
     'conversations.json',
     'state.sqlite',
-    'state.stale-2026-10-18T11-01-59.676Z.sqlite',
+    'state.stale-2026-10-18T11:01:59.676Z.sqlite',
     'trace.sqlite',
   ])
   expect((await readdir(home)).filter((name) => !name.includes('.lock')).toSorted()).toEqual([
@@ -73,7 +67,7 @@ it('keeps Ultimate from starting on a home an interrupted reset left half moved'
   const { user, project, home } = await fixture()
   await writeFile(join(home, 'reset.json'), JSON.stringify({ backup: '/b' }))
   const started = await run(process.execPath, [resolve('bin/ultimate.ts'), project, '--no-open'], {
-    env: cleanEnv(userEnv(user)),
+    env: cleanEnv({ HOME: user }),
   }).catch((error: { code: number; stderr: string }) => error)
   expect(started).toMatchObject({
     code: 1,
@@ -90,7 +84,7 @@ it('refuses while Ultimate runs in the home', async () => {
     [
       '--input-type=module',
       '-e',
-      `const { acquireLock } = await import(${JSON.stringify(moduleURL('server/lock.ts'))});
+      `const { acquireLock } = await import(${JSON.stringify(resolve('server/lock.ts'))});
        await acquireLock(${JSON.stringify(join(home, 'ultimate.lock'))}, { pid: process.pid, port: 4747 });
        console.log('held'); setInterval(() => {}, 1000)`,
     ],

@@ -13,15 +13,6 @@ import { Standing, SubagentsApi } from '../subagents/api.ts'
 import { locate, postAction } from '../../lib/remote.ts'
 import { Messages } from './api.ts'
 import type { Message } from './api.ts'
-import {
-  declared,
-  needsDecision,
-  primaryConversation,
-  recordTriage,
-  settleTriage,
-  triageModel,
-} from './triage.ts'
-import type { Verdict } from './triage.ts'
 import { imagesOf } from '../../lib/entries.ts'
 import { append, terminal } from './log.ts'
 import { remoteLabel } from './addresses.ts'
@@ -72,6 +63,10 @@ export function delivery(host: ExtensionHost) {
             from: m.from,
             text: m.text,
             reply: m.reply,
+            // The question an answer answers, kept with the entry: the log it is in drops old messages.
+            ...(m.re !== undefined ? { re: m.re } : {}),
+            ...(m.routed !== undefined ? { routed: true } : {}),
+            ...(m.echo ? { echo: true } : {}),
             delivery: task.input.note ? 'note' : task.input.steer ? 'steer' : 'followUp',
             ...(images.length ? { images: images.length } : {}),
             ...(m.remote ? { remote: m.remote } : {}),
@@ -82,43 +77,25 @@ export function delivery(host: ExtensionHost) {
           : `Message from ${task.input.fromLabel}${m.from === 'remote' ? " (another project's Ultimate, not the user)" : ''}:\n${m.text}${m.reply ? `\nAnswer here; your answer is sent to ${task.input.fromLabel} automatically. Do not use message to reply.` : `\nOne-way message: ${task.input.fromLabel} expects no answer, and your answer here is not sent to it. If it needs to hear from you, message it.`}`
         const content = images.length ? [{ type: 'text' as const, text: body }, ...images] : body
         const requestId = `board:${m.id}`
-        // A conversation's message to the primary agent is triaged. One that expects a reply or asks for a decision
-        // acts at once; another one-way message goes in as context and wakes the agent only when the summary model
-        // says act. Notes never wake; without a summary model nothing is gated.
-        const triaged =
-          (typeof m.from === 'number' || m.from === 'remote') &&
-          !task.input.note &&
-          m.to === (await primaryConversation(host, ctx))
-        const sure: Verdict | undefined = !triaged
-          ? undefined
-          : m.reply
-            ? { verdict: 'act', reason: 'expects a reply' }
-            : declared(m.text)
-        const triager = triaged && !sure ? await triageModel(host, runtime, ctx) : undefined
-        const gated = triager !== undefined
-        const placing =
-          task.input.note || gated
-            ? recipient.submit(
-                {
-                  type: 'write',
-                  requestId,
-                  entry: {
-                    ...entry,
-                    model: [{ role: 'user', content, timestamp: Date.now() }],
-                  },
-                },
-                ctx,
-              )
-            : recipient.submit(
-                {
-                  type: 'input',
-                  requestId,
-                  whenBusy: task.input.steer ? 'steer' : 'followUp',
-                  entry,
-                  content,
-                },
-                ctx,
-              )
+        const placing = task.input.note
+          ? recipient.submit(
+              {
+                type: 'write',
+                requestId,
+                entry: { ...entry, model: [{ role: 'user', content, timestamp: Date.now() }] },
+              },
+              ctx,
+            )
+          : recipient.submit(
+              {
+                type: 'input',
+                requestId,
+                whenBusy: task.input.steer ? 'steer' : 'followUp',
+                entry,
+                content,
+              },
+              ctx,
+            )
         // A recipient's input hook can refuse the input; its placement rolled back, so the message failed, with why.
         const receipt = await placing.catch(async (cause: unknown) => {
           if (runtime.signal.aborted) throw cause
@@ -136,89 +113,48 @@ export function delivery(host: ExtensionHost) {
           return undefined
         })
         if (!receipt) return
-        {
-          // Admission can precede placement while a recipient is busy. Watch its durable queue,
-          // not a timer, so messages become delivered only after leaving the queue.
-          const inbox = await runtime.watchDoc(InboxDoc, recipient.id, ctx)
-          if (inbox) {
-            let wake!: () => void
-            const placed = new Promise<void>((done) => {
-              wake = done
-            })
-            const inspect = (value: typeof inbox.value) => {
-              if (!value?.items.some((item) => item.id === receipt.id)) wake()
-            }
-            inbox.start(async (call) => {
-              if (call.kind === 'value') inspect(call.value)
-            })
-            try {
-              inspect(inbox.value)
-              await awaitWithContext(placed, ctx)
-            } finally {
-              await inbox.stop()
-            }
+        // Admission can precede placement while a recipient is busy. Watch its durable queue,
+        // not a timer, so messages become delivered only after leaving the queue.
+        const inbox = await runtime.watchDoc(InboxDoc, recipient.id, ctx)
+        if (inbox) {
+          let wake!: () => void
+          const placed = new Promise<void>((done) => {
+            wake = done
+          })
+          const inspect = (value: typeof inbox.value) => {
+            if (!value?.items.some((item) => item.id === receipt.id)) wake()
           }
-          const placement = await receipt.status(ctx)
-          await runtime.commit(async (tx) => {
-            const stored = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.find(
-              (item) => item.id === m.id,
-            )
-            // A recipient that answered with a message before this commit has moved it past delivered already.
-            if (stored?.state === 'sent') {
-              // A queued input withdrawn by a Stop or a cancel was stopped, not failed.
-              stored.state =
-                placement.status !== 'unanswered'
-                  ? 'delivered'
-                  : placement.reason === 'aborted'
-                    ? 'stopped'
-                    : 'failed'
-              if ('entry' in placement && placement.entry !== undefined)
-                stored.entry = placement.entry
-            }
-            if (triaged && placement.status !== 'unanswered')
-              await recordTriage(
-                host,
-                tx,
-                m.id,
-                triager
-                  ? { verdict: 'assessing' }
-                  : (sure ?? {
-                      verdict: 'act',
-                      reason: 'no summary model to assess it',
-                    }),
-              )
-            if (task.input.note) return terminal
-            return undefined
-          }, ctx)
-          if (triager) {
-            const answer =
-              placement.status === 'unanswered'
-                ? undefined
-                : await settleTriage(
-                    host,
-                    runtime,
-                    recipient,
-                    {
-                      id: m.id,
-                      kind: 'message',
-                      fromLabel: task.input.fromLabel,
-                      text: m.text,
-                      whenBusy: task.input.steer ? 'steer' : 'followUp',
-                    },
-                    triager,
-                    ctx,
-                  )
-            await runtime.commit(async (tx) => {
-              const stored = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.find(
-                (item) => item.id === m.id,
-              )
-              if (stored && answer !== undefined) stored.answer = answer
-              return terminal
-            }, ctx)
-            return
+          inbox.start(async (call) => {
+            if (call.kind === 'value') inspect(call.value)
+          })
+          try {
+            inspect(inbox.value)
+            await awaitWithContext(placed, ctx)
+          } finally {
+            await inbox.stop()
           }
-          if (task.input.note) return
         }
+        const placement = await receipt.status(ctx)
+        await runtime.commit(async (tx) => {
+          const stored = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.find(
+            (item) => item.id === m.id,
+          )
+          // A recipient that answered with a message before this commit has moved it past delivered already.
+          if (stored?.state === 'sent') {
+            // A queued input withdrawn by a Stop or a cancel was stopped, not failed.
+            stored.state =
+              placement.status !== 'unanswered'
+                ? 'delivered'
+                : placement.reason === 'aborted'
+                  ? 'stopped'
+                  : 'failed'
+            if ('entry' in placement && placement.entry !== undefined)
+              stored.entry = placement.entry
+          }
+          if (task.input.note) return terminal
+          return undefined
+        }, ctx)
+        if (task.input.note) return
         const settled = await receipt.wait(ctx)
         await runtime.commit(async (tx) => {
           const answer =
@@ -326,35 +262,7 @@ export function delivery(host: ExtensionHost) {
         }
         if (m.to !== 'user') {
           await refresh(m.to, ctx)
-          // A reply to the primary agent is triaged like a message: a failure, a decision or an answer to its own
-          // question acts at once; another reply goes in as context and wakes it only when the summary model says act.
-          const triaged = m.to === (await primaryConversation(host, ctx))
-          let sure: Verdict | undefined
-          if (triaged)
-            // The task input keeps the message this replies to, so the log's bound never drops it.
-            sure =
-              declared(m.text, failed) ??
-              (needsDecision(task.input.message.text)
-                ? { verdict: 'act', reason: 'answers your question' }
-                : undefined)
-          const triager = triaged && !sure ? await triageModel(host, runtime, ctx) : undefined
-          if (triaged)
-            await runtime.commit(async (tx) => {
-              await recordTriage(
-                host,
-                tx,
-                m.id,
-                triager
-                  ? { verdict: 'assessing' }
-                  : (sure ?? {
-                      verdict: 'act',
-                      reason: 'no summary model to assess it',
-                    }),
-              )
-              return undefined
-            }, ctx)
-          // The harness handle, not the task runtime's: triage writes context first, which only it accepts.
-          const sender = await host.harness().conversation(m.to as ConversationId, ctx)
+          const sender = await runtime.conversation(m.to as ConversationId, ctx)
           // Entries never change, so a replayed reply attaches the same images.
           const images = m.images
             ? imagesOf(await host.harness().commit((tx) => tx.entry(m.images!.entry), ctx))
@@ -374,38 +282,16 @@ export function delivery(host: ExtensionHost) {
           }
           const body = `Reply from ${task.input.toLabel} to your message ${m.re}${stopped ? ' (stopped)' : failed ? ' (failed)' : ''}:\n${m.text}`
           const content = images.length ? [{ type: 'text' as const, text: body }, ...images] : body
-          const requestId = `board-reply:${m.id}`
-          if (sender && triager) {
-            await sender.submit(
-              {
-                type: 'write',
-                requestId,
-                entry: {
-                  ...entry,
-                  model: [{ role: 'user', content, timestamp: Date.now() }],
-                },
-              },
-              ctx,
-            )
-            await settleTriage(
-              host,
-              runtime,
-              sender,
-              {
-                id: m.id,
-                kind: 'reply',
-                fromLabel: task.input.toLabel,
-                text: m.text,
-                whenBusy: 'steer',
-              },
-              triager,
-              ctx,
-            )
-          } else if (sender)
-            await sender.submit(
-              { type: 'input', requestId, whenBusy: 'steer', entry, content },
-              ctx,
-            )
+          await sender?.submit(
+            {
+              type: 'input',
+              requestId: `board-reply:${m.id}`,
+              whenBusy: 'steer',
+              entry,
+              content,
+            },
+            ctx,
+          )
         }
         await runtime.commit(async (tx) => {
           const stored = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.find(

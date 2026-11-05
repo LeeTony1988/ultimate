@@ -154,14 +154,16 @@ export default function fastExtension(host: ExtensionHost) {
     hooks: [
       hook(GenerationTask, {
         // Before each request on an OpenAI model: the definition the conversation runs (children, automation runs
-        // and standing agents record it; a branch or the lander is labelled with it) decides, as it is now.
+        // and standing agents record it; a branch is labelled with it) decides, as it is now.
         beforeRequest: async (_request, api, context) => {
           const provider = await api.snapshot(ProviderDoc, api.conversationId, context)
           if (!provider) return
           const model = (await api.snapshot(AgentDoc, api.conversationId, context))?.model
+          const profile = await api.snapshot(Profile, api.conversationId, context)
+          // An agent made on the fly has no definition; its label may match one by chance.
           const name =
-            model && fastProvider(`${model.provider}/`)
-              ? ((await api.snapshot(Profile, api.conversationId, context))?.definition ??
+            model && fastProvider(`${model.provider}/`) && !profile?.adhoc
+              ? (profile?.definition ??
                 (await api.snapshot(host.metadata, api.conversationId, context))?.label)
               : undefined
           const fast =

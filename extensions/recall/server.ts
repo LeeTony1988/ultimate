@@ -64,18 +64,9 @@ const textOf = (entry: EntryRecord) =>
     )
     .join('\n')
 
-/**
- * The message a run's input brings, from the live context: the user's prompt, a branch's message, or for a triaged
- * report's wake the report it points at (placed just before as context). Undefined for any other input.
- */
-function messageOf(view: ContextView, input: EntryRecord) {
-  if (input.kind === 'pi.user' || input.kind === 'board.message') return input
-  if (input.kind !== 'board.wake') return undefined
-  const id = (input.data as { id?: unknown } | undefined)?.id
-  return view.entries.findLast(
-    (entry) => entry.kind === 'board.message' && (entry.data as { id?: unknown }).id === id,
-  )
-}
+/** The message a run's input brings: the user's prompt or a branch's message. Undefined for any other input. */
+const messageOf = (input: EntryRecord) =>
+  input.kind === 'pi.user' || input.kind === 'board.message' ? input : undefined
 
 /** The slugs recalled in the live context within the last `limit` tokens: a compacted recall has faded. */
 function recentlyRecalled(view: ContextView, limit: number) {
@@ -128,7 +119,7 @@ export default function recall(host: ExtensionHost) {
           // The live context: what compaction removed is gone from it, recalls included.
           const view = await (await host.harness().conversation(id, ctx))!.context(ctx)
           const input = view.entries.findLast(isInput)
-          const message = input && messageOf(view, input)
+          const message = input && messageOf(input)
           if (!input || !message) return undefined
           const state = await api.snapshot(Recall, id, ctx)
           if (state?.last !== undefined && state.last >= input.id) {

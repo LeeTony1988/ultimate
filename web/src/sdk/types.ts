@@ -18,9 +18,11 @@ export type SlotName =
   | 'composer.status'
   | 'composer.actions'
   | 'conversation.overlay'
+  | 'transcript.top'
   | 'transcript.start'
   | 'transcript.end'
   | 'overlay'
+  | 'shell.rail'
 
 /**
  * A slot component, optionally with an `order` (default 0; ties keep folder-name order). In the status line, `phone`
@@ -103,6 +105,17 @@ export type EntryRenderer = ComponentType<{
  * with the default link that asks before opening in a new tab. Return `core` for links you leave alone.
  */
 export type LinkRenderer = ComponentType<{ href: string; children: ReactNode; core: ReactNode }>
+
+/**
+ * A fenced code block in Markdown, by its language: `code`, `language`, `incomplete` while the fence still streams, and
+ * `core`, the rendering so far, starting with the highlighted block with its copy button.
+ */
+export type CodeBlockRenderer = ComponentType<{
+  code: string
+  language: string
+  incomplete: boolean
+  core: ReactNode
+}>
 
 export type InboxRenderer = ComponentType<{ item: InboxItem; core: ReactNode; cancel: ReactNode }>
 
@@ -187,11 +200,12 @@ export interface CompactContribution {
   /** Kinds of the root conversation's documents `when` and the tests read; the transcript follows them and passes them in. */
   docs?: readonly string[]
   /**
-   * Rows that are background to the conversation, such as traffic between agents: two or more in a row, with the runs of work
-   * between them, fold into one line that expands to them. A row is a stored entry with the visible calls it shows.
+   * Rows that are the conversation the reader follows, such as @ultimate's messages to the user: everything between two of
+   * them recedes into one faded stretch. A row is a stored entry with the visible calls it shows; `hidden` marks one that
+   * renders nothing, so a stretch of only those shows no line.
    */
-  quiet?: CompactQuietTest
-  /** The line a folded group of quiet rows shows; the first matching facet's wins, a step count otherwise. */
+  thread?: (row: CompactRow, docs: CompactDocs) => boolean | 'hidden'
+  /** The line a receded stretch shows; the first matching facet's wins, an update count otherwise. */
   summary?: ComponentType<CompactSummaryProps>
 }
 /** A compact transcript row: an entry, and the visible tool calls it shows when it shows only some of its blocks. */
@@ -199,32 +213,19 @@ export interface CompactRow {
   entry: EntryRecord
   calls: readonly ToolCall[]
 }
-/** Whether a row is background; `hidden` for one that renders nothing, which joins a group without counting. */
-export type CompactQuietTest = (row: CompactRow, docs: CompactDocs) => boolean | 'hidden'
 export interface CompactSummaryProps {
-  /** The group's rows that are no runs of work. */
+  /** The stretch's rows that are no runs of work. */
   rows: readonly CompactRow[]
   /** Steps in its runs of work. */
   steps: number
+  /** Every entry in it, those in its runs of work included. */
+  entries: readonly EntryRecord[]
   /** Whether the agent still works in it. */
   working: boolean
 }
 /** The root conversation's documents of the contributions' `docs` kinds, by kind, as `useDocOf(1, kind)` reads them. */
 export type CompactDocs = Readonly<Record<string, Readonly<JsonObject> | null | undefined>>
 export type CompactCallTest = (call: ToolCall, docs: CompactDocs) => boolean
-
-/**
- * What an empty conversation says it is, and its composer's placeholder, for matching conversations; the last matching
- * facet wins. The core's own wording applies otherwise.
- */
-export interface IntroContribution {
-  when: (conversation: ConversationSummary) => boolean
-  title: string
-  hint?: string
-  placeholder?: string
-  /** Shown under the empty state, such as a setup card the conversation needs first. */
-  card?: ComponentType
-}
 
 /**
  * A value one extension's browser code asks for and another provides: the web's extension point. The asking extension
@@ -267,6 +268,25 @@ export const MessageReference = definePoint<
   string | undefined
 >('ultimate.messageReference')
 
+/**
+ * Where an error card can hand its report for debugging (`subagents` provides it: into @ultimate's composer, unsent):
+ * `title` labels the card's button. No button while nothing provides it.
+ */
+export const ErrorReport = definePoint<
+  null,
+  { title: string; send: (report: string) => void } | undefined
+>('ultimate.errorReport')
+
+/**
+ * Where the composer puts a file that is not an inline image (`attachments` provides it): `upload` stores it on the
+ * host and resolves with its absolute path, which the prompt references; files up to `maxBytes` attach, and the host
+ * keeps them `keptMs`. Without a provider only images attach.
+ */
+export const FileUpload = definePoint<
+  null,
+  { upload: (file: File) => Promise<string>; maxBytes: number; keptMs: number } | undefined
+>('ultimate.fileUpload')
+
 /** What a facet provides for a point: `useValue` is a hook, run once per `<Provided>` with its input. */
 export interface Provision {
   point: string
@@ -293,6 +313,8 @@ export interface WebExtension {
   composer?: ComposerRenderer
   /** Renders links in Markdown; renderers compose in discovery order, each wrapping the one before it. */
   link?: LinkRenderer
+  /** Fenced code block renderers by language; they compose in discovery order, each wrapping the one before it. */
+  codeBlocks?: Readonly<Record<string, CodeBlockRenderer>>
   /** Contributions to the hover action row on stored messages, in discovery order. */
   messageActions?: readonly ComponentType<{ entry: EntryRecord }>[]
   /** Readouts on the hover action row on stored messages, before its time, in discovery order. */
@@ -303,8 +325,6 @@ export interface WebExtension {
   userBubble?: readonly ComponentType<{ entry: EntryRecord }>[]
   /** Shows matching conversations in compact mode; the visible tools of every matching facet combine. */
   compact?: CompactContribution
-  /** The empty state's wording and the composer's placeholder for matching conversations. */
-  intro?: IntroContribution
   /** Document renderers; a later facet wins a kind. */
   documents?: readonly DocumentContribution[]
   commands?: readonly CommandContribution[]
@@ -315,3 +335,15 @@ export interface WebExtension {
 export function defineWebExtension(extension: WebExtension): WebExtension {
   return extension
 }
+
+const marked = new WeakSet<object>()
+/**
+ * Marks an entry or tool renderer as one that asks the user to act or decide, such as a Fall asleep card: in a compact
+ * transcript its rows never fold away, and the stretch around them splits. Register it wrapped:
+ * `entries: { 'my.kind': attention(MyCard) }`. The card shows it is still open with `<Card attention>`.
+ */
+export function attention<T extends EntryRenderer | ToolRenderer>(renderer: T): T {
+  marked.add(renderer)
+  return renderer
+}
+export const needsAttention = (renderer: object | undefined) => !!renderer && marked.has(renderer)

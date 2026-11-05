@@ -31,7 +31,7 @@ const absent = (caller: string, verb: string, name: string) =>
 
 /**
  * Typed service handles and the catalogue behind `host.implement`, `host.need` and `host.want`. Providers live in the
- * extension host's provider table (shared with `host.provide`); this records who consumes what, per facet host.
+ * extension host's provider table; this records who consumes what, per facet host.
  */
 export function extensionApis(
   /** The installed provider of a service name. */

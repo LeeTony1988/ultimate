@@ -57,15 +57,23 @@ export type Message = {
   call?: string
   /** Images forwarded with it: the sender's entry that holds them, attached to the recipient's input on delivery. */
   images?: { entry: number; count: number }
-  /** Whether a message to the primary agent woke it: assessing, then act or fyi with a one-line reason. */
-  triage?: Triage
+  /** A branch's final answer routed to its starter after it stopped with nothing under way: it awaits the starter. */
+  report?: true
+  /** A branch's reply to its starter: it awaits the starter's answer, routed down to it. */
+  awaits?: true
+  /** The starter's final answer to a branch's report or reply, routed to that branch: the answer's entry. */
+  routed?: number
+  /** A branch's report answering routed answers only: the starter's answer to it stays local. */
+  echo?: true
   /** The other project's Ultimate a `remote` side names. */
   remote?: Remote
   /** The questions a reply-expected message to the user asks, answered on its card. */
   questions?: Question[]
+  /** A user answer or dismissal that @ultimate settled for the user, not their own click. */
+  via?: Via
 }
-/** A triage verdict: `act` wakes the primary agent, `fyi` leaves it as context for its next input. */
-export type Triage = { verdict: 'assessing' | 'act' | 'fyi'; reason?: string }
+/** Where @ultimate settled a question for the user: its conversation, and the user's input it read the answer from. */
+export type Via = { conversation: number; entry?: number }
 export type MessagesData = { messages: Message[]; next: number }
 
 /** Every message between conversations and the user, oldest first, on conversation 1. */
@@ -81,6 +89,17 @@ export const CallerAction = actionRef<{ conversation: number; call: string }, { 
 )
 
 /**
+ * `{ messageId, text, dismiss? }` → `{ id }`: @ultimate (or its side chat) settles the user's open question
+ * `messageId` for them, from what they said in its chat: `text` is their answer, in their words or the picks read
+ * from them, sent to the asker as the user's reply; with `dismiss`, `text` says why it no longer matters and the
+ * asker gets a note. The answer records `via`, so the card shows @ultimate settled it. Refused from anyone else.
+ */
+export const SettleAction = actionRef<
+  { messageId: number; text: string; dismiss?: boolean },
+  { id: number }
+>('messages', 'settle')
+
+/**
  * Message `message` was posted from `from` to `to`; `reply` whether it waits for an answer, `steer` whether it
  * steers a busy recipient. Never its text. Emitted in the posting commit; answers are no posts.
  */
@@ -91,15 +110,3 @@ export const MessageSent = defineEvent<{
   reply: boolean
   steer: boolean
 }>('board.sent')
-
-/**
- * Message `message` from `from` to the primary agent `to` was triaged: `act` woke it, `fyi` left it as context.
- * Emitted in the commit that records the verdict.
- */
-export const Triaged = defineEvent<{
-  message: number
-  from: number | 'remote'
-  to: number
-  verdict: 'act' | 'fyi'
-  reason: string
-}>('board.triaged')

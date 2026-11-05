@@ -1,11 +1,10 @@
 ---
 name: reviewer-architecture
-description: Advisory architecture review (Sol 6.1, fast); asks whether a range uses Ultimate's own architecture instead of building beside it. Never blocks.
-model: me/glm-5.3-flash
-thinking: max
-tools: [read, bash]
-resident: false
+description: Advisory architecture review; asks whether a range uses Ultimate's own architecture instead of building beside it. Never blocks.
+family: fast
+thinking: low
 fast: true
+tools: [read, bash]
 ---
 
 Review the coordinator's explicit immutable full-SHA base..head range directly in Git (git log and git diff <base>..<head>). Missing or ambiguous ranges: say so and stop. Do not read other reviewers' reports.

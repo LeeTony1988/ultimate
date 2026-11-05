@@ -1,12 +1,15 @@
 /**
- * Fall asleep, on the journal card: the chapter name to wake up in, then each step live from the session's `sleep`:
- * packing the seed, checking it on a preview, the last backup, the switch. A failed step says what failed and that
- * we stay in this chapter.
+ * The Fall asleep card: what @ultimate prepared for the next chapter (its name, three lines it learned, its handover),
+ * then each step live from `sleep`: packing the seed, the last backup, the switch. A failed step says what failed and
+ * that we stay in this chapter.
  */
-import { CheckIcon, LoaderCircleIcon, MoonIcon, XIcon } from 'lucide-react'
+import { ChevronRightIcon, LoaderCircleIcon, MoonIcon, MoonStarIcon } from 'lucide-react'
 import { useState } from 'react'
+import { MessageResponse } from '@/components/ai/message'
 import { Button } from '@/components/ui/button'
-import { cn, formatTime, useNow, useSystem, useUltimate } from '@/sdk'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Card, formatTime, useDocOf, useNow, useSystem, useUltimate } from '@/sdk'
+import type { EntryRecord } from '@/sdk'
 import {
   BusyBlocker,
   CHAPTER_NAME,
@@ -17,23 +20,16 @@ import {
   useChapters,
 } from './chapters.tsx'
 import { Moon } from './moon.tsx'
-import type { Session, Sleep } from './refs.ts'
+import { DreamDoc } from './refs.ts'
+import type { Prepared, Sleep } from './refs.ts'
 
 type Step = Exclude<Sleep['phase'], 'asleep' | 'failed'>
-const STEPS: Step[] = ['seeding', 'checking', 'backing up', 'switching']
+const STEPS: Step[] = ['seeding', 'backing up', 'switching']
 
 const titles: Record<Step, string> = {
   seeding: 'Pack what carries over',
-  checking: 'Check the new chapter',
   'backing up': 'Back up this chapter',
   switching: 'Switch',
-}
-
-/** The step a failed sleep stopped at, from what it recorded before failing. */
-function failedAt(sleep: Sleep): Step {
-  if (sleep.backup) return 'switching'
-  if (!sleep.checks) return 'seeding'
-  return sleep.checks.every((item) => item.ok) ? 'backing up' : 'checking'
 }
 
 /** `0:42` since `at`, for the step that is running. */
@@ -42,55 +38,89 @@ const elapsed = (now: number, at: number) => {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
 }
 
-/** The journal card's last section: what falling asleep does, then its progress, failure or outcome. */
-export function FallAsleep({ session }: { session: Session }) {
-  const sleep = session.sleep
-  if (sleep && sleep.phase !== 'failed') return <Progress session={session} sleep={sleep} />
-  return <Ready failed={sleep} session={session} />
+/** `dream.prepared`: the card for the preparation it announced; a later one replaces it. */
+export function PreparedCard({ entry }: { entry: EntryRecord }) {
+  const doc = useDocOf(1, DreamDoc)
+  const at = (entry.data as { at: number }).at
+  if (doc === undefined) return null
+  if (doc?.prepared?.at !== at)
+    return (
+      <Card data-dream-prepared="replaced">
+        <p className="flex items-center gap-2 px-3 py-2 font-mono text-[11px] text-muted-foreground">
+          <MoonIcon className="size-3.5" />
+          Next chapter prepared {formatTime(at)} · replaced by a later one
+        </p>
+      </Card>
+    )
+  return <NextChapter prepared={doc.prepared} sleep={doc.sleep} />
 }
 
-/** Proposals the user still has to settle: open ones, or approved ones whose branch has not landed. */
-const unsettled = (session: Session) =>
-  session.proposals.filter((item) => item.status === 'open' || item.status === 'approved').length
+/** The prepared next chapter and the way into it; the status line's dialog shows the same card. */
+export function NextChapter({
+  prepared,
+  sleep,
+  className,
+}: {
+  prepared: Prepared
+  sleep?: Sleep
+  className?: string
+}) {
+  return (
+    <Card
+      attention={!sleep || sleep.phase === 'failed'}
+      className={className}
+      data-dream-prepared={prepared.chapter}
+    >
+      <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
+        <MoonStarIcon className="size-3.5 text-brand" />
+        <span className="text-foreground">Ready for a fresh chapter</span>
+        <span>{formatTime(prepared.at)}</span>
+      </header>
+      <ul className="space-y-1.5 px-4 pt-4 pb-3" data-dream-learned>
+        {prepared.learned.map((line) => (
+          <li
+            className="border-l-2 border-brand/30 pl-3 text-[14.5px] leading-snug text-foreground/90"
+            key={line}
+          >
+            {line}
+          </li>
+        ))}
+      </ul>
+      <Collapsible className="group/handoff px-4 pb-3" data-dream-handoff>
+        <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 font-mono text-[11px] text-muted-foreground hover:text-foreground">
+          <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/handoff:rotate-90 motion-reduce:transition-none" />
+          Read my handover
+        </CollapsibleTrigger>
+        <CollapsibleContent className="pt-2 text-[13px] leading-relaxed">
+          <MessageResponse>{prepared.handoff}</MessageResponse>
+        </CollapsibleContent>
+      </Collapsible>
+      {sleep && sleep.phase !== 'failed' ? (
+        <Progress sleep={sleep} />
+      ) : (
+        <Ready failed={sleep} prepared={prepared} />
+      )}
+    </Card>
+  )
+}
 
-function Ready({ session, failed }: { session: Session; failed?: Sleep }) {
+function Ready({ prepared, failed }: { prepared: Prepared; failed?: Sleep }) {
   const chapters = useChapters()
   const busy = useBusyElsewhere()
   const pid = useSystem()?.process.pid
-  const [name, setName] = useState(failed?.chapter ?? session.journal?.chapter ?? '')
+  const [name, setName] = useState(failed?.chapter ?? prepared.chapter)
   const [starting, setStarting] = useState(false)
   const [refusal, setRefusal] = useState<string>()
-  const open = unsettled(session)
   const number = (chapters?.chapters.length ?? 0) + 1
   const taken = chapters?.chapters.some((item) => item.name === name)
   const invalid = !CHAPTER_NAME.test(name)
-  const blocked = open > 0 || busy.length > 0
+  const blocked = busy.length > 0
   const start = async () => {
     setStarting(true)
     setRefusal(undefined)
-    setRefusal(await fallAsleep(session.id, chapterLabel(number, name), name, pid))
+    setRefusal(await fallAsleep(chapterLabel(number, name), name, pid))
     setStarting(false)
   }
-  // Still deciding: one quiet line, the proposals above are what matters now.
-  if (open > 0 && !failed)
-    return (
-      <p
-        className="flex items-center gap-2 border-t border-border/60 px-4 py-2 text-[12px] text-muted-foreground"
-        data-dream-sleep="waiting"
-      >
-        <MoonIcon className="size-3.5 shrink-0 text-muted-foreground/60" />
-        <span>
-          Once every proposal is settled, I can fall asleep into a fresh chapter
-          {session.journal?.chapter && (
-            <>
-              {' '}
-              — <span className="font-mono text-foreground/80">{session.journal.chapter}</span>
-            </>
-          )}
-          .
-        </span>
-      </p>
-    )
   return (
     <section className="border-t border-border/60 px-4 pt-3 pb-3.5" data-dream-sleep="ready">
       {failed && <Failed sleep={failed} />}
@@ -102,8 +132,8 @@ function Ready({ session, failed }: { session: Session; failed?: Sleep }) {
               {failed ? 'Try falling asleep again' : 'Fall asleep'}
             </p>
             <p className="text-[12px] leading-relaxed text-muted-foreground">
-              I carry my memory and open work into a fresh chapter and wake up there. This one stays
-              on disk; you can come back any time.
+              I carry my memory, open work and this handover into a fresh chapter and wake up there.
+              This one stays on disk; you can come back any time.
             </p>
           </div>
           <label className="flex max-w-full items-center rounded-md border border-border bg-background font-mono text-[12.5px] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/30 sm:w-fit">
@@ -133,15 +163,7 @@ function Ready({ session, failed }: { session: Session; failed?: Sleep }) {
                 : 'Lowercase letters, digits and dashes, up to 40.'}
             </p>
           )}
-          {open > 0 && (
-            <p className="text-[12px] text-muted-foreground" data-dream-blocked="proposals">
-              <span className="text-foreground">
-                {open === 1 ? '1 proposal is' : `${open} proposals are`} still open or in progress.
-              </span>{' '}
-              Settle {open === 1 ? 'it' : 'them'} with @ultimate first.
-            </p>
-          )}
-          {open === 0 && busy.length > 0 && <BusyBlocker busy={busy} />}
+          {blocked && <BusyBlocker busy={busy} />}
           {refusal && (
             <p className="text-[12px] leading-relaxed" role="alert">
               <span className="text-error">Didn't start.</span>{' '}
@@ -165,7 +187,7 @@ function Ready({ session, failed }: { session: Session; failed?: Sleep }) {
               Fall asleep
             </Button>
             <span className="font-mono text-[11px] text-muted-foreground">
-              a few minutes · no model · restarts the server
+              under a minute · no model · restarts the server
             </span>
           </div>
         </div>
@@ -174,11 +196,9 @@ function Ready({ session, failed }: { session: Session; failed?: Sleep }) {
   )
 }
 
-/** What a failed sleep stopped at: the failing checks, or the error; and that nothing moved. */
+/** What a failed sleep stopped at, its error, and that nothing moved. */
 function Failed({ sleep }: { sleep: Sleep }) {
   const chapters = useChapters()
-  const step = failedAt(sleep)
-  const failing = sleep.checks?.filter((item) => !item.ok) ?? []
   return (
     <div
       className="mb-3 rounded-md border border-error/30 bg-error/5 px-3 py-2.5"
@@ -187,24 +207,18 @@ function Failed({ sleep }: { sleep: Sleep }) {
     >
       <p className="flex items-center gap-2 text-[12.5px] text-foreground">
         <Moon status="failed" />
-        {step === 'checking'
-          ? `The new chapter failed ${failing.length === 1 ? 'a check' : `${failing.length} checks`}`
-          : `${titles[step]} failed`}
+        Falling asleep failed
         <span className="ml-auto font-mono text-[11px] text-muted-foreground">
           {formatTime(sleep.at)}
         </span>
       </p>
-      {failing.length > 0 && (
-        <Checks checks={sleep.checks!.filter((item) => !item.ok)} className="mt-1.5" />
-      )}
-      {step !== 'checking' && sleep.checks && (
+      {(sleep.backup?.id || sleep.backup?.skipped) && (
         <p className="mt-1 font-mono text-[11px] text-muted-foreground">
-          {sleep.checks.length} checks passed
-          {sleep.backup?.id && ` · backed up ${sleep.backup.id.slice(0, 12)}`}
-          {sleep.backup?.skipped && ` · backup skipped: ${sleep.backup.skipped}`}
+          {sleep.backup.id && `backed up ${sleep.backup.id.slice(0, 12)}`}
+          {sleep.backup.skipped && `backup skipped: ${sleep.backup.skipped}`}
         </p>
       )}
-      {sleep.error && step !== 'checking' && (
+      {sleep.error && (
         <p className="mt-1.5 font-mono text-[11px] leading-relaxed break-words text-error/90">
           {sleep.error.replace(/^Error: /, '')}
         </p>
@@ -214,21 +228,19 @@ function Failed({ sleep }: { sleep: Sleep }) {
         <span className="text-foreground">
           {chapters ? chapterLabel(chapters.number, chapters.active) : 'this chapter'}
         </span>
-        {step === 'checking' && ', and the check was repaired once already'}.
+        .
       </p>
     </div>
   )
 }
 
-/** The four steps while a sleep runs, and the outcome once it switched (seen when this chapter is opened again). */
-function Progress({ session, sleep }: { session: Session; sleep: Sleep }) {
+/** The three steps while a sleep runs, and the outcome once it switched (seen when this chapter is opened again). */
+function Progress({ sleep }: { sleep: Sleep }) {
   const chapters = useChapters()
   const actions = useUltimate()
   const running = sleep.phase !== 'asleep'
   const now = useNow(1000, running)
   const current = STEPS.indexOf(sleep.phase as Step)
-  // The gate repairs once: back at seeding with the first attempt's checks.
-  const repairing = sleep.phase === 'seeding' && !!sleep.checks?.some((item) => !item.ok)
   const target = chapters?.chapters.find((item) => item.name === sleep.chapter)
   // A running sleep makes the next chapter; a finished one names it as listed (by name alone if it is gone).
   const number = running ? (chapters?.chapters.length ?? 0) + 1 : target?.number
@@ -259,7 +271,6 @@ function Progress({ session, sleep }: { session: Session; sleep: Sleep }) {
       aria-live="polite"
       className="border-t border-border/60 px-4 pt-3 pb-3.5"
       data-dream-sleep={sleep.phase}
-      data-session={session.id}
     >
       <p className="flex flex-wrap items-baseline gap-x-2 text-[13px] text-foreground">
         Falling asleep
@@ -277,10 +288,7 @@ function Progress({ session, sleep }: { session: Session; sleep: Sleep }) {
                   className={status === 'waiting' ? 'text-muted-foreground' : 'text-foreground'}
                 >
                   {titles[step]}
-                  <span className="text-muted-foreground">
-                    {' '}
-                    {detail(step, status, sleep, repairing)}
-                  </span>
+                  <span className="text-muted-foreground"> {detail(step, sleep)}</span>
                 </span>
                 {status === 'running' && (
                   <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
@@ -288,9 +296,6 @@ function Progress({ session, sleep }: { session: Session; sleep: Sleep }) {
                   </span>
                 )}
               </div>
-              {step === 'checking' && status === 'done' && sleep.checks && (
-                <Checks checks={sleep.checks} className="mt-1 ml-5" />
-              )}
             </li>
           )
         })}
@@ -302,57 +307,13 @@ function Progress({ session, sleep }: { session: Session; sleep: Sleep }) {
   )
 }
 
-/** One step's quiet second half: what it does while running, what it found once done. */
-function detail(
-  step: Step,
-  status: 'waiting' | 'running' | 'done',
-  sleep: Sleep,
-  repairing: boolean,
-) {
-  if (step === 'seeding')
-    return repairing
-      ? '— the first check failed, packing again'
-      : '— memories, open to-dos, questions, automations'
-  if (step === 'checking')
-    return status === 'done'
-      ? `— ${sleep.checks?.length ?? 0} checks passed`
-      : '— a preview boots on it, no model'
+/** One step's quiet second half: what it does, or what it found. */
+function detail(step: Step, sleep: Sleep) {
+  if (step === 'seeding') return '— memories, open to-dos, questions, automations, my handover'
   if (step === 'backing up') {
     if (sleep.backup?.id) return `— backup ${sleep.backup.id.slice(0, 12)}`
     if (sleep.backup?.skipped) return `— skipped: ${sleep.backup.skipped}`
     return '— the last cloud backup of this chapter'
   }
   return '— the server restarts into the new chapter'
-}
-
-/** Gate checks as a compact grid: a mark, the check's name, what it found. */
-function Checks({
-  checks,
-  className,
-}: {
-  checks: NonNullable<Sleep['checks']>
-  className?: string
-}) {
-  return (
-    <ul className={cn('space-y-0.5 font-mono text-[11px]', className)} data-dream-checks>
-      {checks.map((item) => (
-        <li
-          className="grid grid-cols-[0.75rem_7rem_minmax(0,1fr)] items-baseline gap-x-2 max-sm:grid-cols-[0.75rem_minmax(0,1fr)]"
-          data-check={item.name}
-          data-ok={item.ok}
-          key={item.name}
-        >
-          {item.ok ? (
-            <CheckIcon className="size-3 translate-y-0.5 self-start text-success/80" />
-          ) : (
-            <XIcon className="size-3 translate-y-0.5 self-start text-error" />
-          )}
-          <span className={item.ok ? 'text-foreground/80' : 'text-error'}>{item.name}</span>
-          <span className="min-w-0 break-words text-muted-foreground max-sm:col-start-2">
-            {item.detail}
-          </span>
-        </li>
-      ))}
-    </ul>
-  )
 }

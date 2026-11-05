@@ -35,7 +35,6 @@ export type ChapterEntry = {
   from: { name: string; number: number }
   number: number
   name: string
-  session: number
   learned?: string[]
   carried?: Seed['counts']
 }
@@ -70,7 +69,6 @@ export function MorningCard({ entry }: { entry: EntryRecord }) {
         <SunriseIcon className="size-3.5 text-brand" />
         <span className="text-foreground">{chapterLabel(data.number, data.name)}</span>
         <span>{at === undefined ? 'woke up' : `woke up ${formatTime(at)}`}</span>
-        <span className="ml-auto">dream session {data.session}</span>
       </header>
       <div className="space-y-3 px-4 pt-3.5 pb-3">
         <p className="text-[13px] leading-relaxed text-muted-foreground">
@@ -82,7 +80,7 @@ export function MorningCard({ entry }: { entry: EntryRecord }) {
           <ul className="space-y-1">
             {data.learned.map((line) => (
               <li
-                className="border-l-2 border-brand/30 pl-3 text-[13.5px] leading-snug text-foreground/85 italic"
+                className="border-l-2 border-brand/30 pl-3 text-[13.5px] leading-snug text-foreground/85"
                 key={line}
               >
                 {line}

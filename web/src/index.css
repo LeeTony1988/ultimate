@@ -169,6 +169,11 @@
   }
 }
 
+/* A section or group heading in the chrome (panels, sidebar sections, picker groups): quiet sentence-case mono. */
+@utility section-label {
+  @apply font-mono text-[11px] font-normal tracking-normal text-muted-foreground normal-case;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -269,7 +274,7 @@
     @apply py-0.5;
   }
   & blockquote {
-    @apply border-l-2 border-border pl-3 text-muted-foreground italic;
+    @apply border-l-2 border-border pl-3 text-muted-foreground;
   }
   & hr {
     @apply my-5 border-border/70;

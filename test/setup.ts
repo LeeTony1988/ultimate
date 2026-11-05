@@ -1,10 +1,11 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll } from 'vitest'
 import { testTempPrefix } from './sweep-temp.ts'
 
-const testTmpdir = mkdtempSync(join(tmpdir(), `${testTempPrefix}${process.pid}-`))
+// macOS's TMPDIR is a symlink (/var -> /private/var); git and the server report the resolved path.
+const testTmpdir = realpathSync(mkdtempSync(join(tmpdir(), `${testTempPrefix}${process.pid}-`)))
 const agentDir = mkdtempSync(join(testTmpdir, 'ultimate-test-pi-'))
 process.env.PI_CODING_AGENT_DIR = agentDir
 // Every boot would otherwise run the machine's real `claude auth status` (about 170 ms of CPU each); tests that need

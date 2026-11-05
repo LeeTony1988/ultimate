@@ -78,6 +78,7 @@ function ModeSwitch({ on, onToggle }: { on: boolean; onToggle: () => void }) {
     <button
       aria-label={`Composer sends to ${on ? 'a new side chat' : '@ultimate'} · Tab switches`}
       aria-pressed={on}
+      data-ui="side-chat-switch"
       className="relative flex h-5 cursor-pointer items-center rounded-full bg-muted/60 p-0.5 font-mono text-[10.5px] outline-none focus-visible:ring-1 focus-visible:ring-ring"
       onClick={onToggle}
       type="button"
@@ -144,7 +145,10 @@ function SideComposer({ core, dock }: { core: ReactNode; dock?: boolean }) {
       {/* Covered by a side chat in front, main's composer and its controls take no focus, typing or clicks. */}
       <div data-main-composer inert={!!shown}>
         <div className="mx-auto flex w-full max-w-[46rem] items-center justify-between gap-2 px-3 pb-1.5 sm:px-6">
-          <div className="flex min-w-0 items-center gap-3 font-mono text-[11px] text-muted-foreground/70">
+          <div
+            className="flex min-w-0 items-center gap-3 font-mono text-[11px] text-muted-foreground/70"
+            data-ui="side-chat-hint"
+          >
             {parked.map((item) => (
               <button
                 className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-sm text-muted-foreground hover:text-foreground"

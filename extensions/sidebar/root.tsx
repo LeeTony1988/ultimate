@@ -7,7 +7,13 @@ import { MessagesDoc, conversationState, emptyMessages } from '../messages/ui.ts
 import { StandingDoc } from '../subagents/ui.tsx'
 import { CommitCount, ProgressAction, Review, useWorkspaceIndex } from '../workspaces/ui.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
-import { AgentMark, ConversationPhase, FeatureTag, useOverview } from '../conversations/ui.tsx'
+import {
+  AgentMark,
+  ConversationPhase,
+  FeatureTag,
+  useConcludedSince,
+  useOverview,
+} from '../conversations/ui.tsx'
 import type { Landing } from './landings.ts'
 import { RowMenu, saveTitle } from './rows.tsx'
 import { Section } from './section.tsx'
@@ -50,6 +56,7 @@ function useBranchState(
   const log = useDocOf(1, MessagesDoc) ?? emptyMessages
   const runState = useOverview()[conversation.id]?.runState
   const primary = useDocOf(1, StandingDoc)?.ultimate
+  const concludedSince = useConcludedSince()(conversation.id)
   const queued = index.queue.find((item) => item.conversationId === conversation.id)
   if (queued?.state === 'landing') return { label: 'landing', tone: 'success' } as const
   if (queued) return { label: 'submitted', tone: 'success' } as const
@@ -58,13 +65,16 @@ function useBranchState(
   // The sidebar's one conversation state; `working` also counts its subagents' runs.
   const state = working
     ? 'working'
-    : conversationState({ id: conversation.id, kind: 'other', runState, primary }, log)
+    : conversationState(
+        { id: conversation.id, kind: 'other', runState, primary, concludedSince },
+        log,
+      )
   if (state === 'working')
     return {
       label: phase && !phase.waiting ? phase.word : 'working',
       tone: 'brand',
     } as const
-  // A branch's decisions reach you through @ultimate: an open question it asked (an approval, a choice).
+  if (state === 'waits') return { label: 'waits on you', tone: 'waiting' } as const
   if (state === 'awaiting') return { label: 'awaiting @ultimate', tone: 'waiting' } as const
   if (state === 'failed') return { label: 'failed', tone: 'failed' } as const
   return { label: 'idle', tone: 'quiet' } as const
@@ -78,6 +88,16 @@ const tones = {
   paused: 'text-warning',
   quiet: 'text-muted-foreground/70',
 }
+
+/** The `data-status` hook of a row's dot, for themes. */
+const statusOf = {
+  failed: 'failed',
+  success: 'done',
+  brand: 'working',
+  waiting: 'waiting',
+  paused: 'paused',
+  quiet: 'idle',
+} as const
 
 type FlightProps = {
   conversation: ConversationSummary
@@ -191,6 +211,7 @@ function PhasedFlightRow({
                           ? 'bg-error'
                           : 'bg-muted-foreground/40',
                 )}
+                data-status={statusOf[state.tone]}
               />
               <span
                 className={cn(

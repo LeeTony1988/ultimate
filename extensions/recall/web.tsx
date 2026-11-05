@@ -1,8 +1,7 @@
-import { BrainIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { cn, defineWebExtension, useDoc, useTranscript } from '@/sdk'
 import type { EntryRecord } from '@/sdk'
-import { useOpenMemory } from '../lineage/ui.tsx'
+import { MemoryChip } from '../lineage/ui.tsx'
 import { RecallDoc } from './refs.ts'
 import { RECALL_ENTRY } from './types.ts'
 import type { Recalled } from './types.ts'
@@ -56,7 +55,6 @@ function RecallBubble({ entry }: { entry: EntryRecord }) {
 }
 
 function Chips({ recalled, animate }: { recalled: Recalled; animate: boolean }) {
-  const openMemory = useOpenMemory()
   const row = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!animate) return
@@ -82,17 +80,12 @@ function Chips({ recalled, animate }: { recalled: Recalled; animate: boolean }) 
       ref={row}
     >
       {recalled.memories.map(({ slug, line }) => (
-        <button
-          className="inline-flex h-5 max-w-full cursor-pointer items-center gap-1 rounded-full border border-border/70 bg-background px-1.5 font-mono text-[10px] text-muted-foreground outline-none hover:border-brand/50 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+        <MemoryChip
           data-recall-memory={slug}
           key={slug}
-          onClick={() => openMemory(slug)}
+          slug={slug}
           title={`Recalled from memory: ${line}`}
-          type="button"
-        >
-          <BrainIcon className="size-3 shrink-0 text-brand" />
-          <span className="truncate">{slug}</span>
-        </button>
+        />
       ))}
     </div>
   )

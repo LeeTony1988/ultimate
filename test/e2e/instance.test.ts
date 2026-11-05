@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { cp, readFile, stat, writeFile } from 'node:fs/promises'
+import { cp, readFile, stat, symlink, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import {
   fauxAssistantMessage,
@@ -24,7 +24,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ConversationsService } from '../../extensions/conversations/api.ts'
 import { setAutomaticSummaries } from '../../extensions/conversations/summary.ts'
 import { setStanding } from '../../extensions/conversations/server.ts'
-import { apis, attach, linkDirectory, post, temp, removeTemp, until } from '../helpers.ts'
+import { apis, attach, post, temp, removeTemp, until } from '../helpers.ts'
 import { scriptedModel } from './scripted-model.ts'
 
 type Preview = { id: string; url: string; home: string; pid: number }
@@ -50,8 +50,6 @@ async function fixture({ foreign = false } = {}) {
   const root = await temp('ultimate-preview-')
   // Child hosts must sweep only this fixture, never the machine's real temporary directory.
   vi.stubEnv('TMPDIR', root)
-  vi.stubEnv('TMP', root)
-  vi.stubEnv('TEMP', root)
   const checkout = resolve('.')
   const source = join(root, 'source')
   await git(root, 'clone', '--no-hardlinks', checkout, source)
@@ -59,19 +57,11 @@ async function fixture({ foreign = false } = {}) {
   // The preview runs the clone's committed code: give it this checkout's preview and landing code.
   for (const path of ['extensions/instance', 'extensions/workspaces', 'lib'])
     await cp(join(checkout, path), join(source, path), { recursive: true })
-  await linkDirectory(join(checkout, 'node_modules'), join(source, 'node_modules'))
+  await symlink(join(checkout, 'node_modules'), join(source, 'node_modules'))
   await writeFile(
     join(source, '.ultimate/settings.json'),
     JSON.stringify({
-      isolates: {
-        worktree: {
-          setup: [
-            process.platform === 'win32'
-              ? `node -e "require('node:fs').symlinkSync(process.env.ULTIMATE_SOURCE + '/node_modules', 'node_modules', 'junction')"`
-              : `ln -s '${join(checkout, 'node_modules')}' node_modules`,
-          ],
-        },
-      },
+      isolates: { worktree: { setup: [`ln -s '${join(checkout, 'node_modules')}' node_modules`] } },
     }),
   )
   await writeFile(
@@ -430,7 +420,9 @@ it('lands a preview submission on its own branch, never the previewed branch or 
     expect(await git(f.source, 'rev-parse', target)).toBe(landed)
     expect(await git(f.source, 'rev-parse', main.workspace.branch)).toBe(before)
     expect(await git(remote, 'for-each-ref')).toBe('')
-    await f.run({ action: 'stop', id: preview.id })
+    expect(await f.run({ action: 'stop', id: preview.id })).toBe(
+      JSON.stringify({ stopped: preview.id }),
+    )
     expect(await git(f.source, 'branch', '--list', target)).toBe('')
   } finally {
     await model.close()

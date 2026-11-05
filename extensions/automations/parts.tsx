@@ -179,6 +179,9 @@ export function Dot({ look, className }: { look: Look; className?: string }) {
         busy && 'animate-pulse-dot',
         className,
       )}
+      data-status={
+        busy ? 'working' : look === 'failed' || look === 'paused' || look === 'done' ? look : 'idle'
+      }
       role="img"
     />
   )
@@ -372,7 +375,7 @@ export function useOpenAutomation() {
   }
 }
 
-/** A small uppercase heading with a meta value on the right, as in the Agents and Extensions panels. */
+/** A small section heading with a meta value on the right, as in the Agents and Extensions panels. */
 export function Heading({
   children,
   meta,
@@ -383,17 +386,10 @@ export function Heading({
   className?: string
 }) {
   return (
-    <div
-      className={cn(
-        'flex items-center gap-2 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase',
-        className,
-      )}
-    >
+    <div className={cn('flex items-center gap-2 section-label', className)}>
       {children}
       {meta !== undefined && (
-        <span className="ml-auto truncate pl-2 tracking-normal normal-case text-muted-foreground/70">
-          {meta}
-        </span>
+        <span className="ml-auto truncate pl-2 text-muted-foreground/70">{meta}</span>
       )}
     </div>
   )

@@ -1,4 +1,5 @@
-// `window.ultimate` on pages the browser tool drives: send input and wait on Ultimate's state instead of on time.
+// `window.ultimate` on pages the browser tool drives: send input, set up state through the page's SDK `api` and wait on
+// Ultimate's state instead of on time.
 import type { EventRecord } from '../../../shared/events.ts'
 import { EVENT_FEED } from '../../../shared/events.ts'
 import type { Api } from './api.ts'
@@ -12,7 +13,7 @@ export type Condition =
   | { entry: string }
   | { event: string; where?: Record<string, unknown> }
 export interface UntilOptions {
-  /** Defaults to the shown conversation. */
+  /** Defaults to the last sent-to conversation, else the shown one. */
   conversation?: number
   timeoutMs?: number
 }
@@ -25,9 +26,20 @@ interface Sent {
   ran: boolean
 }
 
+/** Where a page keeps its sent records, so a reload mid-wait (new web bundle, server swap) still waits for the sent turn. */
+const SENT_KEY = 'ultimate.sent'
+
 export function createTestHook(store: Store, api: Api) {
-  const sent = new Map<number, Sent>()
-  let lastSent: Sent | undefined
+  const saved = JSON.parse(sessionStorage.getItem(SENT_KEY) ?? '{"sent":[]}') as {
+    sent: [number, Sent][]
+    last?: number
+  }
+  const sent = new Map<number, Sent>(saved.sent)
+  let lastSent = saved.last === undefined ? undefined : sent.get(saved.last)
+  const save = (last = saved.last) => {
+    saved.last = last
+    sessionStorage.setItem(SENT_KEY, JSON.stringify({ sent: [...sent], last }))
+  }
   // The root's event feed is what `{event}` reads; watched for the page's lifetime.
   store.watchDocOf(ROOT, EVENT_FEED)
   const feed = (state: State) =>
@@ -41,7 +53,10 @@ export function createTestHook(store: Store, api: Api) {
     const state = store.getState()
     for (const [id, record] of sent) {
       const item = summary(state, id)
-      if (item?.busy || (item?.answerAt ?? 0) >= record.at) record.ran = true
+      if (!record.ran && (item?.busy || (item?.answerAt ?? 0) >= record.at)) {
+        record.ran = true
+        save()
+      }
     }
   })
 
@@ -85,6 +100,11 @@ export function createTestHook(store: Store, api: Api) {
   }
 
   return {
+    /**
+     * The page's SDK client, for setting up state without clicking through the UI: `api.configure({model}, id)`,
+     * `api.abort(id)`, `api.compact(undefined, id)`, `api.action({extension: 'pause', name: 'play'}, null)`.
+     */
+    api,
     /** The shown conversation, every conversation's busy flag and the shown view's entry kinds. */
     async state() {
       await ready()
@@ -109,6 +129,7 @@ export function createTestHook(store: Store, api: Api) {
       }
       sent.set(id, record)
       lastSent = record
+      save(id)
       const { submissionId } = await api.submit(text, undefined, id)
       return { conversation: id, submissionId }
     },
@@ -121,7 +142,8 @@ export function createTestHook(store: Store, api: Api) {
       const started = Date.now()
       await ready(timeoutMs)
       const left = () => Math.max(0, timeoutMs - (Date.now() - started))
-      const id = options.conversation ?? shown(store.getState())
+      // The last send's conversation: a reloaded page may show another one.
+      const id = options.conversation ?? saved.last ?? shown(store.getState())
       if (id !== shown(store.getState()) && typeof condition === 'object' && 'entry' in condition)
         store.watchConversation(id)
       const record = options.conversation === undefined ? lastSent : sent.get(id)

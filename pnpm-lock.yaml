@@ -9,8 +9,8 @@ overrides:
 
 patchedDependencies:
   '@earendil-works/chord@1.5.0': 0a84e0316a4ce02b090b6c94540148771592890bc6f0869d75243fa34e5d3f25
-  '@earendil-works/pi-claude-code@0.1.0': 9955edbbebf2be346da8fae3a60b9fba5dd82bbf86541cd0f287b7d64b9246bb
-  '@earendil-works/pi-durable@1.5.0': f4c1a27707ad03b7857cd406ed89b22eb084684333bc81905beeed1830b864c4
+  '@earendil-works/pi-claude-code@0.1.0': d74c68802285b391ba99fe2c9fcf814d13070504f9dabb867ebcdaeb13991f34
+  '@earendil-works/pi-durable@1.5.0': 09e491562a6693b902069a1c3eaf2d3ffdd88880665315653e0010b9d75ba90a
 
 importers:
 
@@ -24,7 +24,7 @@ importers:
         version: 1.5.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2)
       '@earendil-works/pi-claude-code':
         specifier: github:earendil-works/pi-claude-code#70abb65186592ca788b29b3db22c3160d629c41f
-        version: https://codeload.github.com/earendil-works/pi-claude-code/tar.gz/70abb65186592ca788b29b3db22c3160d629c41f(patch_hash=9955edbbebf2be346da8fae3a60b9fba5dd82bbf86541cd0f287b7d64b9246bb)(@earendil-works/pi-ai@1.5.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2))(@earendil-works/pi-coding-agent@1.5.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4))
+        version: https://codeload.github.com/earendil-works/pi-claude-code/tar.gz/70abb65186592ca788b29b3db22c3160d629c41f(patch_hash=d74c68802285b391ba99fe2c9fcf814d13070504f9dabb867ebcdaeb13991f34)(@earendil-works/pi-ai@1.5.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2))(@earendil-works/pi-coding-agent@1.5.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4))
       '@earendil-works/pi-codemode':
         specifier: 1.5.0
         version: 1.5.0
@@ -33,7 +33,7 @@ importers:
         version: 1.5.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)
       '@earendil-works/pi-durable':
         specifier: 1.5.0
-        version: 1.5.0(patch_hash=f4c1a27707ad03b7857cd406ed89b22eb084684333bc81905beeed1830b864c4)(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(undici@8.10.2)
+        version: 1.5.0(patch_hash=09e491562a6693b902069a1c3eaf2d3ffdd88880665315653e0010b9d75ba90a)(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(undici@8.10.2)
       '@earendil-works/pi-mcp':
         specifier: 1.5.0
         version: 1.5.0
@@ -43,6 +43,9 @@ importers:
       '@fontsource-variable/inter':
         specifier: 5.3.0
         version: 5.3.0
+      '@jridgewell/trace-mapping':
+        specifier: 0.3.31
+        version: 0.3.31
       '@pierre/diffs':
         specifier: 1.5.2
         version: 1.5.2(@shikijs/themes@4.4.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -67,6 +70,9 @@ importers:
       cn:
         specifier: 0.4.0
         version: 0.4.0
+      diff:
+        specifier: 9.0.0
+        version: 9.0.0
       log-update:
         specifier: 8.0.0
         version: 8.0.0
@@ -94,6 +100,9 @@ importers:
       tailwindcss:
         specifier: 4.3.3
         version: 4.3.3
+      tone:
+        specifier: 15.1.22
+        version: 15.1.22
       unbash:
         specifier: 5.1.0
         version: 5.1.0
@@ -1678,9 +1687,6 @@ packages:
   '@shikijs/vscode-textmate@10.0.2':
     resolution: {integrity: sha512-83yeghZ2xxin3Nj8z1NMd/NCuca+gsYXswywDy5bHvwlWL8tpTQmzGeUuHd9FC3E/SBEMvzJRwWEOz5gGes9Qg==}
 
-  '@shikijs/vscode-textmate@10.1.0':
-    resolution: {integrity: sha512-cVBuhDQjBZaNMTwBquYfPydrUP+E3hE6oYGasx8h6ZrODIM7/r+gxLDXdd66oszbrggZHEntdE6j+5gYIVyMWQ==}
-
   '@silvia-odwyer/photon-node@0.3.4':
     resolution: {integrity: sha512-bnly4BKB3KDTFxrUIcgCLbaeVVS8lrAkri1pEzskpmxu9MdfGQTy8b8EgcD83ywD3RPMsIulY8xJH5Awa+t9fA==}
 
@@ -2142,6 +2148,10 @@ packages:
   assertion-error@2.0.1:
     resolution: {integrity: sha512-Izi8RQcffqCeNVgFigKli1ssklIbpHnCYc6AknXGYoB6grJqyeby7jv12JUQgmTAnIDnbck1uxksT4dzN3PWBA==}
     engines: {node: '>=12'}
+
+  automation-events@7.1.19:
+    resolution: {integrity: sha512-cD+TLhJTI0q4AI3ktd353lrGZiVa9AchowSDzQzzGjSoYe22js4vlS32VUtWuaulghi1Yq0KYNWKk9wWuGymPA==}
+    engines: {node: '>=18.2.0'}
 
   bail@2.0.2:
     resolution: {integrity: sha512-0xO6mYd7JB2YesxDKplafRpsiOzPt9V02ddPCLbY1xYGPOX24NTyN50qnUxgCPcSoYMhKpAuBTjQoRZCAkUDRw==}
@@ -3118,6 +3128,9 @@ packages:
   space-separated-tokens@2.0.2:
     resolution: {integrity: sha512-PEGlAwrG8yXGXRjW32fGbg66JAlOAwbObuqVoJpv/mRgoWDQfgH1wDPvtzWyUSNAXBGSk8h755YDbbcEy3SH2Q==}
 
+  standardized-audio-context@25.3.77:
+    resolution: {integrity: sha512-Ki9zNz6pKcC5Pi+QPjPyVsD9GwJIJWgryji0XL9cAJXMGyn+dPOf6Qik1AHei0+UNVcc4BOCa0hWLBzlwqsW/A==}
+
   standardwebhooks@1.1.1:
     resolution: {integrity: sha512-bCbX9ZEyFkWPsRz7Bl3NuQUJohmwGSev/yhr7vhaGPlc4AfIrspIRa6cPTBuI1ItmrTDJ4d/S2hCsfe4+vQGnQ==}
 
@@ -3177,6 +3190,9 @@ packages:
     resolution: {integrity: sha512-LgO3D9yZJjApUiuUfl9iFAwrtaX4+lok3wJIqttGoKCHlWUqHqbQpnxCf82L8FjgKsh4iGo78hqJwgL8F6To2A==}
     engines: {node: '>=14.0.0'}
 
+  tone@15.1.22:
+    resolution: {integrity: sha512-TCScAGD4sLsama5DjvTUXlLDXSqPealhL64nsdV1hhr6frPWve0DeSo63AKnSJwgfg55fhvxj0iPPRwPN5o0ag==}
+
   totalist@3.0.1:
     resolution: {integrity: sha512-sf4i37nQ2LBx4m3wB74y+ubopq6W/dIzXg0FDGjsYnZHVa1Da8FH853wlL2gtUhg+xJXjfk3kUZS3BRoQeoQBQ==}
     engines: {node: '>=6'}
@@ -3192,9 +3208,6 @@ packages:
 
   tslib@2.8.1:
     resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
-
-  tslib@2.9.1:
-    resolution: {integrity: sha512-a4Ux9VKuIMHsOS7ENbEq6hK2ZGYIT27Rtl0E4eD9KqwxhKiQeMZE/9xb3IdYwWaSOyIBQLExhQgXDTYoiCxnWA==}
 
   typebox@1.3.27:
     resolution: {integrity: sha512-zu+jc1pcy4UiNThxikUr36f0Rybk9PEeCg/NE6adeWr/SKsdNO4EzZHYRDlv2YCVAfj3Odq3dESSo/jNyoBXzA==}
@@ -3446,7 +3459,7 @@ snapshots:
       '@smithy/signature-v4': 5.7.4
       '@smithy/types': 4.19.0
       bowser: 2.14.1
-      tslib: 2.9.1
+      tslib: 2.8.1
 
   '@aws-sdk/credential-provider-env@3.972.72':
     dependencies:
@@ -3454,7 +3467,7 @@ snapshots:
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.1
       '@smithy/types': 4.19.0
-      tslib: 2.9.1
+      tslib: 2.8.1
 
   '@aws-sdk/credential-provider-http@3.972.74':
     dependencies:
@@ -3464,7 +3477,7 @@ snapshots:
       '@smithy/fetch-http-handler': 5.8.0
       '@smithy/node-http-handler': 4.12.1
       '@smithy/types': 4.19.0
-      tslib: 2.9.1
+      tslib: 2.8.1
 
   '@aws-sdk/credential-provider-ini@3.973.17':
     dependencies:
@@ -3480,7 +3493,7 @@ snapshots:
       '@smithy/core': 3.35.1
       '@smithy/credential-provider-imds': 4.5.2
       '@smithy/types': 4.19.0
-      tslib: 2.9.1
+      tslib: 2.8.1
 
   '@aws-sdk/credential-provider-login@3.972.79':
     dependencies:
@@ -3489,7 +3502,7 @@ snapshots:
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.1
       '@smithy/types': 4.19.0
-      tslib: 2.9.1
+      tslib: 2.8.1
 
   '@aws-sdk/credential-provider-node@3.972.84':
     dependencies:
@@ -3503,7 +3516,7 @@ snapshots:
       '@smithy/core': 3.35.1
       '@smithy/credential-provider-imds': 4.5.2
       '@smithy/types': 4.19.0
-      tslib: 2.9.1
+      tslib: 2.8.1
 
   '@aws-sdk/credential-provider-process@3.972.72':
     dependencies:
@@ -3511,7 +3524,7 @@ snapshots:
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.1
       '@smithy/types': 4.19.0
-      tslib: 2.9.1
+      tslib: 2.8.1
 
   '@aws-sdk/credential-provider-sso@3.973.16':
     dependencies:
@@ -3521,7 +3534,7 @@ snapshots:
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.1
       '@smithy/types': 4.19.0
-      tslib: 2.9.1
+      tslib: 2.8.1
 
   '@aws-sdk/credential-provider-web-identity@3.972.78':
     dependencies:
@@ -3530,7 +3543,7 @@ snapshots:
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.1
       '@smithy/types': 4.19.0
-      tslib: 2.9.1
+      tslib: 2.8.1
 
   '@aws-sdk/eventstream-handler-node@3.972.35':
     dependencies:
@@ -3565,14 +3578,14 @@ snapshots:
       '@smithy/fetch-http-handler': 5.8.0
       '@smithy/node-http-handler': 4.12.1
       '@smithy/types': 4.19.0
-      tslib: 2.9.1
+      tslib: 2.8.1
 
   '@aws-sdk/signature-v4-multi-region@3.996.47':
     dependencies:
       '@aws-sdk/types': 3.974.6
       '@smithy/signature-v4': 5.7.4
       '@smithy/types': 4.19.0
-      tslib: 2.9.1
+      tslib: 2.8.1
 
   '@aws-sdk/token-providers@3.1127.0':
     dependencies:
@@ -3590,17 +3603,17 @@ snapshots:
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.1
       '@smithy/types': 4.19.0
-      tslib: 2.9.1
+      tslib: 2.8.1
 
   '@aws-sdk/types@3.974.6':
     dependencies:
       '@smithy/types': 4.19.0
-      tslib: 2.9.1
+      tslib: 2.8.1
 
   '@aws-sdk/xml-builder@3.972.41':
     dependencies:
       '@smithy/types': 4.19.0
-      tslib: 2.9.1
+      tslib: 2.8.1
 
   '@aws/lambda-invoke-store@0.3.0': {}
 
@@ -3690,7 +3703,7 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-claude-code@https://codeload.github.com/earendil-works/pi-claude-code/tar.gz/70abb65186592ca788b29b3db22c3160d629c41f(patch_hash=9955edbbebf2be346da8fae3a60b9fba5dd82bbf86541cd0f287b7d64b9246bb)(@earendil-works/pi-ai@1.5.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2))(@earendil-works/pi-coding-agent@1.5.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4))':
+  '@earendil-works/pi-claude-code@https://codeload.github.com/earendil-works/pi-claude-code/tar.gz/70abb65186592ca788b29b3db22c3160d629c41f(patch_hash=d74c68802285b391ba99fe2c9fcf814d13070504f9dabb867ebcdaeb13991f34)(@earendil-works/pi-ai@1.5.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2))(@earendil-works/pi-coding-agent@1.5.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4))':
     dependencies:
       '@earendil-works/pi-ai': 1.5.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2)
       '@earendil-works/pi-coding-agent': 1.5.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)
@@ -3735,7 +3748,7 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-durable@1.5.0(patch_hash=f4c1a27707ad03b7857cd406ed89b22eb084684333bc81905beeed1830b864c4)(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(undici@8.10.2)':
+  '@earendil-works/pi-durable@1.5.0(patch_hash=09e491562a6693b902069a1c3eaf2d3ffdd88880665315653e0010b9d75ba90a)(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(undici@8.10.2)':
     dependencies:
       '@earendil-works/chord': 1.5.0(patch_hash=0a84e0316a4ce02b090b6c94540148771592890bc6f0869d75243fa34e5d3f25)(esbuild@0.28.2)
       '@earendil-works/pi-ai': 1.5.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2)
@@ -4934,7 +4947,7 @@ snapshots:
 
   '@shikijs/types@4.4.3':
     dependencies:
-      '@shikijs/vscode-textmate': 10.1.0
+      '@shikijs/vscode-textmate': 10.0.2
       '@types/hast': 3.0.5
 
   '@shikijs/types@4.5.0':
@@ -4944,8 +4957,6 @@ snapshots:
 
   '@shikijs/vscode-textmate@10.0.2': {}
 
-  '@shikijs/vscode-textmate@10.1.0': {}
-
   '@silvia-odwyer/photon-node@0.3.4': {}
 
   '@silvia-odwyer/photon@0.3.3': {}
@@ -4953,19 +4964,19 @@ snapshots:
   '@smithy/core@3.35.1':
     dependencies:
       '@smithy/types': 4.19.0
-      tslib: 2.9.1
+      tslib: 2.8.1
 
   '@smithy/credential-provider-imds@4.5.2':
     dependencies:
       '@smithy/core': 3.35.1
       '@smithy/types': 4.19.0
-      tslib: 2.9.1
+      tslib: 2.8.1
 
   '@smithy/fetch-http-handler@5.8.0':
     dependencies:
       '@smithy/core': 3.35.1
       '@smithy/types': 4.19.0
-      tslib: 2.9.1
+      tslib: 2.8.1
 
   '@smithy/node-http-handler@4.12.1':
     dependencies:
@@ -4977,11 +4988,11 @@ snapshots:
     dependencies:
       '@smithy/core': 3.35.1
       '@smithy/types': 4.19.0
-      tslib: 2.9.1
+      tslib: 2.8.1
 
   '@smithy/types@4.19.0':
     dependencies:
-      tslib: 2.9.1
+      tslib: 2.8.1
 
   '@stablelib/base64@1.0.1': {}
 
@@ -5306,6 +5317,11 @@ snapshots:
       dequal: 2.0.3
 
   assertion-error@2.0.1: {}
+
+  automation-events@7.1.19:
+    dependencies:
+      '@babel/runtime': 7.29.7
+      tslib: 2.8.1
 
   bail@2.0.2: {}
 
@@ -6591,6 +6607,12 @@ snapshots:
 
   space-separated-tokens@2.0.2: {}
 
+  standardized-audio-context@25.3.77:
+    dependencies:
+      '@babel/runtime': 7.29.7
+      automation-events: 7.1.19
+      tslib: 2.8.1
+
   standardwebhooks@1.1.1:
     dependencies:
       '@stablelib/base64': 1.0.1
@@ -6661,6 +6683,11 @@ snapshots:
 
   tinyrainbow@3.2.0: {}
 
+  tone@15.1.22:
+    dependencies:
+      standardized-audio-context: 25.3.77
+      tslib: 2.8.1
+
   totalist@3.0.1: {}
 
   trim-lines@3.0.1: {}
@@ -6670,8 +6697,6 @@ snapshots:
   ts-algebra@2.0.0: {}
 
   tslib@2.8.1: {}
-
-  tslib@2.9.1: {}
 
   typebox@1.3.27: {}
 

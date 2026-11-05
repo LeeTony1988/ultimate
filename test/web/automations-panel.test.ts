@@ -98,7 +98,7 @@ vi.mock('@/components/ui/dialog', () => ({
 Object.assign(globalThis, { document: { visibilityState: 'visible' }, window: {} })
 const { AutomationsPanel } = await import('../../extensions/automations/panel.tsx')
 const { Chip } = await import('../../extensions/automations/chip.tsx')
-const { AutomationForm } = await import('../../extensions/automations/form.tsx')
+const { AutomationForm, contextCondition } = await import('../../extensions/automations/form.tsx')
 
 const base = (id: string, createdAt: number, extra: Partial<AutomationListItem>) =>
   ({
@@ -228,6 +228,14 @@ it('renders the third trigger, event descriptions and context re-arm defaults in
   expect(event).toContain('result (optional filter)')
   expect(event).toContain('value="failed"')
   expect(event).not.toContain('Wake this conversation')
+})
+
+it('refuses a cleared number field instead of saving it as 0', () => {
+  const draft = { of: '@ultimate', above: '80', cooldownMinutes: '15', idleHours: '0' }
+  expect(contextCondition(draft)).toMatchObject({ above: 80, cooldownMs: 900000, idleFor: 0 })
+  expect(contextCondition({ ...draft, cooldownMinutes: '' })).toBeUndefined()
+  expect(contextCondition({ ...draft, above: ' ' })).toBeUndefined()
+  expect(contextCondition({ ...draft, idleHours: '' })).toBeUndefined()
 })
 
 it('colours the chip by the worst state and hides it when nothing is active', () => {

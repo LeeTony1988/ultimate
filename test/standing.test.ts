@@ -21,6 +21,7 @@ import subagents from '../extensions/subagents/server.ts'
 import { Profile, Standing, Started } from '../extensions/subagents/api.ts'
 import type { SubagentsService } from '../extensions/subagents/api.ts'
 import { Metadata } from '../server/metadata.ts'
+import { Marks } from '../extensions/conversations/api.ts'
 import { parseDefinition, saveDefinition } from '../lib/agents.ts'
 
 const ctx = BACKGROUND_CONTEXT
@@ -107,13 +108,13 @@ it('lists definitions only to agents that can use them', async () => {
   expect(await render()).toBeUndefined()
   for (const name of ['branch', 'automation']) {
     const text = await render([{ ...agent.tools[0], name }])
-    expect(text).toBe('Available definitions:\nx: Test')
+    expect(text).toBe('Available definitions:\nx (default): Test')
   }
   const coordinator = await host.root.agent(ctx)
   expect(coordinator.tools.some((tool) => tool.name === 'subagent')).toBe(true)
   const text = await render(coordinator.tools, host.root.id)
   expect(text).toContain('Available definitions:\n')
-  expect(text).toContain('x: Test')
+  expect(text).toContain('x (default): Test')
 })
 
 it('parses and saves the resident field, refusing non-booleans', async () => {
@@ -135,6 +136,47 @@ it('parses and saves the resident field, refusing non-booleans', async () => {
   )
   expect(saved.resident).toBe(true)
   expect(parseDefinition(await readFile(saved.path, 'utf8'), saved.path).resident).toBe(true)
+})
+
+it('reads, saves and publishes a standing agent mark and title', async () => {
+  const { service, host, prepared, path, file } = await fixture()
+  expect(() => parseDefinition(definition('Instructions', 'tint: purple\n'), 'test')).toThrow(
+    'tint must be one of',
+  )
+  expect(() => parseDefinition(definition('Instructions', 'title: " "\n'), 'test')).toThrow(
+    'title must be a nonempty string',
+  )
+  const saved = await saveDefinition(
+    { projectRoot: path, userHome: path },
+    prepared.modelRuntime,
+    'user',
+    'saved',
+    { description: 'Saved', title: 'Notes', icon: 'notebook-pen', tint: 'teal' },
+    'Instructions',
+  )
+  expect(parseDefinition(await readFile(saved.path, 'utf8'), saved.path)).toMatchObject({
+    title: 'Notes',
+    icon: 'notebook-pen',
+    tint: 'teal',
+  })
+  await writeFile(file, definition('Instructions', 'icon: Gem\ntint: violet\n'))
+  await service.standing('x', ctx)
+  expect(await host.harness.snapshot(Marks, ROOT_CONVERSATION_ID, ctx)).toEqual({
+    x: { icon: 'Gem', tint: 'violet' },
+  })
+  // A later folder's overlay names the agent without touching its address or instructions.
+  const overlay = join(path, '.ultimate/agents/x.md')
+  await mkdir(join(path, '.ultimate/agents'), { recursive: true })
+  await writeFile(overlay, '---\nname: x\naddTools: []\ntitle: Atlas\n---\n')
+  const id = await service.standing('x', ctx)
+  expect(await host.harness.snapshot(Marks, ROOT_CONVERSATION_ID, ctx)).toEqual({
+    x: { title: 'Atlas', icon: 'Gem', tint: 'violet' },
+  })
+  expect(await host.harness.snapshot(Metadata, id, ctx)).toMatchObject({ title: '@x' })
+  await rm(overlay)
+  await writeFile(file, definition('Instructions'))
+  await service.standing('x', ctx)
+  expect(await host.harness.snapshot(Marks, ROOT_CONVERSATION_ID, ctx)).toEqual({})
 })
 
 it('keeps one ownerless standing conversation, refreshes its definition and recreates deleted records', async () => {

@@ -6,6 +6,7 @@ import { expect, it, vi } from 'vitest'
 const state = vi.hoisted(() => ({ dismissed: false, off: false }))
 vi.mock('@/sdk', () => ({
   api: {},
+  attention: (renderer: unknown) => renderer,
   Card: () => null,
   defineWebExtension: (facet: unknown) => facet,
   errorMessage: String,

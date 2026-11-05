@@ -417,27 +417,6 @@ export default {
         }
       },
     },
-    'no-raw-services': {
-      meta: { schema: [] },
-      create(context: Context) {
-        return {
-          MemberExpression(node: Node) {
-            const name = propertyName(node)
-            const object = node.object
-            if (
-              ['provide', 'use'].includes(String(name)) &&
-              (object?.type === 'Identifier'
-                ? object.name === 'host'
-                : object?.type === 'MemberExpression' && propertyName(object) === 'host')
-            )
-              context.report({
-                node,
-                message: `host.${String(name)} is untyped: declare a token in api.ts and use host.implement, host.need or host.want for services, host.emit and host.react for events.`,
-              })
-          },
-        }
-      },
-    },
     'api-file-shape': {
       meta: { schema: [] },
       create(context: Context) {
@@ -596,7 +575,7 @@ export default {
               !(
                 typeof name === 'string' &&
                 ((name.startsWith(`${own}.`) && name.length > own.length + 1) ||
-                  (own === 'messages' && ['board.sent', 'board.triaged'].includes(name)))
+                  (own === 'messages' && name === 'board.sent'))
               )
             )
               context.report({

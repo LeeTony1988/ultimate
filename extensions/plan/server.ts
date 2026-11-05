@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { arr, int, obj, oneOf, opt, str } from '@earendil-works/pi-schema'
+import { arr, int, obj, opt, str } from '@earendil-works/pi-schema'
+import { strEnum } from '../../lib/schema.ts'
 import {
   defineDoc,
   defineExtension,
@@ -181,15 +182,15 @@ export default (host: ExtensionHost) => {
       defineTool({
         name: 'plan',
         description:
-          'Maintain the durable epic/task ledger. The tool assigns keys: epics E1, E2; tasks E1.1, E1.2. Use only keys a call has returned: wait for create/add results before calls that reference them (epic, deps, key), never in the same parallel batch. create {title,body}; add {epic,title,role,description,deps?}; update {key,status?,title?,description?,body?,child?,verdict?} replaces only the fields given (description and body whole: show first to extend them); in codemode every action returns the object; note {key,text} notes a task only (E1.1, not E1; record on an epic with update verdict or body); show {key?} reads an epic, task, or the whole ledger. Epic bodies use Request, Selected approach, Intent, Scope (in/out), binary Acceptance criteria, Implementation, Verification, Risks. Task descriptions use Outcome, Scope, Non-goals, Files, Acceptance criteria with a verification command, Constraints. `status` on an epic key (E1) is one of planning, in_progress, done, blocked; on a task key (E1.1) one of backlog, todo, in_progress, in_review, done, blocked, canceled. child links a conversation number; deps are task keys. body is epic-only; verdict records evidence on either an epic or a task. Children read the root coordinator’s ledger with show; only that coordinator can edit it. Read full plans with show; the prompt contains only a compact ledger.',
+          'Maintain the durable epic/task ledger. The tool assigns keys: epics E1, E2; tasks E1.1, E1.2. Use only keys a call has returned: wait for create/add results before calls that reference them (epic, deps, key), never in the same parallel batch. create {title,body}; add {epic,title,role,description,deps?}; update {key,status?,title?,description?,body?,child?,verdict?} replaces only the fields given (description and body whole: show first to extend them); in codemode every action returns the object; note {key,text} notes a task only (E1.1, not E1; record on an epic with update verdict or body); show {key?} reads an epic, task, or the whole ledger. Epic bodies use Request, Selected approach, Intent, Scope (in/out), binary Acceptance criteria, Implementation, Verification, Risks. Task descriptions use Outcome, Scope, Non-goals, Files, Acceptance criteria with a verification command, Constraints. Epic statuses: planning, in_progress, done, blocked. Task statuses: backlog, todo, in_progress, in_review, done, blocked, canceled. child links a conversation number; deps are task keys. body is epic-only; verdict records evidence on either an epic or a task. Children read the root coordinator’s ledger with show; only that coordinator can edit it. Read full plans with show; the prompt contains only a compact ledger.',
         // A memoized receipt id records the result in the same transaction as the ledger change.
         replay: 'safe',
         parameters: obj({
-          action: oneOf(['create', 'add', 'update', 'note', 'show'] as const),
+          action: strEnum(['create', 'add', 'update', 'note', 'show'] as const),
           title: opt(str()),
           body: opt(str()),
           epic: opt(str({ description: 'Epic key returned by create, e.g. E1.' })),
-          role: opt(oneOf(['worker', 'reviewer'] as const)),
+          role: opt(strEnum(['worker', 'reviewer'] as const)),
           description: opt(str()),
           deps: opt(
             arr(str(), {
@@ -201,12 +202,7 @@ export default (host: ExtensionHost) => {
               description: 'A returned key: epic E1 or task E1.1; note takes a task key.',
             }),
           ),
-          status: opt(
-            str({
-              description:
-                'Epic E1: planning, in_progress, done, blocked. Task E1.1: backlog, todo, in_progress, in_review, done, blocked, canceled.',
-            }),
-          ),
+          status: opt(str()),
           child: opt(int({ minimum: 1 })),
           verdict: opt(str()),
           text: opt(str()),
@@ -289,9 +285,7 @@ export default (host: ExtensionHost) => {
                   ? ['backlog', 'todo', 'in_progress', 'in_review', 'done', 'blocked', 'canceled']
                   : ['planning', 'in_progress', 'done', 'blocked']
                 if (args.status !== undefined && !statuses.includes(args.status))
-                  throw new Error(
-                    `Invalid status for ${task ? 'task' : 'epic'} ${item.key}: ${JSON.stringify(args.status)}. ${task ? 'Task' : 'Epic'} statuses: ${statuses.join(', ')}`,
-                  )
+                  throw new Error(`Invalid status for ${item.key}: ${args.status}`)
                 if (task && args.body !== undefined) throw new Error('body requires an epic key')
                 if (!task && (args.description !== undefined || args.child !== undefined))
                   throw new Error('description and child require a task key')

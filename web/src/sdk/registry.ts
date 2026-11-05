@@ -2,10 +2,12 @@ import type { ComponentType } from 'react'
 import type { ConversationSummary } from '../../../shared/protocol.ts'
 import { events } from './events.ts'
 import { errorMessage } from './format.ts'
+import { needsAttention } from './types.ts'
 import type {
+  CodeBlockRenderer,
   CompactCallTest,
   CompactDocs,
-  CompactQuietTest,
+  CompactRow,
   CompactSummaryProps,
   CommandContribution,
   ComposerRenderer,
@@ -13,7 +15,6 @@ import type {
   DocumentContribution,
   EntryRenderer,
   InboxRenderer,
-  IntroContribution,
   LinkRenderer,
   PanelContribution,
   SlotName,
@@ -132,6 +133,7 @@ const shapes: Record<keyof WebExtension, [Check, string]> = {
   inbox: [isComponent, 'an inbox renderer component'],
   composer: [isComponent, 'a composer renderer component'],
   link: [isComponent, 'a link renderer component'],
+  codeBlocks: [objectOf(isComponent), 'an object of code block language → component'],
   messageActions: [arrayOf(isComponent), 'an array of message action components'],
   messageDetails: [arrayOf(isComponent), 'an array of message detail components'],
   answerLabels: [arrayOf(isComponent), 'an array of answer label components'],
@@ -141,20 +143,10 @@ const shapes: Record<keyof WebExtension, [Check, string]> = {
       when: isFunction,
       tools: optional(arrayOf((tool) => isString(tool) || isFunction(tool))),
       docs: optional(arrayOf(isString)),
-      quiet: optional(isFunction),
+      thread: optional(isFunction),
       summary: optional(isComponent),
     }),
-    'a { when, tools?, docs?, quiet?, summary? } object',
-  ],
-  intro: [
-    fields({
-      when: isFunction,
-      title: isString,
-      hint: optional(isString),
-      placeholder: optional(isString),
-      card: optional(isComponent),
-    }),
-    'a { when, title, hint?, placeholder?, card? } object',
+    'a { when, tools?, docs?, thread?, summary? } object',
   ],
   documents: [
     arrayOf(
@@ -309,13 +301,13 @@ export function createRegistry() {
         refreshReady()
       }
     },
-    /** Install a facet that hot-reloaded on its own. */
+    /** Install a facet loaded on its own. */
     replace(name: string, module: unknown) {
       tokens.set(name, {})
       pending.delete(name)
       install(name, module)
     },
-    /** Record a failed hot reload; the previous version stays installed. */
+    /** Record a failed load; the previous version stays installed. */
     fail(name: string, error: unknown) {
       if (records.some((record) => record.name === name)) fail(name, error)
     },
@@ -459,34 +451,6 @@ export function documentItems(records: readonly ExtensionRecord[]): Map<string, 
   return byKind
 }
 
-/**
- * The last facet's intro whose `when` matches `conversation`, with the facet's name and version for its card's error
- * boundary; a throwing `when` is reported and skipped.
- */
-export function introOf(
-  records: readonly ExtensionRecord[],
-  conversation: ConversationSummary | undefined,
-  report: (extension: string, error: unknown) => void,
-): (IntroContribution & { extension: string; version: number }) | undefined {
-  if (!conversation) return undefined
-  const record = records.findLast(({ name, extension }) => {
-    if (!extension?.intro) return false
-    try {
-      return extension.intro.when(conversation)
-    } catch (error) {
-      report(name, error)
-      return false
-    }
-  })
-  return (
-    record?.extension?.intro && {
-      ...record.extension.intro,
-      extension: record.name,
-      version: record.version,
-    }
-  )
-}
-
 export function composerRenderers(
   records: readonly ExtensionRecord[],
 ): { extension: string; version: number; component: ComposerRenderer }[] {
@@ -550,6 +514,22 @@ export function linkRenderers(
   })
 }
 
+/** Every code block renderer of `language` in discovery order: each receives the previous rendering as `core`. */
+export function codeBlockRenderers(
+  records: readonly ExtensionRecord[],
+  language: string,
+): { extension: string; version: number; component: CodeBlockRenderer }[] {
+  return records.flatMap((record) => {
+    const component = record.extension?.codeBlocks?.[language]
+    return component ? [{ extension: record.name, version: record.version, component }] : []
+  })
+}
+
+/** The languages some extension renders code blocks of. */
+export function codeBlockLanguages(records: readonly ExtensionRecord[]): string[] {
+  return [...new Set(records.flatMap((record) => Object.keys(record.extension?.codeBlocks ?? {})))]
+}
+
 /** Message contributions, preserving discovery order and each facet's array order. */
 export function messageItems(
   records: readonly ExtensionRecord[],
@@ -582,7 +562,7 @@ export function compactTools(
 ):
   | {
       keeps: CompactCallTest
-      quiet: CompactQuietTest
+      thread?: (row: CompactRow, docs: CompactDocs) => boolean | 'hidden'
       summary?: {
         extension: string
         version: number
@@ -603,10 +583,27 @@ export function compactTools(
     }
   })
   if (!matching.length) return undefined
+  // Rows that ask the user to act (`attention` renderers) never fold: their calls stay out of runs of work, and the rows
+  // count as thread.
+  const asks = (kind: 'entries' | 'tools') =>
+    new Set(
+      records.flatMap(({ extension }) =>
+        Object.entries(extension?.[kind] ?? {}).flatMap(([key, renderer]) =>
+          needsAttention(renderer) ? [key] : [],
+        ),
+      ),
+    )
+  const askingKinds = asks('entries')
+  const askingTools = asks('tools')
+  const asking = (row: CompactRow) =>
+    askingKinds.has(row.entry.kind) || row.calls.some((call) => askingTools.has(call.name))
   const tools = matching.flatMap(({ name, compact }) =>
     (compact.tools ?? []).map((tool) => ({ name, tool })),
   )
-  const names = new Set(tools.flatMap(({ tool }) => (typeof tool === 'string' ? [tool] : [])))
+  const names = new Set([
+    ...askingTools,
+    ...tools.flatMap(({ tool }) => (typeof tool === 'string' ? [tool] : [])),
+  ])
   const tests = tools.flatMap(({ name, tool }) =>
     typeof tool === 'function' ? [{ name, test: tool }] : [],
   )
@@ -621,17 +618,24 @@ export function compactTools(
           return false
         }
       }),
-    quiet: (row, docs) => {
-      const verdicts = matching.map(({ name, compact }) => {
-        try {
-          return compact.quiet?.(row, docs) ?? false
-        } catch (error) {
-          report(name, error)
-          return false
+    thread: matching.some(({ compact }) => compact.thread)
+      ? (row, docs) => {
+          if (asking(row)) return true
+          const verdicts = matching.map(({ name, compact }) => {
+            try {
+              return compact.thread?.(row, docs) ?? false
+            } catch (error) {
+              report(name, error)
+              // A broken test keeps the row readable.
+              return true
+            }
+          })
+          // Hidden only when every facet says so: a row any facet shows counts in its stretch.
+          return (
+            verdicts.includes(true) || (verdicts.every((v) => v === 'hidden') ? 'hidden' : false)
+          )
         }
-      })
-      return verdicts.includes(true) || (verdicts.includes('hidden') ? 'hidden' : false)
-    },
+      : undefined,
     summary: matching.flatMap(({ name, version, compact }) =>
       compact.summary ? [{ extension: name, version, component: compact.summary }] : [],
     )[0],

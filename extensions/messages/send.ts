@@ -1,19 +1,21 @@
 /** `send()`: validating, admitting and logging a message, and starting its delivery. */
 import type { Context } from '@earendil-works/chord'
 import { defineDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
-import type { ConversationId, TaskId } from '@earendil-works/pi-durable'
+import type { ConversationId, EntryId, TaskId } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Standing } from '../subagents/api.ts'
 import { Messages, MessageSent } from './api.ts'
 import type { Question } from './api.ts'
-import { checkQuestions, openQuestion } from './questions.ts'
+import type { Via } from './refs.ts'
+import { checkQuestions, gist, openQuestion } from './questions.ts'
 import { UserInputEvent } from '../../shared/events.ts'
 import type { Device } from '../../shared/events.ts'
 import { resolveImages } from './images.ts'
 import type { ImagesRef } from './images.ts'
 import { append } from './log.ts'
-import { parentOf, resolve, senderName } from './addresses.ts'
+import { parentOf, resolve, senderName, starterOf } from './addresses.ts'
 import { delivery } from './delivery.ts'
+import { notice } from './notice.ts'
 
 // The receipt commits with the message, closing the gap before api.memo records its id.
 const Sent = defineDoc<{ ids: Record<string, number> }>({
@@ -33,6 +35,13 @@ const Requests = defineDoc<{ ids: Record<string, number> }>({
   fork: 'initial',
   initial: () => ({ ids: {} }),
 })
+/** An answer in a few characters: its picks (`1a 2b,c 3`) when the card numbered them, else its first line. */
+const answerSummary = (text: string) => {
+  const lines = text.split('\n').filter((line) => line.trim())
+  const picks = lines.flatMap((line) => /^(\d+[a-z,]*)[.:]/.exec(line)?.[1] ?? [])
+  return picks.length ? picks.join(' ') : (lines[0] ?? '')
+}
+
 export async function send(
   host: ExtensionHost,
   from: number | 'user',
@@ -51,13 +60,28 @@ export async function send(
     questions?: Question[]
   },
   ctx: Context,
-  taskId?: TaskId,
-  callId?: string,
-  requestId?: string,
-  answerId?: number,
-  note?: boolean,
-  device?: Device,
+  options: {
+    /** The sending tool call: its task-scoped receipt deduplicates admission. */
+    taskId?: TaskId
+    callId?: string
+    /** A pipeline's request id, deduplicated in the sender conversation. */
+    requestId?: string
+    /** The user's answer or dismissal of open message `answerId`. */
+    answerId?: number
+    /** Place it as a note, which starts no run; by default one-way messages to the sender's starter are notes. */
+    note?: boolean
+    device?: Device
+    /** The user's answer or dismissal settled by @ultimate on their behalf, from their input `via.entry`. */
+    via?: Via
+    /** A branch's final answer routed as its report: the branch shows as awaiting its starter. */
+    report?: boolean
+    /** The starter's final answer, this entry of its, routed down to the branch it answers. */
+    routed?: EntryId
+    /** A branch's report that answers routed answers only. */
+    echo?: boolean
+  } = {},
 ) {
+  const { taskId, callId, requestId, answerId, device, via } = options
   if (requestId !== undefined && from !== 'user') {
     const sent = await host.harness().snapshot(Requests, from as ConversationId, ctx)
     if (sent?.ids[requestId] !== undefined) return sent.ids[requestId]
@@ -70,24 +94,27 @@ export async function send(
   const primaryId = standing?.ultimate
   // The primary agent's messages to a busy conversation almost always steer it: new scope, a decision, a stop.
   const steer = input.steer ?? (from !== 'user' && from === primaryId)
+  // Checked before resolving, which may create a standing agent's conversation.
+  const parent = from === 'user' ? undefined : await parentOf(host, from, ctx)
+  const starter = parent ?? (await starterOf(host, from, ctx))
   if (input.to === 'user') {
-    if (from !== primaryId)
+    if (from !== primaryId && !(parent === undefined && starter !== undefined))
       throw new Error(
-        'Only @ultimate messages the user; send this to @ultimate (reply: false) and it relays it.',
+        'Only @ultimate and branches message the user; send this to the conversation that started you.',
       )
   }
   if (!input.text.trim()) throw new Error('Message text must not be empty')
   if (input.questions !== undefined && (input.to !== 'user' || input.reply === false))
     throw new Error('questions go only with a reply-expected message to the user')
   const questions = input.questions === undefined ? undefined : checkQuestions(input.questions)
-  // Checked before resolving, which may create a standing agent's conversation.
-  const parent = from === 'user' ? undefined : await parentOf(host, from, ctx)
   if (parent !== undefined && input.to.replace(/^#/, '') !== String(parent))
     throw new Error(
       `Subagents report to the conversation that started them: message only #${parent}. Your final answer reaches it anyway.`,
     )
   const to = await resolve(host, input.to, from, ctx)
-  const fromLabel = await senderName(host, from, ctx)
+  const fromLabel = via
+    ? `user (settled for them by @ultimate, from what they said in its chat)`
+    : await senderName(host, from, ctx)
   const toLabel = await senderName(host, to, ctx)
   return host.harness().commit(async (tx) => {
     const receipt = taskId === undefined ? undefined : await tx.doc(Sent, taskId)
@@ -118,19 +145,10 @@ export async function send(
     let re = input.re
     if (from !== 'user' && input.reply !== false) {
       const log = await tx.doc(Messages, ROOT_CONVERSATION_ID)
-      // A user's message still queued is unread: it gets its own turn, and does not stand in the way of this one.
+      // Only a message the agent has read is owed; one still queued is unread and gets its own turn.
       const pending = log.messages.find(
-        (m) =>
-          m.to === from &&
-          m.from === to &&
-          m.reply &&
-          (m.state === 'delivered' || (m.state === 'sent' && to !== 'user')),
+        (m) => m.to === from && m.from === to && m.reply && m.state === 'delivered',
       )
-      // Still queued, it is unread: answering it would answer what the agent has not seen.
-      if (pending?.state === 'sent')
-        throw new Error(
-          `Your answer to ${toLabel}'s message ${pending.id} is sent back automatically. Answer instead of messaging.`,
-        )
       // A message to the user who is owed an answer is that answer, with its questions and images.
       if (pending && to === 'user') {
         pending.state = 'answered'
@@ -181,6 +199,10 @@ export async function send(
       ...(callId === undefined ? {} : { call: callId }),
       ...(images ? { images } : {}),
       ...(questions ? { questions } : {}),
+      ...(options.report ? { report: true as const } : {}),
+      ...(options.routed !== undefined ? { routed: options.routed } : {}),
+      ...(options.echo ? { echo: true as const } : {}),
+      ...(via ? { via } : {}),
     })
     await host.emit(tx, MessageSent, {
       message: message.id,
@@ -189,8 +211,58 @@ export async function send(
       reply: message.reply,
       steer,
     })
-    // The user's answer or dismissal is their input to the asker; the message's `entry` names it once delivered.
-    if (from === 'user' && answerId !== undefined && typeof to === 'number')
+    if (primaryId !== undefined) {
+      const asked = to === 'user' && message.reply && from !== primaryId && typeof from === 'number'
+      const answered =
+        from === 'user' && answerId !== undefined && typeof to === 'number' && to !== primaryId
+      const notification = asked
+        ? {
+            kind: 'board.asked' as const,
+            // What the pointer shows outlives the capped message log.
+            data: {
+              message: message.id,
+              from,
+              ...(callId === undefined ? {} : { call: callId }),
+              summary: questions?.length
+                ? `asks you ${questions.length} question${questions.length === 1 ? '' : 's'} · ${questions[0].text}`
+                : `asks you · ${input.text.split('\n')[0]}`,
+            },
+            content: `#${from} asked the user (message ${message.id}): ${gist(message)}. The user answers there; their answer reaches you as a note.`,
+          }
+        : answered
+          ? {
+              kind: 'board.answered' as const,
+              data: {
+                message: answerId,
+                from: to,
+                ...(via ? { via } : {}),
+                ...(input.dismiss
+                  ? { dismissed: true }
+                  : {
+                      summary: answerSummary(input.text),
+                    }),
+              },
+              content: via
+                ? `You settled #${to}'s questions (message ${answerId}) for the user${input.dismiss ? ', closed without an answer' : ''}.`
+                : input.dismiss
+                  ? `The user dismissed #${to}'s questions (message ${answerId}).`
+                  : `The user answered #${to}'s questions (message ${answerId}):\n${input.text}`,
+            }
+          : undefined
+      if (notification)
+        await tx.createTask(
+          notice(host),
+          { to: primaryId, ...notification },
+          {
+            conversationId: primaryId,
+            ownership: { kind: 'conversation' },
+            background: true,
+          },
+        )
+    }
+    // The user's answer or dismissal is their input to the asker; the message's `entry` names it once delivered. One
+    // @ultimate settled for them is not: their chat input that it came from counted already.
+    if (from === 'user' && answerId !== undefined && typeof to === 'number' && !via)
       await host.emit(tx, UserInputEvent, {
         conversation: to,
         kind: input.dismiss ? 'dismiss' : 'answer',
@@ -204,7 +276,7 @@ export async function send(
         {
           message,
           steer,
-          note: note ?? (parent === to && input.reply === false),
+          note: options.note ?? (starter === to && input.reply === false),
           fromLabel,
           toLabel,
         },

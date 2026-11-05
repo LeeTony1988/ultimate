@@ -51,11 +51,11 @@ function ActivityPanel() {
   const where = range === 'all' ? 'the log' : `the last ${range}`
   return (
     <div className="py-2" data-activity-panel>
-      <div className="flex items-center gap-2 px-3 pb-1.5 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase">
+      <div className="flex items-center gap-2 px-3 pb-1.5 section-label">
         Activity
         {problems > 0 && filter !== 'problems' && (
           <button
-            className="ml-auto cursor-pointer tracking-normal normal-case text-warning hover:underline"
+            className="ml-auto cursor-pointer text-warning hover:underline"
             onClick={() => setFilter('problems')}
             title="Show only problems"
             type="button"
@@ -66,7 +66,7 @@ function ActivityPanel() {
         {system && (
           <button
             className={cn(
-              'cursor-pointer tracking-normal normal-case text-muted-foreground/70 hover:text-foreground',
+              'cursor-pointer text-muted-foreground/70 hover:text-foreground',
               !(problems > 0 && filter !== 'problems') && 'ml-auto',
             )}
             onClick={() => actions.showSurface('system')}

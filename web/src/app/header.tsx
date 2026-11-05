@@ -137,7 +137,10 @@ export function Header({ children }: { children?: ReactNode }) {
   const panels = useRegion('panels') && panelItems(records).length > 0
   const panelOpen = useRegionOpen('panels')
   return (
-    <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border/70 px-2">
+    <header
+      className="flex h-10 shrink-0 items-center gap-2 border-b border-border/70 px-2"
+      data-ui="conversation-header"
+    >
       {sidebar && (
         <IconButton keys="mod+b" label="Toggle sidebar" onClick={actions.toggleSidebar}>
           <PanelLeftIcon className="size-4" />

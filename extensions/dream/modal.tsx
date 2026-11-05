@@ -2,12 +2,11 @@ import { LoaderCircleIcon, MoonIcon } from 'lucide-react'
 import { Fragment, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
-import { api, errorMessage, useConversations, useDialog, useDocOf, useUltimate } from '@/sdk'
-import { ConversationRef } from '../conversations/ui.tsx'
-import { StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
-import { DreamDoc, StartAction } from './refs.ts'
+import { api, errorMessage, useDialog, useUltimate } from '@/sdk'
+import { talkToUltimate } from '../subagents/ui.tsx'
+import { StartAction } from './refs.ts'
 import { passLabels } from './moon.tsx'
-import { busyElsewhere, PASSES } from './types.ts'
+import { PASSES } from './types.ts'
 import type { PassName } from './types.ts'
 
 /** The dialog id the "Dream…" command, the Memory surface's button and the status-line hint open. */
@@ -22,7 +21,7 @@ const passWhat: Record<PassName, string> = {
   project: 'what I keep doing by hand here, and what to build for it',
 }
 
-/** What pressing Dream does, what keeps it from starting now, and the button that starts it. */
+/** What pressing Dream does, and the button that starts it. */
 export function DreamDialog() {
   const [open, setOpen] = useDialog(dreamDialog)
   return (
@@ -38,23 +37,7 @@ export function DreamDialog() {
   )
 }
 
-/** What keeps a dream from starting, live: conversations at work besides @ultimate, or a session still open. */
-type Preflight = { busy: { id: number; title: string }[]; active?: number }
-
-function usePreflight(): Preflight | undefined {
-  const conversations = useConversations()
-  const standing = useDocOf(1, StandingDoc)
-  const sessions = useDocOf(1, DreamDoc)
-  if (standing === undefined || sessions === undefined) return undefined
-  const active = sessions?.sessions.find((item) => item.endedAt === undefined)?.id
-  return {
-    busy: busyElsewhere(conversations, standing?.ultimate),
-    ...(active === undefined ? {} : { active }),
-  }
-}
-
 function Body({ onClose }: { onClose: () => void }) {
-  const state = usePreflight()
   const actions = useUltimate()
   const [starting, setStarting] = useState(false)
   const [failure, setFailure] = useState<string>()
@@ -71,7 +54,6 @@ function Body({ onClose }: { onClose: () => void }) {
       setStarting(false)
     }
   }
-  const blocked = !!state && (state.busy.length > 0 || state.active !== undefined)
   return (
     <>
       <div className="space-y-4 px-6 pt-6 pb-5">
@@ -87,9 +69,7 @@ function Body({ onClose }: { onClose: () => void }) {
           </DialogDescription>
         </div>
         <section className="space-y-1.5">
-          <h3 className="font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase">
-            Six passes
-          </h3>
+          <h3 className="section-label">Six passes</h3>
           <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-[13px] leading-5">
             {PASSES.map((pass) => (
               <Fragment key={pass}>
@@ -100,10 +80,11 @@ function Body({ onClose }: { onClose: () => void }) {
           </dl>
         </section>
         <p className="text-[13px] leading-relaxed text-muted-foreground">
-          First I write a handoff while I still remember everything; the dream reads it first. The
-          journal lands in @ultimate's conversation, and we go through its proposals together. Each
-          one you approve becomes an ordinary branch that is reviewed and lands as usual.{' '}
-          <span className="text-foreground">Nothing changes code or memory by itself.</span>
+          I start a dream branch with a handoff of everything I still remember. Its journal comes
+          back to @ultimate's conversation, and we go through its proposals together. Each one you
+          approve becomes an ordinary branch that is reviewed and lands as usual.{' '}
+          <span className="text-foreground">Nothing changes code or memory by itself.</span> You can
+          also just tell me to start dreaming.
         </p>
         <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 border-t border-border/60 pt-3 text-[12px]">
           <dt className="text-muted-foreground">Takes</dt>
@@ -120,63 +101,17 @@ function Body({ onClose }: { onClose: () => void }) {
         </dl>
       </div>
       <footer className="space-y-3 border-t border-border/60 bg-muted/30 px-6 py-4">
-        {state && <Blockers state={state} />}
         {failure && <p className="text-[12px] text-error">{failure}</p>}
         <div className="flex items-center justify-end gap-2">
           <Button onClick={onClose} size="sm" variant="ghost">
-            {blocked ? 'Close' : 'Not now'}
+            Not now
           </Button>
-          <Button
-            data-dream-start
-            disabled={!state || blocked || starting}
-            onClick={() => void start()}
-            size="sm"
-          >
-            {(!state || starting) && <LoaderCircleIcon className="motion-safe:animate-spin" />}
+          <Button data-dream-start disabled={starting} onClick={() => void start()} size="sm">
+            {starting && <LoaderCircleIcon className="motion-safe:animate-spin" />}
             Start dreaming
           </Button>
         </div>
       </footer>
     </>
-  )
-}
-
-/** Why a dream cannot start now: an open session, or conversations still at work. */
-function Blockers({ state }: { state: Preflight }) {
-  const actions = useUltimate()
-  const go = (id: number) => {
-    actions.close(dreamDialog)
-    actions.switchConversation(id)
-    actions.showSurface('agent')
-  }
-  if (state.active !== undefined)
-    return (
-      <p className="text-[12px] leading-relaxed text-muted-foreground" data-dream-blocked="active">
-        <span className="text-foreground">Dream session {state.active} is still open.</span> Settle
-        or end it from its card in @ultimate's conversation before dreaming again.
-      </p>
-    )
-  if (!state.busy.length) return null
-  return (
-    <div className="space-y-1.5" data-dream-blocked="busy">
-      <p className="text-[12px] leading-relaxed text-muted-foreground">
-        <span className="text-foreground">Wait for these to finish first</span> — a dream reads
-        finished work, not work in progress.
-      </p>
-      <ul className="space-y-0.5 font-mono text-[11px]">
-        {state.busy.map((item) => (
-          <li key={item.id}>
-            <button
-              className="flex max-w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-sm px-1 py-0.5 -mx-1 hover:bg-accent"
-              onClick={() => go(item.id)}
-              type="button"
-            >
-              <span className="size-1.5 shrink-0 rounded-full bg-brand motion-safe:animate-pulse-dot" />
-              <ConversationRef id={item.id} title={item.title} />
-            </button>
-          </li>
-        ))}
-      </ul>
-    </div>
   )
 }

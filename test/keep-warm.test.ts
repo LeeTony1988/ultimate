@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { due, IDLE_STOP, LEAD, TTL } from '../extensions/keep-warm/due.ts'
+import { due, failing, IDLE_STOP, LEAD, TTL } from '../extensions/keep-warm/due.ts'
 import * as keepWarm from '../extensions/keep-warm/server.ts'
 
 const now = Date.parse('2026-10-24T12:00:00Z')
@@ -26,6 +26,14 @@ it('does not retry after a failed ping until a newer request', () => {
   const inputAt = now - minutes(70)
   expect(due({ now, lastRequest, inputAt, failedAfter: lastRequest + 1 })).toBe(false)
   expect(due({ now, lastRequest, inputAt, failedAfter: lastRequest - 1 })).toBe(true)
+})
+
+it('clears a failed ping once a cached @ultimate answer follows it', () => {
+  const failedAt = now - minutes(300)
+  expect(failing(failedAt, now - minutes(355))).toBe(true)
+  expect(failing(failedAt, undefined)).toBe(true)
+  expect(failing(failedAt, now - minutes(10))).toBe(false)
+  expect(failing(undefined, now)).toBe(false)
 })
 
 it('counts only answers that read or wrote the current model’s cache', () => {

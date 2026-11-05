@@ -258,7 +258,10 @@ export default async function mcp(host: ExtensionHost) {
       if (closed || server.client !== client) return
       if (error instanceof MissingSecret) server.missing = error.secret
       const stderr = stdio?.stderr.trim().split('\n').at(-1)
-      fail(server, redact(server, [String(error), stderr].filter(Boolean).join(': ')))
+      fail(
+        server,
+        [redact(server, error), stderr && redact(server, stderr)].filter(Boolean).join(': '),
+      )
       await close(client)
     }
   }

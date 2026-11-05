@@ -65,14 +65,8 @@ document, tools and model-facing text, where agents and stored entries already u
   `'root'` needs `source.from` and errors if it has no root. Successful landings leave a note in the submitter's root
   (unless it is that root or has none): the reactor `lineage/landing-notes` handles each `workspaces.landed` event
   once, placing the note in a tally inside its own transaction, or, for a root that is no tally yet, creating a
-  `lineage.landing-note` task in it that delivers the note as a write (request id `lander-root:<submission>`). A second
-  reactor, `lineage/conclude-landed`, starts a background `lineage.conclude-landed` task in a top-level submitter: it
-  waits for the lander's report (`lander:<submission>`) to be answered and the submitter and its subagents to go idle,
-  then concludes it through `ConversationsApi.concludeIn`, unless it is running or has queued input, has a reply-enabled
-  message still open, or a subagent still runs. That check, the conclusion and the task's next phase commit in one
-  transaction, so a replay never concludes twice; freeing the worktree follows as its own phase. A report that ends
-  unanswered (a provider error, a Stop, a reset) or a lander that goes idle without sending it (aborted) ends the task
-  and leaves the branch open, for watchdog's idle-branches note. Any later input resumes the branch. The
+  `lineage.landing-note` task in it that delivers the note as a write (request id `lander-root:<submission>`).
+  Concluding the landed branch and waking its starter is the lander's report (`extensions/workspaces/README.md`). The
   note has `source: 'lander'`, `sha`, `base`, `target`, `commits`, `paths`, `divergence` and
   `at`. Text includes the submitter's `#N/at` breadcrumb and `Diverged: …`, including "None"; the landing card shows
   divergence too (up to 10 commits and 8 changed paths). A landing is the commit of a liquid abstract: in a tally, a
@@ -85,14 +79,12 @@ document, tools and model-facing text, where agents and stored entries already u
 - **Project memory** (`memory.ts`): doc `lineage.memory` on a root (`MemoryDoc` in `refs.ts`; forks start empty)
   holds `{ memories: Record<slug, { kind: 'decision' | 'fact' | 'lesson', line, body, source?, updated }> }`: slugs
   match `^[a-z0-9][a-z0-9-]{0,47}$`, `line` is one line of at most 120 characters, `body` at most 2000, `source` a
-  `#<conversation>/<entry>` breadcrumb, at most 150 memories (`MEMORY_LIMIT`). A too-long `line` or `body` is clipped
-  at a word boundary with `…`, never refused, and the summary says which memory it shortened and by how much, so the
-  caller never believes the memory holds what it sent. Every write goes through
+  `#<conversation>/<entry>` breadcrumb, at most 150 memories (`MEMORY_LIMIT`). Every write goes through
   `applyMemoryOps(tx, root, ops)` with ops `{op:'add', slug, kind, line, body, source?}`,
   `{op:'update', slug, kind?, line?, body?, source?}` and `{op:'delete', slug}`: it validates the whole batch against
   the memory as the batch leaves it first (fields, add of an existing slug, update or delete of a missing one, the cap
   after the batch, a listed root) and throws before writing anything, so a batch is all or nothing; it returns a short
-  summary, with each clipped field named. Deferred tool `remember {root?, ops}` (named in @ultimate's definition) writes one batch, defaulting to the
+  summary. Deferred tool `remember {root?, ops}` (named in @ultimate's definition) writes one batch, defaulting to the
   caller's tree root, or outside a tree (@ultimate) to the project's only root; with none or several it names them
   and asks for one. It refuses any caller but the standing `ultimate` agent, since a branch can find a deferred tool
   with `tool_search`. Tool `memory {read?, root?}`, offered to every agent, returns the index, one
@@ -102,8 +94,8 @@ document, tools and model-facing text, where agents and stored entries already u
   the sidebar's Memory row opens it) shows every root's memory grouped into Decisions, Facts and Lessons, newest
   first, under the `MemoryHeader` point (dream's Dream button), the count and brief size, and a filter over slug, line
   and body: slug, line (two lines folded) and age per row; a row expands to its Markdown body and source chip, and a
-  trash icon (always visible on touch) calls `forget`. `useOpenMemory(slug?)` opens the surface on a memory,
-  unfolded and scrolled into view (`MEMORY_FOCUS`); `ui.tsx` also re-exports
+  trash icon (always visible on touch) calls `forget`. `useOpenMemory(slug?)` and `MemoryChip` (recall and remember
+  chips) open the surface on a memory, unfolded and scrolled into view (`MEMORY_FOCUS`); `ui.tsx` also re-exports
   `MemoryDoc` for the sidebar's counts.
   **Brief**: a branch forked from a root that has memories does not start from the tally. Its fork gets a
   `pi.reset` (`head: 'self'`, `data.lineage.brief: {tally}`, the root tip it covers) right after the fork point,
@@ -118,13 +110,14 @@ document, tools and model-facing text, where agents and stored entries already u
   on the root, never evicted, keeps it to one per landing. The task resolves the summary model
   (`summaryModelStatus()`) and memoizes it; without one it completes without asking. It memoizes its input (the
   landing note's text, the submitter's abstract, frozen into the landing or still open, and every memory in full) and
-  the summary model's answer, then asks for JSON `{"ops": [...]}` under rules that default to no ops, prefer updating
+  the summary model's answer, then asks for JSON `{"ops": [...]}`, with an output budget of `MEMORIZE_TOKENS` (16384, reasoning included) instead
+  of a summary's 2048, under rules that default to no ops, prefer updating
   to near-duplicates, delete or rewrite memories a landing removes or replaces, and merge at the cap, with one example
   answer. The parser takes the one object with an `ops` array (extra keys ignored) or a bare array of ops, also inside
   one code fence or between prose; two fences, no batch or invalid JSON refuse it, the last with the JSON error; adds and
   updates take the landing's `#<submitter>/<at>` as source. Since nobody corrects a landing's batch, `normalizeMemoryOp`
-  first collapses each `line` to one line and kebab-cases a slug outside the pattern, before the same clipping every
-  batch gets. The ops commit with the task's completion, so a resumed task applies them once. An unparsable answer or a refused batch writes nothing and is asked once
+  first collapses each `line` to one line and cuts a long `line` or `body` at a word boundary with `…`, and kebab-cases
+  a slug outside the pattern; the `remember` tool stays strict. The ops commit with the task's completion, so a resumed task applies them once. An unparsable answer, one cut off at the budget, or a refused batch writes nothing and is asked once
   more with the refused answer and the reason appended (a memo of its own); when that is refused too, it leaves a notice. The landing itself never fails on it.
 - **Go back** (`rewind.ts`, `rewind.tsx`): the message action **Go back to here** on any stored message of a non-root
   conversation (standing agents included) opens a confirm dialog fed by `rewindPreview {conversation, at}`: steps set
@@ -190,8 +183,8 @@ cleaned up by a review branch that @ultimate starts. The review coordinator read
 conversations (codemode `ultimate.entries` and `ultimate.search`, with `{project}` for another project), the code and
 `git log`. It fact-checks each memory: still true, outdated (with evidence), or contradicted by a later decision; and
 proposes new memories, each with its source `#conversation/entry` and date. It never writes: it returns add, update
-and delete ops, each with a one-line reason, as a `Decisions:` block. @ultimate relays it, and after the user decides
-applies the chosen ops with one `remember` batch.
+and delete ops, each with a one-line reason, as a `Decisions:` block. @ultimate weighs in, the review branch asks the user, and once their answer
+reaches @ultimate it applies the chosen ops with one `remember` batch.
 
 Other extensions use `host.want(LineageApi)` (`api.ts`, with the `Roots` document): `rootOf(id, ctx)` resolves tree membership,
 `leaveNote(to, text, source?)` writes without waking, and `branchOf(id, ctx)` returns `{ root, intent? }` for top-level
@@ -211,8 +204,10 @@ A branch is the conversation; the coordinator is the agent that runs it, so the 
 There is no manual creation page or message-hover branch action. Coordinator branches keep their composers for steering.
 
 A root is the project's read-only History page. Through the SDK's `composer` renderer, every listed root replaces
-its composer with one banner, "You're reading the project's history", and **Back to @ultimate** (`talkToUltimate`,
-like mod+0). There is no text input, memory list or compact button on the page: memory lives in the sidebar's Memory
+its composer with one banner, "You're reading the project's history", with **Open in Zed** (lineage `openEditor`, user-only: the
+project folder in `zeditor` or `zed` on the machine Ultimate runs on; hidden on touch devices) and a small GitHub link
+when `origin` is there, and **Back to @ultimate** (`talkToUltimate`, like mod+0). The sidebar's project
+path opens it. There is no text input, memory list or compact button on the page: memory lives in the sidebar's Memory
 row and the Memory surface, and the palette's Compact on a root runs lineage `compact` while its composer-focus command
 is hidden. A new project starts in @ultimate's conversation instead, from onboarding's Start here card.
 @ultimate maintains standing decisions in memory with `remember` and the memory review. A root's transcript shows no

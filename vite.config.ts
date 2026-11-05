@@ -7,11 +7,13 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: { alias: { '@': fileURLToPath(new URL('web/src', import.meta.url)) } },
   lint: {
-    plugins: ['typescript', 'unicorn', 'import', 'promise', 'vitest'],
+    plugins: ['typescript', 'unicorn', 'import', 'promise', 'vitest', 'react'],
     jsPlugins: ['./lint/ultimate.ts'],
     categories: { correctness: 'error', suspicious: 'error' },
     rules: {
       'import/no-cycle': 'error',
+      'react/no-array-index-key': 'warn',
+      'react/no-children-prop': 'off',
       'typescript/no-unsafe-type-assertion': 'off',
       'promise/always-return': 'off',
       'typescript/no-floating-promises': ['error', { ignoreVoid: false }],
@@ -113,7 +115,6 @@ export default defineConfig({
               ],
             },
           ],
-          'ultimate/no-raw-services': 'error',
         },
       },
       {
@@ -125,6 +126,23 @@ export default defineConfig({
       {
         files: ['extensions/*/api.ts', 'extensions/*/refs.ts', 'extensions/*/ui.tsx'],
         rules: { 'ultimate/api-file-shape': 'error', 'ultimate/api-naming': 'error' },
+      },
+      {
+        // A project's own extensions are TSX too; they get the same React rules as the built-in ones.
+        files: ['.ultimate/extensions/**/*.tsx'],
+        plugins: ['react'],
+        rules: {
+          'react/rules-of-hooks': 'error',
+          'react/exhaustive-deps': 'error',
+          'react/jsx-key': 'error',
+          'react/react-in-jsx-scope': 'off',
+          'react/hooks': 'off',
+          'react/set-state-in-effect': 'off',
+          'react/refs': 'off',
+          'react/purity': 'off',
+          'react/memo-dependencies': 'off',
+          'react/exhaustive-effect-dependencies': 'off',
+        },
       },
       {
         files: ['extensions/**/*.tsx'],
@@ -203,5 +221,8 @@ export default defineConfig({
     hookTimeout: 15000,
     teardownTimeout: 5000,
     maxWorkers: 8,
+    // Under an agent (AI_AGENT, CLAUDECODE, …) Vitest picks its minimal reporter, which prints nothing for passing
+    // files; the lander's stall watchdog then stops a passing run that is silent for two minutes.
+    reporters: ['default'],
   },
 })

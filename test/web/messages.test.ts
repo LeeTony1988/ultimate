@@ -5,16 +5,17 @@ import { callerOf } from '../../extensions/messages/caller.ts'
 import {
   answerTo,
   answeredMessages,
-  callFailed,
   backgroundRow,
   conversationState,
   counterparts,
   stateWord,
   messageStatus,
+  openMessages,
   outgoingState,
   scriptMessaged,
   sentBy,
   sentStatus,
+  threadRow,
   ultimateCompact,
   waitingOnUser,
 } from '../../extensions/messages/data.tsx'
@@ -134,8 +135,8 @@ describe('sender accents', () => {
   })
   it('gives the user the brand colour and conversations a palette colour, the same one every time', () => {
     expect(accentOf('user')).toEqual({
-      left: 'border-l-brand/60',
       fill: 'bg-brand/5',
+      edge: 'border-brand/20',
       name: 'text-brand',
     })
     expect(accentOf(97078)).toBe(accentOf(97078))
@@ -145,7 +146,7 @@ describe('sender accents', () => {
   })
   it('gives @ultimate a fixed purple apart from the palette and the remote violet', () => {
     const ultimate = accentOf('ultimate')
-    expect(ultimate.left).toBe('border-l-purple-500/70')
+    expect(ultimate.name).toBe('text-purple-700 dark:text-purple-300')
     expect([2, 3, 4, 5, 6, 7].map(accentOf)).not.toContain(ultimate)
     expect(accentOf('remote')).not.toBe(ultimate)
   })
@@ -180,8 +181,6 @@ const row = (kind: string, data?: object, model?: object, calls: object[] = []) 
   } as unknown as EntryRecord,
   calls: calls as { id: string; name: string; arguments: unknown }[],
 })
-const result = (toolCallId: string, isError: boolean) =>
-  ({ model: [{ role: 'toolResult', toolCallId, isError }] }) as unknown as EntryRecord
 const said = (stopReason: string) => ({ role: 'assistant', stopReason, content: [] })
 
 describe("background in @ultimate's compact transcript", () => {
@@ -246,6 +245,42 @@ describe("background in @ultimate's compact transcript", () => {
     ).toBe(false)
   })
 
+  it('reads as the thread only what you and @ultimate say to each other', () => {
+    const toUser = { id: 'ask', name: 'message', arguments: { to: 'user' } }
+    const toAgent = { id: 'tell', name: 'message', arguments: { to: '#5' } }
+    const empty = { messages: [], next: 1 }
+    expect(threadRow(row('pi.user'), messagesLog)).toBe(true)
+    expect(threadRow(row('board.message', { from: 'user' }), messagesLog)).toBe(true)
+    expect(threadRow(row('pi.assistant', undefined, said('toolUse'), [toUser]), messagesLog)).toBe(
+      true,
+    )
+    expect(threadRow(row('pi.assistant', undefined, said('stop')), empty)).toBe(true)
+    // An answer that went back to the agent that asked, a message to an agent, a landing, a reload.
+    expect(threadRow(row('pi.assistant', undefined, said('stop')), messagesLog)).toBe(false)
+    expect(threadRow(row('pi.assistant', undefined, said('toolUse'), [toAgent]), messagesLog)).toBe(
+      false,
+    )
+    expect(threadRow(row('lineage.note', { source: 'lander' }), messagesLog)).toBe(false)
+    expect(threadRow(row('prompt.build'), messagesLog)).toBe(false)
+  })
+
+  it('folds a final answer routed down to branches, naming them', () => {
+    // @ultimate's weigh-in to #477200's decisions rendered as a message to the user, above the branch's question card.
+    const routed = {
+      messages: [
+        { ...base, id: 1, from: 8, to: 7, reply: false, report: true as const },
+        { ...base, id: 2, from: 7, to: 8, reply: false, routed: 30 },
+        { ...base, id: 3, from: 7, to: 9, reply: false, routed: 30 },
+        { ...base, id: 4, from: 7, to: 6, reply: false, routed: 29 },
+      ],
+      next: 5,
+    }
+    const answer = row('pi.assistant', undefined, said('stop'))
+    expect(backgroundRow(answer, routed)).toBe(true)
+    expect(threadRow(answer, routed)).toBe(false)
+    expect(counterparts(answer, routed)).toEqual([8, 9])
+  })
+
   it('names who each row was with', () => {
     const toAgent = { id: 'tell', name: 'message', arguments: { to: '#5' } }
     expect(counterparts(row('board.reply', { from: 4 }), messagesLog)).toEqual([4])
@@ -255,14 +290,6 @@ describe("background in @ultimate's compact transcript", () => {
       counterparts(row('pi.assistant', undefined, said('toolUse'), [toAgent]), messagesLog),
     ).toEqual([5])
     expect(counterparts(row('pi.assistant', undefined, said('stop')), messagesLog)).toEqual([4])
-  })
-
-  it('tells a failed call from one that ran by its stored result', () => {
-    const entries = [result('branch-1', true), result('branch-2', false)]
-    expect(callFailed(entries, 'branch-1')).toBe(true)
-    expect(callFailed(entries, 'branch-2')).toBe(false)
-    // Still running: no result yet.
-    expect(callFailed(entries, 'branch-3')).toBe(false)
   })
 
   it('pairs a question with your answer', () => {
@@ -355,7 +382,7 @@ describe('conversation state', () => {
     expect(conversationState({ ...primary, runState: 'queued' }, messagesLog())).toBe('working')
   })
 
-  it('waits only for the primary agent with an open question to the user', () => {
+  it('waits for the primary agent with an open question to the user', () => {
     expect(conversationState({ ...primary, runState: 'answered' }, toUser)).toBe('waits')
     expect(conversationState({ ...primary, runState: 'answered' }, messagesLog())).toBe('idle')
     expect(
@@ -363,9 +390,14 @@ describe('conversation state', () => {
     ).toBe('idle')
   })
 
-  it('never waits for a subagent or another conversation, even with open messages to the user', () => {
-    for (const kind of ['subagent', 'other'] as const)
-      expect(conversationState({ id: 2, kind, runState: 'answered' }, toUser)).not.toBe('waits')
+  it('waits for a non-subagent question of its own, never for a subagent or an unrelated conversation', () => {
+    expect(conversationState({ id: 2, kind: 'other', runState: 'answered' }, toUser)).toBe('waits')
+    expect(conversationState({ id: 2, kind: 'subagent', runState: 'answered' }, toUser)).not.toBe(
+      'waits',
+    )
+    expect(conversationState({ id: 3, kind: 'other', runState: 'answered' }, toUser)).not.toBe(
+      'waits',
+    )
   })
 
   it('awaits the primary agent while its reply-expected message to it is open', () => {
@@ -382,6 +414,37 @@ describe('conversation state', () => {
     expect(
       conversationState({ ...branch, kind: 'subagent' }, messagesLog({ from: 5, to: 3 })),
     ).toBe('done')
+  })
+
+  it('awaits the primary agent after reporting to it, until the primary agent messages it', () => {
+    const branch = { id: 5, kind: 'other' as const, runState: 'answered' as const, primary: 3 }
+    const report = { from: 5, to: 3, reply: false, report: true as const }
+    expect(conversationState(branch, messagesLog(report))).toBe('awaiting')
+    // A branch's reply awaits its answer; a standing agent's reply just answered (life's @google).
+    const reply = { from: 5, to: 3, reply: false, re: 1 }
+    expect(conversationState(branch, messagesLog({ ...reply, awaits: true }))).toBe('awaiting')
+    expect(conversationState(branch, messagesLog(reply))).toBe('idle')
+    // A note (no report) waits on nothing.
+    expect(conversationState(branch, messagesLog({ from: 5, to: 3, reply: false }))).toBe('idle')
+    expect(conversationState(branch, messagesLog(report, { from: 3, to: 5, reply: false }))).toBe(
+      'idle',
+    )
+  })
+
+  it('owes no report from a conversation concluded after it, until a newer report', () => {
+    // The bug: two landed branches, concluded by @ultimate, still showed as owed on its composer chip.
+    const report = { from: 5, to: 3, reply: false, report: true as const, at: 100 }
+    const owed = (since: number | undefined, ...more: Partial<Message>[]) =>
+      openMessages(messagesLog(report, ...more).messages, 3, (id) =>
+        id === 5 ? since : undefined,
+      ).owed.map((m) => m.id)
+    expect(owed(undefined)).toEqual([1])
+    expect(owed(Infinity)).toEqual([])
+    // Concluded at 200, then resumed: its earlier report stays settled, a newer one is owed.
+    expect(owed(200)).toEqual([])
+    expect(owed(200, { ...report, at: 300 })).toEqual([2])
+    const branch = { id: 5, kind: 'other' as const, runState: 'answered' as const, primary: 3 }
+    expect(conversationState({ ...branch, concludedSince: 200 }, messagesLog(report))).toBe('idle')
   })
 
   it('says every state in a word, so a standing row or lane never falls back to idle', () => {

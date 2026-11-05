@@ -17,7 +17,6 @@ import type {
   Harness,
   JsonObject,
 } from '@earendil-works/pi-durable'
-import { normalizePath } from 'vite-plus'
 import type { ViteDevServer } from 'vite-plus'
 import type { ConversationSummary, ExtensionInfo, SystemInfo } from '../shared/protocol.ts'
 import type { PreparedHost } from './harness.ts'
@@ -51,10 +50,10 @@ export type ExtensionHost = Pick<
 > & {
   access: Pick<Access, 'allow'>
   notice(message: string): void
-  provide(name: string, value: unknown): void
-  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters
-  use<T>(name: string): T | undefined
-  /** Provide the service of `api`, with the reload semantics of `provide`. Facet scope only. */
+  /**
+   * Provide the service of `api`. Facet scope only: staged until the facet installs, replaced on reload, kept when a
+   * reload fails, and removed when the facet is disabled, removed or closed.
+   */
   implement<S>(api: Api<string, S>, value: NoInfer<S>): void
   /** A handle to the current provider of `api`; throws while none is enabled, except during facet setup. */
   need<S>(api: Api<string, S>): S
@@ -70,6 +69,8 @@ export type ExtensionHost = Pick<
   /** Run `callback` each time before the harness closes while the process stays: on a core swap. */
   onRelease(callback: () => Promise<void>): void
   onClose(cleanup: () => Promise<void>): void
+  /** Run `callback` each time an extension's server facet fails to load, with its name and error; facet-scoped. */
+  onLoadError(callback: (name: string, error: string) => void): void
   harness(): Harness
   system(): SystemInfo
   /** Summaries of every conversation, as the web's conversation list shows them; empty until the harness is open. */
@@ -112,11 +113,13 @@ export async function loadExtensions(
   runtime: Pick<ExtensionHost, 'harness' | 'system' | 'conversations' | 'access'>,
   watch: Watch,
   notice: (message: string) => void = () => {},
+  /** Bring the web bundle up to date with the settings just applied. */
+  rebuildWeb: () => Promise<void> = async () => {},
 ) {
   const trace = host.callTrace
   const log = eventLog(runtime.harness, trace.run, trace.keep)
   const roots = discoveryRoots(host.ultimateRoot, host.projectRoot, host.userHome)
-  const directories = roots.map((root) => normalizePath(join(root.path, 'extensions')))
+  const directories = roots.map((root) => join(root.path, 'extensions'))
   const provided = new Map<ExtensionHost, Map<string, unknown>>()
   const providers = new Map<string, { owner: ExtensionHost; value: unknown }>()
   const facetHosts = new Map<string, ExtensionHost>()
@@ -172,12 +175,10 @@ export async function loadExtensions(
       get chapter() {
         return extensionHost.chapter
       },
-      provide: (serviceName, value) => {
-        provided.get(facetHost)!.set(serviceName, value)
-        if (facetHosts.get(name) === facetHost)
-          providers.set(serviceName, { owner: facetHost, value })
+      implement: (api, value) => {
+        provided.get(facetHost)!.set(api.name, value)
+        if (facetHosts.get(name) === facetHost) providers.set(api.name, { owner: facetHost, value })
       },
-      implement: (api, value) => facetHost.provide(api.name, value),
       need: <S>(api: Api<string, S>): S =>
         apis.need(facetHost, name, api, facetHosts.get(name) !== facetHost),
       want: <S>(api: Api<string, S>): S | undefined => apis.want(facetHost, name, api),
@@ -237,6 +238,10 @@ export async function loadExtensions(
         if (sharedResource) extensionHost.onClose(cleanup)
         else facetCleanups.get(facetHost)!.add(cleanup)
       },
+      onLoadError: (callback) => {
+        loadErrorListeners.add(callback)
+        stops.add(() => loadErrorListeners.delete(callback))
+      },
       react: (reactorName, tokens, handler, options) => {
         const reactor = log.reactor(`${name}/${reactorName}`, tokens, handler, options)
         facetHost.onOpen(reactor.start)
@@ -258,7 +263,7 @@ export async function loadExtensions(
   const pollActions = new Map<string, string[]>()
   const settingsReloads = new Set<string>()
   const records = new Map<string, ExtensionInfo>()
-  /** Each loaded extension's folder with symlinks resolved, where Vite keys its modules; normalized like Vite's ids. */
+  /** Each loaded extension's folder with symlinks resolved, where Vite keys its modules. */
   const targets = new Map<string, string>()
   const documents = new Map<string, ConversationDocToken<JsonObject>[]>()
   const findDoc = (kind: string) =>
@@ -269,6 +274,7 @@ export async function loadExtensions(
       ...[...documents.values()].flat(),
     ].find((doc) => doc.definition.kind === kind)
   const openers = new Set<() => Promise<void>>()
+  const loadErrorListeners = new Set<(name: string, error: string) => void>()
   const releasers = new Set<() => Promise<void>>()
   let open = false
   const cleanups = new Set<() => Promise<void>>()
@@ -325,11 +331,6 @@ export async function loadExtensions(
       throw new Error('Reactors require a facet scope')
     },
     eventLog: log.eventLog,
-    provide: () => {
-      throw new Error('Providers require a facet scope')
-    },
-    // oxlint-disable-next-line typescript/no-unnecessary-type-parameters
-    use: <T>(name: string) => providers.get(name)?.value as T | undefined,
     implement: () => {
       throw new Error('Providers require a facet scope')
     },
@@ -356,6 +357,7 @@ export async function loadExtensions(
       releasers.add(callback)
     },
     onClose: (cleanup) => cleanups.add(cleanup),
+    onLoadError: (callback) => loadErrorListeners.add(callback),
     ultimateRoot: host.ultimateRoot,
     projectRoot: host.projectRoot,
     userHome: host.userHome,
@@ -416,16 +418,7 @@ export async function loadExtensions(
       // The caller gets the failure; the chain recovers so later reloads still run.
       chain = work.catch(() => changed())
       await work
-      for (const id of [
-        '\0virtual:ultimate/web-facets',
-        normalizePath(join(host.ultimateRoot, 'web/src/index.css')),
-      ]) {
-        const module = vite.moduleGraph.getModuleById(id)
-        if (module) {
-          vite.moduleGraph.invalidateModule(module)
-          await vite.reloadModule(module)
-        }
-      }
+      await rebuildWeb()
     },
     doc: findDoc,
     metadata: Metadata,
@@ -461,31 +454,9 @@ export async function loadExtensions(
   const settingsFiles = [
     ...extensionSettingsFiles(host.projectRoot, host.userHome),
     join(host.userHome, '.ultimate/trust.json'),
-  ].map(normalizePath)
+  ]
   let previousSettings: string | undefined
   let diagnostics: string[] = []
-  /** The collisions last reported, so a reload that changes nothing else does not repeat them. */
-  let reportedCollisions = new Set<string>()
-  /**
-   * Every tool name two loaded extensions both declare: Pi composes same-named tools last-wins, so one of the pair is
-   * silently not the tool its extension means. The tool, both extensions and the winner are named, once per collision.
-   */
-  function toolCollisions() {
-    const owners = new Map<string, string[]>()
-    for (const extension of host.registry.snapshot().installed())
-      for (const tool of extension.tools ?? [])
-        owners.set(tool.name, [...(owners.get(tool.name) ?? []), extension.name])
-    const collisions = new Set<string>()
-    for (const [tool, names] of owners) {
-      if (names.length < 2) continue
-      // The registry installs in display order, so the last one is the tool every agent gets.
-      collisions.add(
-        `Tool ${tool} is declared by ${names.join(' and ')}; ${names.at(-1)} wins, so the others never run it. Rename one tool in a user or project override.`,
-      )
-    }
-    for (const message of collisions) if (!reportedCollisions.has(message)) notice(message)
-    reportedCollisions = collisions
-  }
   async function discover() {
     const active = await discoverExtensions(host.ultimateRoot, host.projectRoot, host.userHome)
     const available = await discoverExtensions(
@@ -529,15 +500,13 @@ export async function loadExtensions(
     for (const {
       name,
       path,
-      target: discovered,
+      target,
       source,
       enabled,
       files,
       core,
       error: discoveryError,
     } of winners) {
-      // Vite's watcher, module ids and hot messages use forward slashes on Windows.
-      const target = normalizePath(discovered)
       const previous = records.get(name)
       host.extensionSources.set(name, source)
       const layer = settings.layers.get(name) ?? (source === 'builtin' ? 'default' : 'folder')
@@ -564,7 +533,7 @@ export async function loadExtensions(
         const facetHost = scope(name)
         try {
           // Vite keeps a URL bound to the file it first resolved to, so a repointed link loads by its target.
-          const module = await vite.ssrLoadModule(normalizePath(join(target, 'server.ts')))
+          const module = await vite.ssrLoadModule(join(target, 'server.ts'))
           const extension: Extension =
             typeof module.default === 'function' ? await module.default(facetHost) : module.default
           if (!extension || extension.name !== name)
@@ -597,6 +566,19 @@ export async function loadExtensions(
               ? await module.secrets(facetHost)
               : (module.secrets ?? []),
           )
+          // Pi lets the last extension win a tool name silently. A later source layer overriding a tool on purpose is
+          // fine (a project's bash over coding-tools); within one layer, the extension holding the name keeps it.
+          const taken = host.registry
+            .snapshot()
+            .tools()
+            .filter(
+              (entry) =>
+                entry.extension.name !== name &&
+                host.extensionSources.get(entry.extension.name) === source &&
+                extension.tools?.some((tool) => tool.name === entry.tool.name),
+            )
+            .map((entry) => `${entry.tool.name} is already provided by ${entry.extension.name}`)
+          if (taken.length) throw new Error(taken.join('; '))
           host.registry.install(trace.tools(extension))
           const previousHost = facetHosts.get(name)
           facetHosts.set(name, facetHost)
@@ -618,7 +600,6 @@ export async function loadExtensions(
               extension.tools?.map((tool) => ({
                 name: tool.name,
                 description: tool.description.trim().split('\n')[0] ?? '',
-                ...(tool.deferred ? { deferred: true as const } : {}),
               })) ?? [],
             sections: extension.sections?.map((section) => section.key) ?? [],
             hooks: extension.hooks?.length ?? 0,
@@ -631,6 +612,7 @@ export async function loadExtensions(
             ...(previous?.server ?? { tools: [], sections: [], hooks: 0, docs: [] }),
             error: String(error),
           }
+          for (const listener of loadErrorListeners) listener(name, String(error))
         }
       } else if (!enabled || !record.facets.server) {
         await unload(name)
@@ -657,7 +639,6 @@ export async function loadExtensions(
     const missing = new Set(apis.missing())
     for (const message of missing) if (!missingApis.has(message)) notice(message)
     missingApis = missing
-    toolCollisions()
     await changed()
   }
   async function reloadSettings() {
@@ -671,7 +652,7 @@ export async function loadExtensions(
               !previous ||
               previous.enabled !== entry.enabled ||
               previous.path !== entry.path ||
-              targets.get(entry.name) !== normalizePath(entry.target) ||
+              targets.get(entry.name) !== entry.target ||
               settingsReloads.has(entry.name)
             )
           })
@@ -685,18 +666,16 @@ export async function loadExtensions(
   // A restarted Vite starts with an empty module graph, so the next change reloads every extension.
   let graphLost = false
   // Vite owns the transitive local module graph; query-string imports do not.
-  const onChange = (eventFile: string) => {
-    // Watcher paths are native; Vite's file map and module ids use forward slashes.
-    const file = normalizePath(resolve(eventFile))
+  const onChange = (file: string) => {
     if (
       closed ||
       ![host.ultimateRoot, host.projectRoot, ...roots.slice(1).map((root) => root.path)].some(
-        (root) => file.startsWith(normalizePath(root) + '/'),
+        (root) => resolve(file).startsWith(root + '/'),
       ) ||
       file.includes('/node_modules/')
     )
       return
-    if (settingsFiles.includes(file)) {
+    if (settingsFiles.includes(resolve(file))) {
       enqueue(reloadSettings)
       return
     }
@@ -712,16 +691,13 @@ export async function loadExtensions(
         const selected = new Set<string>()
         // Vite keys its graph by real path, while the watcher reports a symlinked extension's files through the
         // link. A file removed since the event has no real path; its link path then misses the graph, as before.
-        const modules = vite.moduleGraph.getModulesByFile(
-          normalizePath(await realpath(file).catch(() => file)),
-        )
+        const modules = vite.moduleGraph.getModulesByFile(await realpath(file).catch(() => file))
         const visited = new Set<import('vite-plus').ModuleNode>()
         const visit = (module: import('vite-plus').ModuleNode) => {
           if (visited.has(module)) return
           visited.add(module)
           for (const name of records.keys())
-            if (module.file === normalizePath(join(targets.get(name)!, 'server.ts')))
-              selected.add(name)
+            if (module.file === join(targets.get(name)!, 'server.ts')) selected.add(name)
           for (const importer of module.importers) visit(importer)
         }
         for (const module of modules ?? []) visit(module)
@@ -730,7 +706,7 @@ export async function loadExtensions(
         const servers = new Set(selected)
         if (name) {
           selected.add(name)
-          if (directory && file === `${directory}/${name}/server.ts`) servers.add(name)
+          if (directory && file === join(directory, name, 'server.ts')) servers.add(name)
         }
         await reload(selected, servers)
       } catch (error) {
@@ -740,8 +716,7 @@ export async function loadExtensions(
       }
     })
   }
-  const onStructure = (eventFile: string) => {
-    const file = normalizePath(resolve(eventFile))
+  const onStructure = (file: string) => {
     const directory = directories.find((root) => file.startsWith(root + '/'))
     if (!directory) return onChange(file)
     if (graphLost) {
@@ -780,7 +755,6 @@ export async function loadExtensions(
       diagnostics: () => [
         ...new Set([
           ...diagnostics,
-          ...reportedCollisions,
           ...[...facetNotices.values()].flatMap((messages) => [...messages.keys()]),
           ...apis.missing(),
           ...projectDiagnostics(host.projectRoot, host.userHome),
@@ -850,10 +824,13 @@ export function validateSecrets(
         throw new Error('secret URLs must use http(s)')
       }
     }
+    if (item.provider !== undefined && (typeof item.provider !== 'string' || !item.provider))
+      throw new Error('secret providers must be non-empty strings')
     return {
       name: item.name,
       description: item.description,
       ...(item.url === undefined ? {} : { url: item.url }),
+      ...(item.provider === undefined ? {} : { provider: item.provider }),
     }
   })
 }

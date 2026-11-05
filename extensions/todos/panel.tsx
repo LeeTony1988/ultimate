@@ -80,9 +80,9 @@ export function Todos() {
 
   return (
     <div className="py-2" data-todos>
-      <div className="flex items-center gap-2 px-3 pb-2 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase">
+      <div className="flex items-center gap-2 px-3 pb-2 section-label">
         To-dos
-        <span className="ml-auto tracking-normal normal-case text-muted-foreground/70">
+        <span className="ml-auto text-muted-foreground/70">
           {questions.length > 0 && (
             <span className="text-amber-700 dark:text-amber-300">
               {questions.length} {questions.length === 1 ? 'question' : 'questions'}
@@ -118,7 +118,7 @@ export function Todos() {
       )}
       {done.length > 0 && (
         <details className="group/done mt-2" data-todos-done>
-          <summary className="flex cursor-pointer list-none items-center gap-1 px-3 py-1.5 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase hover:text-foreground">
+          <summary className="flex cursor-pointer list-none items-center gap-1 px-3 py-1.5 section-label hover:text-foreground">
             <ChevronRightIcon className="size-3 transition-transform group-open/done:rotate-90" />
             Done · {done.length}
           </summary>

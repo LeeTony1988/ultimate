@@ -177,9 +177,12 @@ export function App() {
   )
   return (
     <TooltipProvider delayDuration={400}>
-      <div className="safe-area flex flex-col">
-        {loaded && !embedded && <TitleBar />}
-        {loaded && !pending && <Surfaces surfaces={line} />}
+      <div className="safe-area flex">
+        {loaded && !embedded && <Slot name="shell.rail" />}
+        <div className="flex min-w-0 flex-1 flex-col">
+          {loaded && !embedded && <TitleBar />}
+          {loaded && !pending && <Surfaces surfaces={line} />}
+        </div>
       </div>
       {loaded && <Shortcuts />}
       <CommandPalette />

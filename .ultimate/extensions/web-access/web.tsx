@@ -105,7 +105,7 @@ function Sources({ results }: { results: Source[] }) {
   return (
     <ol aria-label="Search results" className="divide-y divide-border/60">
       {results.map((result, index) => (
-        <li className="flex gap-2.5 px-2.5 py-2" key={index}>
+        <li className="flex gap-2.5 px-2.5 py-2" key={result.url}>
           <span className="w-4 shrink-0 text-right text-muted-foreground/60 tabular-nums">
             {index + 1}
           </span>
@@ -178,8 +178,11 @@ function Search({ call }: { call: ToolCallView }) {
               {failure.attempts.length === 0 && (
                 <div className="break-words text-[12px] text-error">{failure.error}</div>
               )}
-              {failure.attempts.map((attempt, index) => (
-                <div className="flex min-w-0 items-start gap-2 text-[11.5px]" key={index}>
+              {failure.attempts.map((attempt) => (
+                <div
+                  className="flex min-w-0 items-start gap-2 text-[11.5px]"
+                  key={`${attempt.provider}:${attempt.error}`}
+                >
                   <span className="shrink-0 rounded-sm border border-border/70 px-1 py-px text-[10px] tracking-wide text-muted-foreground uppercase">
                     {attempt.provider}
                   </span>

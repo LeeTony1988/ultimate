@@ -60,6 +60,8 @@ export async function createChild(
     excludeExtensions?: string[]
     model?: { provider: string; modelId: string }
     thinking?: ModelThinkingLevel
+    /** `definition` was made on the fly: no file of its name, so the profile records none. */
+    adhoc?: true
   },
 ) {
   const { parentAgent: parent, definition, modelRuntime } = options
@@ -73,12 +75,12 @@ export async function createChild(
     ...change,
     cwd: options.cwd ?? parent.cwd ?? null,
   })
-  const metadata = await tx.doc(options.metadata, child.id)
-  metadata.label = options.label
-  // An identity-only task has no task line to name the child; leave it untitled rather than storing a blank title.
-  if (options.title) metadata.title = options.title
-  else delete metadata.title
-  if (definition) (await tx.doc(Profile, child.id)).definition = definition.name
+  Object.assign(await tx.doc(options.metadata, child.id), {
+    label: options.label,
+    title: options.title,
+  })
+  if (options.adhoc) (await tx.doc(Profile, child.id)).adhoc = true
+  else if (definition) (await tx.doc(Profile, child.id)).definition = definition.name
   if (definition?.summaries === false)
     await host.need(ConversationsApi).setAutomaticSummaries(tx, child.id, false)
   return child

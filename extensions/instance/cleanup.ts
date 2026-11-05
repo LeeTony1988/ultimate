@@ -7,24 +7,9 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { alive, readOwner } from '../../server/lock.ts'
 import { git } from '../../lib/git.ts'
 
-/**
- * Hold both lock transactions for the cleanup work, and release them only for the unlink itself: Windows refuses to
- * remove an open file and both databases live inside the home. The PID sidecars carry the protection across that last
- * step, so they are read again once the locks are gone: a preview that started there keeps its home.
- */
+/** Hold both lock transactions throughout cleanup; PID sidecars also protect startup and shutdown gaps. */
 export async function cleanPreview(home: string) {
   const locks: DatabaseSync[] = []
-  const release = () => {
-    for (const database of locks.splice(0)) database.close()
-  }
-  /** A live process owns this home through either PID sidecar; a stale or absent one leaves it to cleanup. */
-  async function liveOwner() {
-    for (const name of ['ultimate.lock', 'storage.lock']) {
-      const owner = await readOwner(join(home, name))
-      if (owner && alive(owner.pid)) return true
-    }
-    return false
-  }
   try {
     for (const name of ['ultimate.lock', 'storage.lock']) {
       const owner = await readOwner(join(home, name))
@@ -58,8 +43,6 @@ export async function cleanPreview(home: string) {
           '--git-common-dir',
         ).catch((error: unknown) => {
           // Its repository is gone (a preview of a deleted temporary project): nothing is registered to release.
-          // Git 2.56 words a worktree gitfile whose repository is gone as "gitfile does not point to a valid
-          // repository"; older versions say "not a git repository". Both mean the same here.
           if (
             /not a git repository|gitfile does not point to a valid repository/.test(
               (error as { stderr?: string }).stderr ?? '',
@@ -83,13 +66,13 @@ export async function cleanPreview(home: string) {
         const inside = relative(resolve(home), path)
         if (!inside || inside === '..' || inside.startsWith('..' + sep) || isAbsolute(inside))
           continue
-        const branch = fields.find((field) => field.startsWith('branch refs/heads/'))?.slice(18)
-        await git(common, '--git-dir', common, 'worktree', 'remove', '--force', path)
-        if (branch?.startsWith(branchPrefix))
-          await git(common, '--git-dir', common, 'branch', '-D', '--', branch)
+        // The preview's own checkout, possibly half removed (no `.git`) by a release its stop interrupted, which `git
+        // worktree remove` refuses while the folder exists: delete it first, then unregister it, locked or not.
+        await rm(path, { recursive: true, force: true })
+        await git(common, '--git-dir', common, 'worktree', 'remove', '--force', '--force', path)
       }
       await git(common, '--git-dir', common, 'worktree', 'prune')
-      // The branch it landed on, and workspace branches whose checkouts are gone.
+      // The branch it landed on and its workspace branches, now that no checkout holds them.
       const left = await git(
         common,
         '--git-dir',
@@ -101,13 +84,10 @@ export async function cleanPreview(home: string) {
       for (const branch of left.split('\n').filter(Boolean))
         await git(common, '--git-dir', common, 'branch', '-D', '--', branch)
     }
-    // Everything the locks guarded is gone. Release them before the unlink, then let the sidecars decide once more.
-    release()
-    if (await liveOwner()) return false
     await rm(home, { recursive: true, force: true })
     return true
   } finally {
-    release()
+    for (const database of locks) database.close()
   }
 }
 
@@ -115,8 +95,6 @@ export async function cleanPreview(home: string) {
  * Only real preview directories in the supplied directory; never follow a symlink into another home.
  * Every host sweeps the shared temporary directory on open, so one sweep at a time owns it: a home's own lock file is
  * deleted with the home, and a racing sweep would recreate it, lock the new file and clean alongside.
- * This database stays open while homes are removed, which is safe because it lives in `directory` itself: `sweep`
- * removes only the `ultimate-instance-*` entries below it, never the directory holding this lock.
  */
 export async function sweepPreviews(directory: string, notice: (message: string) => void) {
   const lock = new DatabaseSync(join(directory, 'ultimate-preview-sweep.lock.db'))

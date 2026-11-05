@@ -49,6 +49,7 @@ function CallLog({ calls, running }: { calls: readonly NestedCall[]; running: bo
     <ToolSection label={`Calls · ${calls.length}`}>
       <div className="flex flex-col">
         {calls.map((call, index) => (
+          // oxlint-disable-next-line react/no-array-index-key -- Calls append to the script log and may repeat.
           <div className="flex min-w-0 items-center gap-2 leading-[1.7]" key={index}>
             <span
               className={cn(
@@ -190,10 +191,10 @@ function CodemodeCall({ call }: { call: ToolCallView }) {
             className="group/script border-b border-border/80"
             defaultOpen={lines.length <= 12}
           >
-            <CollapsibleTrigger className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-[10px] tracking-wider text-muted-foreground/80 uppercase hover:text-foreground">
+            <CollapsibleTrigger className="flex w-full items-center gap-1.5 px-2.5 py-1.5 section-label hover:text-foreground">
               <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/script:rotate-90" />
               Script
-              <span className="tracking-normal normal-case text-muted-foreground/60">
+              <span className="text-muted-foreground/60">
                 {lines.length} line{lines.length === 1 ? '' : 's'}
               </span>
             </CollapsibleTrigger>

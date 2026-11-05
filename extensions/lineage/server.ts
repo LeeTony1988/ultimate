@@ -2,6 +2,7 @@ import type { Context, JsonValue } from '@earendil-works/chord'
 import { onCommit } from '../../lib/commits.ts'
 import { awaitWithContext, BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { arr, bool, int, lit, obj, opt, str, union } from '@earendil-works/pi-schema'
+import { strEnum } from '../../lib/schema.ts'
 import type { Message, Models, ModelThinkingLevel } from '@earendil-works/pi-ai'
 import { estimateMessageTokens, estimateTextTokens } from '@earendil-works/pi-ai/utils/estimate'
 import {
@@ -15,8 +16,6 @@ import {
   defineTool,
   GenerationTask,
   hook,
-  InboxDoc,
-  LiveDoc,
   ROOT_CONVERSATION_ID,
   section,
   UsageDoc,
@@ -41,17 +40,19 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { SubmissionLanded, WorkspacesApi } from '../workspaces/api.ts'
 import type { LandedData } from '../workspaces/api.ts'
 import { Branch, Branched, LineageApi, Rooted, Roots } from './api.ts'
-import { ConversationsApi, Release, Trees } from '../conversations/api.ts'
-import { Standing, Started, Subagents } from '../subagents/api.ts'
-
-/** The fields of a message the landed-branch check reads. */
-type MessageRow = { from: unknown; reply: boolean; state: string }
-import { CompactAction, ForgetAction, RecentAction, TallyDoc } from './refs.ts'
+import { ConversationsApi, Trees } from '../conversations/api.ts'
+import { Standing, Started } from '../subagents/api.ts'
+import { spawn } from 'node:child_process'
+import { CompactAction, ForgetAction, OpenEditorAction, RecentAction, TallyDoc } from './refs.ts'
 import {
   applyMemoryOps,
+  BODY_CHARS,
+  LINE_CHARS,
   Memorized,
   Memory,
   memoryBrief,
+  MEMORY_RULES,
+  MEMORY_SLUG,
   memoryIndex,
   memorizeTask,
   memoryText,
@@ -101,7 +102,18 @@ export const Tally = defineDoc<TallyState>({
 
 export const docs = [Roots, Branch, Tally, Seen, Memory]
 /** Going back sets a conversation's path aside, and forgetting drops a memory: only the user decides those. */
-export const userActions = ['rewind', 'forget', 'compact']
+export const userActions = ['rewind', 'forget', 'compact', 'openEditor']
+
+/** Starts `editor` on `folder`, detached, once it has spawned; rejects when it is not on PATH. */
+const launch = (editor: string, folder: string) =>
+  new Promise<void>((resolve, reject) => {
+    const child = spawn(editor, [folder], { detached: true, stdio: 'ignore' })
+    child.once('error', reject)
+    child.once('spawn', () => {
+      child.unref()
+      resolve()
+    })
+  })
 
 const ASK_TOKENS = 8192
 
@@ -156,11 +168,7 @@ export function sourceText(
   return blocks.join('\n\n')
 }
 
-/**
- * Ask `model` once with a system prompt and one user message; returns the text, or throws on a failed answer. A stray
- * tool call with text is only a warning: the text is the answer. Without text, ask once more, telling it not to call a
- * tool; another tool call without text fails with the stop reason.
- */
+/** Ask `model` once with a system prompt and one user message; returns the text, or throws on a failed answer. */
 async function ask(
   models: Models,
   tx: (change: (tx: Tx) => Promise<void>) => Promise<void>,
@@ -173,44 +181,25 @@ async function ask(
 ) {
   const model = models.getModel(ref.provider, ref.modelId)
   if (!model) throw new Error(`Model ${ref.provider}/${ref.modelId} is unavailable`)
-  const complete = async (content: string) => {
-    const answer = await models.completeSimple(
-      model,
-      { systemPrompt, messages: [{ role: 'user', content, timestamp: Date.now() }] },
-      {
-        ...(thinking && thinking !== 'off' ? { reasoning: thinking } : {}),
-        maxTokens: Math.min(ASK_TOKENS, model.maxTokens || ASK_TOKENS),
-        signal,
-      },
-    )
-    await tx(async (draft) => {
-      const usage = (await draft.doc(UsageDoc, usageConversation)).models
-      const key = `${answer.provider}/${answer.model}`
-      const total = Object.hasOwn(usage, key) ? usage[key] : undefined
-      if (!total) usage[key] = answer.usage
-      else
-        for (const counter of [
-          'input',
-          'output',
-          'cacheRead',
-          'cacheWrite',
-          'totalTokens',
-        ] as const)
-          total[counter] += answer.usage[counter]
-    })
-    return answer
-  }
-  let answer = await complete(input)
-  let result = contentText(answer.content).trim()
-  // A model that ends a summary with a stray tool call still said the summary: keep it.
-  if (answer.stopReason === 'toolUse' && result) return result
-  if (answer.stopReason === 'toolUse') {
-    answer = await complete(`${input}\n\nDo not call any tool: answer with the summary text only.`)
-    result = contentText(answer.content).trim()
-    if (answer.stopReason === 'toolUse' && result) return result
-    // The retry had no text either: name why it stopped rather than retry again.
-    if (!result) throw new Error(answer.errorMessage ?? `The model stopped: ${answer.stopReason}`)
-  }
+  const answer = await models.completeSimple(
+    model,
+    { systemPrompt, messages: [{ role: 'user', content: input, timestamp: Date.now() }] },
+    {
+      ...(thinking && thinking !== 'off' ? { reasoning: thinking } : {}),
+      maxTokens: Math.min(ASK_TOKENS, model.maxTokens || ASK_TOKENS),
+      signal,
+    },
+  )
+  await tx(async (draft) => {
+    const usage = (await draft.doc(UsageDoc, usageConversation)).models
+    const key = `${answer.provider}/${answer.model}`
+    const total = Object.hasOwn(usage, key) ? usage[key] : undefined
+    if (!total) usage[key] = answer.usage
+    else
+      for (const counter of ['input', 'output', 'cacheRead', 'cacheWrite', 'totalTokens'] as const)
+        total[counter] += answer.usage[counter]
+  })
+  const result = contentText(answer.content).trim()
   if (answer.stopReason !== 'stop' && answer.stopReason !== 'length')
     throw new Error(answer.errorMessage ?? `The model stopped: ${answer.stopReason}`)
   if (!result) throw new Error('The model returned no answer')
@@ -471,10 +460,20 @@ function lineage(host: ExtensionHost) {
                 answerId = view.entries[index].id
               }
             }
-            const delivered = (await host.harness().snapshot(Notified, runtime.conversationId, ctx))
-              ?.answers[target]
-            // This caller already has that answer: wait for the target to write again, then for its next idle.
-            if (delivered === undefined || answerId > delivered) break
+            const caller = runtime.conversationId
+            const delivered = (await host.harness().snapshot(Notified, caller, ctx))?.answers[
+              target
+            ]
+            // Read by kind: messages already depends on lineage.
+            const board = host.doc('board')
+            const log = board && (await host.harness().snapshot(board, ROOT_CONVERSATION_ID, ctx))
+            // A reply carries the answer entry it returned.
+            const replied = (
+              log?.messages as { from: unknown; to: unknown; answer?: number }[] | undefined
+            )?.some((m) => m.from === target && m.to === caller && m.answer === answerId)
+            // This caller already has that answer, from a notify or as a reply: wait for the target to write again,
+            // then for its next idle.
+            if (!replied && (delivered === undefined || answerId > delivered)) break
             await awaitWithContext(written.promise, ctx)
           } finally {
             unsubscribe()
@@ -572,121 +571,7 @@ function lineage(host: ExtensionHost) {
     abort: (_task, runtime, ctx) =>
       runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
   })
-  const conversations = host.need(ConversationsApi)
   const done = { status: 'terminal', outcome: { status: 'completed', result: null } } as const
-  /**
-   * Concludes a conversation whose submission landed, once the lander's report reached it and it and its subagents are
-   * idle. Background, so it never keeps its own conversation busy. A branch that still waits on a reply or runs a
-   * subagent then stays open; any later input resumes a concluded one.
-   */
-  const ConcludeLanded = defineTask<
-    { id: ConversationId; submission: string; lander: number },
-    { phase: 'wait' } | { phase: 'conclude' } | { phase: 'release' },
-    null
-  >({
-    name: 'lineage.conclude-landed',
-    version: 1,
-    initial: () => ({ phase: 'wait' }),
-    phases: {
-      wait: async (task, runtime, ctx) => {
-        const { id, submission, lander } = task.input
-        const report = `lander:${submission}`
-        // The lander sends the report before its task moves on: once its conversation is idle without one (an aborted
-        // lander), none comes, and the branch stays open.
-        // Started only while no report exists, and only ever awaited through Promise.race, which handles its rejection
-        // when this task's context is cancelled.
-        let landerIdle: Promise<'idle'> | undefined
-        for (;;) {
-          // Subscribed before reading, so the report's settlement after the read still ends the wait.
-          const changed = Promise.withResolvers<void>()
-          // Not a reactor: a short wait inside this task for the report's submission record, a Pi record.
-          const unsubscribe = onCommit(host.harness(), (publication) => {
-            if (
-              publication.changes.some(
-                (change) => change.type === 'submission' && change.value.conversationId === id,
-              )
-            )
-              changed.resolve()
-          })
-          try {
-            const record = await host
-              .harness()
-              .commit((tx) => tx.submissionByRequest(id, report), ctx)
-            // Only an answered report concludes: one that ended unanswered (a provider error, a Stop, a reset) left the
-            // branch's work unfinished, so it stays open and watchdog's idle-branches note brings it up.
-            if (record?.status === 'unanswered') return runtime.commit(() => done, ctx)
-            if (record?.status === 'done') break
-            // Admitted, the report settles on its own; before that, the lander going idle means none is coming.
-            const woke = await awaitWithContext(
-              record
-                ? changed.promise
-                : Promise.race([
-                    changed.promise,
-                    (landerIdle ??= (async () => {
-                      await (
-                        await runtime.conversation(lander as ConversationId, ctx)
-                      )?.waitForIdle(ctx)
-                      return 'idle' as const
-                    })()),
-                  ]),
-              ctx,
-            )
-            if (woke === 'idle') {
-              const late = await host
-                .harness()
-                .commit((tx) => tx.submissionByRequest(id, report), ctx)
-              if (!late) return runtime.commit(() => done, ctx)
-            }
-          } finally {
-            unsubscribe()
-          }
-        }
-        // The report starts a run (the branch tells @ultimate it landed); wait for it and its foreground subagents.
-        await (await runtime.conversation(id, ctx))?.waitForIdle(ctx)
-        await runtime.commit(() => ({ status: 'running', checkpoint: { phase: 'conclude' } }), ctx)
-      },
-      // The check, the conclusion and this task's next state commit together: an input that arrives first keeps the
-      // branch open, one that arrives after resumes it, and a replay never concludes it a second time.
-      conclude: (task, runtime, ctx) =>
-        runtime.commit(async (tx) => {
-          const { id } = task.input
-          if (await keepsWorking(tx, id)) return done
-          try {
-            await conversations.concludeIn(tx, [id])
-          } catch (error) {
-            // Roots and standing agents refuse concluding before any write; they stay open by design.
-            host.notice(`Not concluding #${id} after landing: ${String(error)}`)
-            return done
-          }
-          return { status: 'running', checkpoint: { phase: 'release' } }
-        }, ctx),
-      // At least once, like the Conclude action's release: it frees only what a concluded, idle branch holds.
-      release: async (task, runtime, ctx) => {
-        await host.want(Release)?.release([task.input.id], ctx)
-        await runtime.commit(() => done, ctx)
-      },
-    },
-    abort: (_task, runtime, ctx) =>
-      runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
-  })
-  /** Inside `tx`: whether `id` is busy or has input queued, waits on a reply it asked for, or has a subagent running. */
-  async function keepsWorking(tx: Tx, id: ConversationId) {
-    if ((await tx.doc(LiveDoc, id)).run || (await tx.doc(InboxDoc, id)).items.length) return true
-    // Read by kind: messages depends on lineage, so lineage cannot import messages.
-    const log = host.doc('board')
-    const messages = (
-      log && ((await tx.doc(log, ROOT_CONVERSATION_ID)) as { messages?: MessageRow[] })
-    )?.messages
-    if (
-      messages?.some(
-        (m) => m.from === id && m.reply && (m.state === 'sent' || m.state === 'delivered'),
-      )
-    )
-      return true
-    for (const child of Object.values((await tx.doc(Subagents, id)).agents))
-      if ((await tx.doc(LiveDoc, child.conversationId)).run) return true
-    return false
-  }
   /**
    * Wakes @ultimate once its manual compaction `compaction` placed a summary: one follow-up input, queued behind a
    * running turn and the summary itself. Created by the compaction's own hook, so no crash between them loses it.
@@ -726,7 +611,7 @@ function lineage(host: ExtensionHost) {
     abort: (_task, runtime, ctx) =>
       runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
   })
-  return { Notify, Prompt, LandingNote, ConcludeLanded, Woken }
+  return { Notify, Prompt, LandingNote, Woken }
 }
 
 const WOKEN_TEXT =
@@ -933,7 +818,7 @@ async function forkBranch(
     input.model ??
     (hasLogin(host.modelRuntime.getAvailableSnapshot(), source)
       ? undefined
-      : hostDefaultModel(host))
+      : await hostDefaultModel(host))
   await configure(tx, fork.id, {
     cwd: host.projectRoot,
     ...(model ? { model } : {}),
@@ -1340,6 +1225,18 @@ export const actions = {
     }, context)
     return { roots }
   },
+  /** Open the project folder in Zed on this machine: `zeditor` (Arch's name), else `zed`. User-only. */
+  openEditor: implementAction(OpenEditorAction, async (_args, { host }) => {
+    for (const editor of ['zeditor', 'zed'])
+      try {
+        await launch(editor, host.projectRoot)
+        return { editor }
+      } catch (error) {
+        // Not on PATH: try the next name; anything else is a real failure.
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
+    throw new Error('Zed is not installed on this machine (no zeditor or zed on PATH)')
+  }),
   /** `{root, slug}`: delete one memory of root `root`. User-only. */
   forget: implementAction(ForgetAction, async (args, { host }) => {
     const { root, slug } = (args ?? {}) as { root?: unknown; slug?: unknown }
@@ -1441,18 +1338,7 @@ export default function lineageExtension(host: ExtensionHost) {
     const { title } = data as { title?: string }
     await conversations.generatedTitle(tx, id, intentLine(data.intent, title))
   })
-  const { Notify, Prompt, LandingNote, ConcludeLanded, Woken } = lineage(host)
-  // A landed branch is done: conclude it once its report run ends. Background, in the submitter's conversation.
-  host.react('conclude-landed', [SubmissionLanded], async (tx, { data: landing }) => {
-    const id = landing.conversationId as ConversationId
-    const record = await tx.conversation(id)
-    if (!record || record.owner) return
-    await tx.createTask(
-      ConcludeLanded,
-      { id, submission: landing.submission, lander: landing.lander },
-      { conversationId: id, ownership: { kind: 'conversation' }, background: true },
-    )
-  })
+  const { Notify, Prompt, LandingNote, Woken } = lineage(host)
   // Every landing notes its submitter's tree root once: a tally in this reactor's transaction, any other root through
   // a delivery task created in it. The submitter's own root and conversations outside any tree get none.
   host.react('landing-notes', [SubmissionLanded], async (tx, { data: landing }) => {
@@ -1509,7 +1395,7 @@ export default function lineageExtension(host: ExtensionHost) {
   watchTally(host, context)
   return defineExtension({
     name: 'lineage',
-    tasks: [Notify, Prompt, LandingNote, ConcludeLanded, Woken, Memorize, rewindTask(host)],
+    tasks: [Notify, Prompt, LandingNote, Woken, Memorize, rewindTask(host)],
     sections: [section('lineage', (input, ctx) => lineageSection(host, input.conversationId, ctx))],
     hooks: [
       hook(GenerationTask, {
@@ -1731,11 +1617,34 @@ export default function lineageExtension(host: ExtensionHost) {
       defineTool({
         name: 'remember',
         deferred: true,
-        description:
-          "Change a root's project memory in one atomic batch: ops are {op:'add', slug, kind: 'decision'|'fact'|'lesson', line, body, source?}, {op:'update', slug, kind?, line?, body?, source?} and {op:'delete', slug}. Slugs are kebab-case, lines one line, bodies free text, source `#<conversation>/<entry>`; at most 150 memories. A line over 120 characters or a body over 2000 is clipped at a word boundary with `…` and the answer says which memory it shortened and by how much; write to fit when you can. Any invalid op refuses the whole batch. `root` defaults to your tree's root, or outside a tree to the project's only root.",
+        description: `Change a root's project memory in one atomic batch. Limits, checked before anything is written: ${MEMORY_RULES}. One op over a limit refuses the whole batch, so count a line's characters before you send it and keep detail in the body. Ops are {op:'add', slug, kind: 'decision'|'fact'|'lesson', line, body, source?}, {op:'update', slug, kind?, line?, body?, source?} and {op:'delete', slug}; source is \`#<conversation>/<entry>\`. \`root\` defaults to your tree's root, or outside a tree to the project's only root.`,
         parameters: obj({
           root: opt(int({ minimum: 1 })),
-          ops: arr(obj({}, { open: true }), { minItems: 1 }),
+          ops: arr(
+            obj({
+              op: strEnum(['add', 'update', 'delete']),
+              slug: str({
+                pattern: MEMORY_SLUG.source,
+                maxLength: 48,
+                description: 'kebab-case, at most 48 characters',
+              }),
+              kind: opt(strEnum(['decision', 'fact', 'lesson'])),
+              line: opt(
+                str({
+                  maxLength: LINE_CHARS,
+                  description: `The index line: one line, at most ${LINE_CHARS} characters`,
+                }),
+              ),
+              body: opt(
+                str({
+                  maxLength: BODY_CHARS,
+                  description: `The full memory, at most ${BODY_CHARS} characters; split longer text across memories`,
+                }),
+              ),
+              source: opt(str({ description: '#<conversation>/<entry>' })),
+            }),
+            { minItems: 1 },
+          ),
         }),
         // Not replay-safe (the default): an interrupted call is never rerun, so a batch commits at most once.
         async execute({ root, ops }, api, ctx) {
