@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { lstat, mkdir, readdir, realpath, rm } from 'node:fs/promises'
-import { isAbsolute, join, relative, sep } from 'node:path'
+import { isAbsolute, basename, dirname, join, relative, sep } from 'node:path'
 import type { Context } from '@earendil-works/chord'
 import {
   configure,
@@ -176,15 +176,29 @@ async function onlyIgnored(workspace: WorkspaceIndex['items'][string]) {
   const matched = new Set(ignored.split('\n'))
   return paths.every((path) => matched.has(path))
 }
+/** A path whose spelling can be compared: `realpath`, falling back to the deepest existing parent for a missing tail. */
+async function canonical(path: string): Promise<string> {
+  try {
+    return await realpath(path)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || dirname(path) === path) return path
+    return join(await canonical(dirname(path)), basename(path))
+  }
+}
 async function registeredCheckout(workspace: WorkspaceIndex['items'][string]) {
   if (!(await onDisk(workspace.path))) return false
   const listed = await git(workspace.path, 'worktree', 'list', '--porcelain').catch(
     // A folder Git cannot inspect is not a usable registered checkout.
     () => '',
   )
-  return listed
-    .split('\n\n')
-    .some((entry) => entry.split('\n').includes(`worktree ${workspace.path}`))
+  // Git prints native paths with forward slashes on Windows, while the record keeps backslashes: compare resolved
+  // paths, or every Windows checkout reads as unregistered and no tool call can run.
+  const want = await canonical(workspace.path)
+  for (const entry of listed.split('\n\n')) {
+    const line = entry.split('\n').find((one) => one.startsWith('worktree '))
+    if (line && (await canonical(line.slice('worktree '.length))) === want) return true
+  }
+  return false
 }
 export function workspaces(host: Host) {
   const queues = host.resource('workspaces.land', () => new Map<string, Promise<unknown>>())
