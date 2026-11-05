@@ -1,13 +1,16 @@
 import {
   CheckIcon,
+  ChevronDownIcon,
   ChevronRightIcon,
   ClipboardListIcon,
   GitBranchIcon,
   LinkIcon,
+  LockIcon,
+  LockOpenIcon,
   SquareArrowOutUpRightIcon,
   XIcon,
 } from 'lucide-react'
-import type { ReactNode, SyntheticEvent } from 'react'
+import type { PointerEvent as ReactPointerEvent, ReactNode, SyntheticEvent } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { MessageResponse } from '@/components/ai/message'
 import {
@@ -544,7 +547,14 @@ export function PlanBody({
 const pill =
   'pointer-events-auto flex h-7 max-w-full min-w-0 items-center gap-1.5 rounded-full border border-border/70 bg-card/90 px-2.5 font-mono text-[11px] text-muted-foreground shadow-sm backdrop-blur hover:text-foreground'
 
-/** The plan card above the pill: the plan with a header naming whose it is. */
+/** Keeps a dragged card inside the viewport, `MARGIN` away from each edge. */
+const MARGIN = 8
+const clamp = (value: number, low: number, high: number) => Math.min(Math.max(value, low), high)
+
+/**
+ * The plan card above the pill: the plan with a header naming whose it is. The header is also the card's handle - drag
+ * it to move the card, press it to fold the body, lock it to stop it from moving - and the X still closes it.
+ */
 function Panel({
   plan,
   coordinator,
@@ -558,31 +568,139 @@ function Panel({
   own?: string
   close: () => void
 }) {
+  // Where the reader put it, whether they pinned it there, and whether they folded it. Shell state, so it survives a
+  // reload and follows the reader between conversations.
+  const [place, setPlace] = useUiState<{ x: number; y: number } | null>('plan.place', null)
+  const [locked, setLocked] = useUiState('plan.locked', false)
+  const [collapsed, setCollapsed] = useUiState('plan.collapsed', false)
+  const box = useRef<HTMLDivElement>(null)
+  const drag = useRef<
+    { id: number; x: number; y: number; left: number; top: number; moved: boolean } | undefined
+  >(undefined)
+
+  // A card dragged near an edge stays reachable when the window shrinks under it.
+  useEffect(() => {
+    const keep = () => {
+      const size = box.current
+      if (!place || !size) return
+      const x = clamp(place.x, MARGIN, Math.max(MARGIN, innerWidth - size.offsetWidth - MARGIN))
+      const y = clamp(place.y, MARGIN, Math.max(MARGIN, innerHeight - size.offsetHeight - MARGIN))
+      if (x !== place.x || y !== place.y) setPlace({ x, y })
+    }
+    addEventListener('resize', keep)
+    // A place saved on a larger window is pulled back in as soon as the card mounts.
+    keep()
+    return () => removeEventListener('resize', keep)
+  }, [place, setPlace])
+
+  const start = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (locked) return
+    // Where it sits now: the anchored spot the first time, so the card does not jump when the drag begins.
+    const rect = box.current?.getBoundingClientRect()
+    if (!rect) return
+    drag.current = {
+      id: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      left: rect.left,
+      top: rect.top,
+      moved: false,
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+  const move = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const state = drag.current
+    if (!state || state.id !== event.pointerId) return
+    const dx = event.clientX - state.x
+    const dy = event.clientY - state.y
+    // A few pixels of slop, so pressing the header to fold it is not read as a drag.
+    if (!state.moved && Math.abs(dx) + Math.abs(dy) < 4) return
+    state.moved = true
+    const size = box.current
+    setPlace({
+      x: clamp(
+        state.left + dx,
+        MARGIN,
+        Math.max(MARGIN, innerWidth - (size?.offsetWidth ?? 0) - MARGIN),
+      ),
+      y: clamp(
+        state.top + dy,
+        MARGIN,
+        Math.max(MARGIN, innerHeight - (size?.offsetHeight ?? 0) - MARGIN),
+      ),
+    })
+  }
+  // Only a cancelled press forgets the drag: a completed one leaves its flag for the click that follows.
+  const cancel = () => {
+    drag.current = undefined
+  }
+
   return (
     <div
       className="pointer-events-auto flex max-h-[60vh] w-[420px] max-w-full flex-col overflow-hidden rounded-lg border border-border/80 bg-popover shadow-lg"
       data-plan-panel
+      ref={box}
+      // Once dragged, the card leaves the anchored column and sits where the reader dropped it.
+      style={place ? { position: 'fixed', left: place.x, top: place.y } : undefined}
     >
-      <div className="flex h-8 shrink-0 items-center gap-1.5 border-b border-border/70 px-3 font-mono text-[11px] text-muted-foreground">
-        <ClipboardListIcon className="size-3.5" />
-        Plan
-        <span className="text-muted-foreground/70">· #{coordinator}</span>
+      <div className="flex h-8 shrink-0 items-center gap-0.5 border-b border-border/70 pr-1 pl-1 font-mono text-[11px] text-muted-foreground">
+        <button
+          aria-expanded={!collapsed}
+          className={cn(
+            'flex min-w-0 flex-1 items-center gap-1.5 self-stretch rounded-sm px-1.5 text-left',
+            locked ? 'cursor-default' : 'cursor-grab active:cursor-grabbing',
+          )}
+          onClick={() => {
+            // A drag that ended here is not also a press.
+            const moved = drag.current?.moved ?? false
+            drag.current = undefined
+            if (moved) return
+            setCollapsed(!collapsed)
+          }}
+          onPointerCancel={cancel}
+          onPointerDown={start}
+          onPointerMove={move}
+          title={locked ? 'Locked in place' : 'Drag to move, click to fold'}
+          type="button"
+        >
+          <ChevronDownIcon
+            className={cn('size-3 shrink-0 transition-transform', collapsed && '-rotate-90')}
+          />
+          <ClipboardListIcon className="size-3.5 shrink-0" />
+          <span className="shrink-0">Plan</span>
+          <span className="truncate text-muted-foreground/70">· #{coordinator}</span>
+        </button>
+        <button
+          aria-label={locked ? 'Unlock the plan card' : 'Lock the plan card'}
+          aria-pressed={locked}
+          className={cn(
+            'shrink-0 rounded-sm p-0.5 hover:text-foreground',
+            locked ? 'text-foreground' : 'text-muted-foreground/70',
+          )}
+          onClick={() => setLocked(!locked)}
+          title={locked ? 'Unlock: drag the header to move the card' : 'Lock the card in place'}
+          type="button"
+        >
+          {locked ? <LockIcon className="size-3.5" /> : <LockOpenIcon className="size-3.5" />}
+        </button>
         <button
           aria-label="Close the plan"
-          className="ml-auto text-muted-foreground/70 hover:text-foreground"
+          className="shrink-0 rounded-sm p-0.5 text-muted-foreground/70 hover:text-foreground"
           onClick={close}
           type="button"
         >
           <XIcon className="size-3.5" />
         </button>
       </div>
-      <div className="min-h-0 overflow-y-auto pb-1">
-        {plan ? (
-          <PlanBody coordinator={coordinator} focus={focus} own={own} plan={plan} />
-        ) : (
-          <p className="px-3 py-2 font-sans text-[12px] text-muted-foreground/70">Loading…</p>
-        )}
-      </div>
+      {!collapsed && (
+        <div className="min-h-0 overflow-y-auto pb-1">
+          {plan ? (
+            <PlanBody coordinator={coordinator} focus={focus} own={own} plan={plan} />
+          ) : (
+            <p className="px-3 py-2 font-sans text-[12px] text-muted-foreground/70">Loading…</p>
+          )}
+        </div>
+      )}
     </div>
   )
 }
