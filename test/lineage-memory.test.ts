@@ -149,9 +149,7 @@ it.concurrent('applies memory ops atomically and holds the cap', async () => {
     [[add('fine'), { op: 'update', slug: 'missing', line: 'x' }], 'no memory missing'],
     [[add('fine'), { op: 'delete', slug: 'missing' }], 'no memory missing'],
     [[add('fine'), add('Bad_Slug')], 'slug must match'],
-    [[add('fine'), add('long', 'x'.repeat(121))], 'at most 120 characters, got 121'],
     [[add('fine'), { ...add('multi'), line: 'one\ntwo' }], 'one non-empty line'],
-    [[add('fine'), { ...add('big'), body: 'x'.repeat(2001) }], 'at most 2000 characters, got 2001'],
     [[add('fine'), { ...add('odd'), kind: 'opinion' }], 'kind must be'],
   ] as const)
     await expect(apply(server, [...ops])).rejects.toThrow(error)
@@ -383,6 +381,46 @@ it.concurrent('reads memories with memory; only @ultimate writes them with remem
   await expect(run(server, 'memory', {}, ultimate)).rejects.toThrow(
     `#${ultimate} is in no tree and the project has no root yet`,
   )
+
+  // A batch mixing one over-long op with a valid one applies both, so a long field no longer loses the whole batch; the
+  // answer names the memory it shortened and both lengths, and the line is cut at 120 with `…`.
+  await setRoots([1])
+  expect(
+    await run(
+      server,
+      'remember',
+      { ops: [add('kept'), add('long-line', 'x'.repeat(121))] },
+      ultimate,
+    ),
+  ).toBe(
+    "Added kept, long-line in #1's memory. Clipped long-line's line from 121 to 120 characters.",
+  )
+  expect(Object.keys(await memories(server)).toSorted()).toEqual(['kept', 'long-line', 'pnpm'])
+  expect((await memories(server))['long-line']).toMatchObject({ line: `${'x'.repeat(119)}…` })
+  expect((await memories(server)).kept).toMatchObject({ line: 'About kept' })
+  // An over-long body likewise: clipped at 2000, the slug named.
+  expect(
+    await run(
+      server,
+      'remember',
+      { ops: [{ ...add('long-body', 'Short'), body: 'y'.repeat(2001) }] },
+      ultimate,
+    ),
+  ).toBe("Added long-body in #1's memory. Clipped long-body's body from 2001 to 2000 characters.")
+  expect((await memories(server))['long-body']).toMatchObject({
+    line: 'Short',
+    body: `${'y'.repeat(1999)}…`,
+  })
+  // Clipping is for length only: an actually invalid op still refuses the whole batch, writing nothing.
+  await expect(
+    run(server, 'remember', { ops: [add('fine'), add('Bad_Slug')] }, ultimate),
+  ).rejects.toThrow('slug must match')
+  expect(Object.keys(await memories(server)).toSorted()).toEqual([
+    'kept',
+    'long-body',
+    'long-line',
+    'pnpm',
+  ])
 })
 
 const landing = (submission: string, conversationId: number): LandedData => ({

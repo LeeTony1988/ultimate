@@ -85,13 +85,14 @@ document, tools and model-facing text, where agents and stored entries already u
 - **Project memory** (`memory.ts`): doc `lineage.memory` on a root (`MemoryDoc` in `refs.ts`; forks start empty)
   holds `{ memories: Record<slug, { kind: 'decision' | 'fact' | 'lesson', line, body, source?, updated }> }`: slugs
   match `^[a-z0-9][a-z0-9-]{0,47}$`, `line` is one line of at most 120 characters, `body` at most 2000, `source` a
-  `#<conversation>/<entry>` breadcrumb, at most 150 memories (`MEMORY_LIMIT`). A too-long `line` or `body` is refused
-  with the length it got and the limit, so a retry knows how much to cut. Every write goes through
+  `#<conversation>/<entry>` breadcrumb, at most 150 memories (`MEMORY_LIMIT`). A too-long `line` or `body` is clipped
+  at a word boundary with `…`, never refused, and the summary says which memory it shortened and by how much, so the
+  caller never believes the memory holds what it sent. Every write goes through
   `applyMemoryOps(tx, root, ops)` with ops `{op:'add', slug, kind, line, body, source?}`,
   `{op:'update', slug, kind?, line?, body?, source?}` and `{op:'delete', slug}`: it validates the whole batch against
   the memory as the batch leaves it first (fields, add of an existing slug, update or delete of a missing one, the cap
   after the batch, a listed root) and throws before writing anything, so a batch is all or nothing; it returns a short
-  summary. Deferred tool `remember {root?, ops}` (named in @ultimate's definition) writes one batch, defaulting to the
+  summary, with each clipped field named. Deferred tool `remember {root?, ops}` (named in @ultimate's definition) writes one batch, defaulting to the
   caller's tree root, or outside a tree (@ultimate) to the project's only root; with none or several it names them
   and asks for one. It refuses any caller but the standing `ultimate` agent, since a branch can find a deferred tool
   with `tool_search`. Tool `memory {read?, root?}`, offered to every agent, returns the index, one
@@ -122,8 +123,8 @@ document, tools and model-facing text, where agents and stored entries already u
   answer. The parser takes the one object with an `ops` array (extra keys ignored) or a bare array of ops, also inside
   one code fence or between prose; two fences, no batch or invalid JSON refuse it, the last with the JSON error; adds and
   updates take the landing's `#<submitter>/<at>` as source. Since nobody corrects a landing's batch, `normalizeMemoryOp`
-  first collapses each `line` to one line and cuts a long `line` or `body` at a word boundary with `…`, and kebab-cases
-  a slug outside the pattern; the `remember` tool stays strict. The ops commit with the task's completion, so a resumed task applies them once. An unparsable answer or a refused batch writes nothing and is asked once
+  first collapses each `line` to one line and kebab-cases a slug outside the pattern, before the same clipping every
+  batch gets. The ops commit with the task's completion, so a resumed task applies them once. An unparsable answer or a refused batch writes nothing and is asked once
   more with the refused answer and the reason appended (a memo of its own); when that is refused too, it leaves a notice. The landing itself never fails on it.
 - **Go back** (`rewind.ts`, `rewind.tsx`): the message action **Go back to here** on any stored message of a non-root
   conversation (standing agents included) opens a confirm dialog fed by `rewindPreview {conversation, at}`: steps set

@@ -68,8 +68,14 @@ export type MemoryOp =
     }
   | { op: 'delete'; slug: string }
 
-/** `value` as one validated op; throws with the op's position for anything else. */
-function parseOp(value: unknown, index: number): MemoryOp {
+/** A memory field a batch sent longer than its limit, and the length it was written at. */
+type Clip = { slug: string; field: 'line' | 'body'; from: number; to: number }
+
+/**
+ * `value` as one validated op; throws with the op's position for anything else. A `line` or `body` past its limit is
+ * clipped rather than refused, and each cut joins `clips`.
+ */
+function parseOp(value: unknown, index: number, clips: Map<string, Clip>): MemoryOp {
   const fail = (why: string): never => {
     throw new Error(`Op ${index + 1}: ${why}`)
   }
@@ -89,15 +95,11 @@ function parseOp(value: unknown, index: number): MemoryOp {
   if (line !== undefined) {
     if (typeof line !== 'string' || !line.trim() || /\n/.test(line.trim()))
       return fail('line must be one non-empty line')
-    if (line.trim().length > LINE_CHARS)
-      return fail(`line must be at most ${LINE_CHARS} characters, got ${line.trim().length}`)
-    fields.line = line.trim()
+    fields.line = kept(clips, slug, 'line', line.trim(), LINE_CHARS)
   }
   if (body !== undefined) {
     if (typeof body !== 'string' || !body.trim()) return fail('body must be non-empty text')
-    if (body.trim().length > BODY_CHARS)
-      return fail(`body must be at most ${BODY_CHARS} characters, got ${body.trim().length}`)
-    fields.body = body.trim()
+    fields.body = kept(clips, slug, 'body', body.trim(), BODY_CHARS)
   }
   if (source !== undefined) {
     if (typeof source !== 'string' || !/^#\d+(\/\d+)?$/.test(source))
@@ -120,6 +122,20 @@ function clip(text: string, max: number) {
   return `${(space > max / 2 ? cut.slice(0, space) : cut).trimEnd()}…`
 }
 
+/** `text` clipped to `max`, recording the cut in `clips` so the answer can say the memory is shorter than it was sent. */
+function kept(
+  clips: Map<string, Clip>,
+  slug: string,
+  field: Clip['field'],
+  text: string,
+  max: number,
+) {
+  const clipped = clip(text, max)
+  if (clipped !== text)
+    clips.set(`${slug}:${field}`, { slug, field, from: text.length, to: clipped.length })
+  return clipped
+}
+
 const kebab = (slug: string) =>
   slug
     .toLowerCase()
@@ -131,8 +147,8 @@ const kebab = (slug: string) =>
 /**
  * `op` as the automated path writes it: `line` collapsed to one line and cut to `LINE_CHARS`, `body` cut to
  * `BODY_CHARS`, each at a word boundary with `…`, and a slug outside the pattern kebab-cased. Nobody corrects a
- * landing's batch, so a shortened memory beats a lost one; everything else, and the `remember` tool, applyMemoryOps
- * still refuses.
+ * landing's batch, so a shortened memory beats a lost one. `applyMemoryOps` clips a `line` and a `body` the same way
+ * and refuses only what is actually invalid; a landing's slug is kebab-cased here alone.
  */
 export function normalizeMemoryOp(op: unknown): unknown {
   if (!op || typeof op !== 'object' || Array.isArray(op)) return op
@@ -150,8 +166,10 @@ export function normalizeMemoryOp(op: unknown): unknown {
 /**
  * The one write path of project memory: apply `ops` to root `root` inside `tx`, all or nothing. Every op is validated
  * against the memory as the batch leaves it before anything is written: a bad slug or field, an add of an existing
- * slug, an update or delete of a missing one, or more than `MEMORY_LIMIT` memories after the batch throws.
- * Returns a short summary of what changed.
+ * slug, an update or delete of a missing one, or more than `MEMORY_LIMIT` memories after the batch throws. A `line` or
+ * `body` past its limit is clipped at a word boundary with `…` instead of refused, since the caller cannot always cut it
+ * to fit and losing the whole batch is worse than a shorter memory.
+ * Returns a short summary of what changed, naming each memory it had to shorten and by how much.
  */
 export async function applyMemoryOps(
   tx: Tx,
@@ -162,7 +180,8 @@ export async function applyMemoryOps(
   if (!(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots.includes(root))
     throw new Error(`#${root} is not a listed root`)
   if (!Array.isArray(ops)) throw new Error('ops must be a list')
-  const parsed = ops.map(parseOp)
+  const clips = new Map<string, Clip>()
+  const parsed = ops.map((value, index) => parseOp(value, index, clips))
   const doc = await tx.doc(Memory, root as ConversationId)
   const next = new Map(Object.entries(doc.memories))
   const done: Record<MemoryOp['op'], string[]> = { add: [], update: [], delete: [] }
@@ -188,8 +207,15 @@ export async function applyMemoryOps(
   for (const slug of Object.keys(doc.memories)) if (!next.has(slug)) delete doc.memories[slug]
   for (const [slug, item] of next)
     if (JSON.stringify(doc.memories[slug]) !== JSON.stringify(item)) doc.memories[slug] = item
-  return `${[...said('Added', done.add), ...said('updated', done.update), ...said('deleted', done.delete)].join('; ')} in #${root}'s memory.`
+  const summary = `${[...said('Added', done.add), ...said('updated', done.update), ...said('deleted', done.delete)].join('; ')} in #${root}'s memory.`
+  return clips.size ? `${summary} ${clipped([...clips.values()])}` : summary
 }
+
+/** What a batch shortened before writing: the memory does not hold what the caller sent, and the answer says so. */
+const clipped = (clips: Clip[]) =>
+  `Clipped ${clips
+    .map(({ slug, field, from, to }) => `${slug}'s ${field} from ${from} to ${to} characters`)
+    .join('; ')}.`
 
 const said = (verb: string, slugs: string[]) =>
   slugs.length ? [`${verb} ${[...new Set(slugs)].join(', ')}`] : []
