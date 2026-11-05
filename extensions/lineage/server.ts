@@ -1732,7 +1732,7 @@ export default function lineageExtension(host: ExtensionHost) {
         name: 'remember',
         deferred: true,
         description:
-          "Change a root's project memory in one atomic batch: ops are {op:'add', slug, kind: 'decision'|'fact'|'lesson', line, body, source?}, {op:'update', slug, kind?, line?, body?, source?} and {op:'delete', slug}. Slugs are kebab-case, lines one line of at most 120 characters, bodies at most 2000, source `#<conversation>/<entry>`; at most 150 memories. Any invalid op refuses the whole batch. `root` defaults to your tree's root, or outside a tree to the project's only root.",
+          "Change a root's project memory in one atomic batch: ops are {op:'add', slug, kind: 'decision'|'fact'|'lesson', line, body, source?}, {op:'update', slug, kind?, line?, body?, source?} and {op:'delete', slug}. Slugs are kebab-case, lines one line, bodies free text, source `#<conversation>/<entry>`; at most 150 memories. A line over 120 characters or a body over 2000 is clipped at a word boundary with `…` and the answer says which memory it shortened and by how much; write to fit when you can. Any invalid op refuses the whole batch. `root` defaults to your tree's root, or outside a tree to the project's only root.",
         parameters: obj({
           root: opt(int({ minimum: 1 })),
           ops: arr(obj({}, { open: true }), { minItems: 1 }),
