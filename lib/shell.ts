@@ -29,6 +29,8 @@ export interface Shell {
   argv(command: string, variables?: readonly string[]): { program: string; args: string[] }
   /** Resolve a shebang script to the executable and arguments that run it on this host. */
   script(path: string): { program: string; args: string[] }
+  /** `value` as one word of this shell's syntax, for a command string built by substitution. */
+  quote(value: string): string
 }
 
 /** `command` with each of `names` written in `shell`'s syntax: `$NAME` reads in either shell's own spelling. */
@@ -51,6 +53,7 @@ const bash: Shell = {
   name: 'bash',
   create: (options) => createBashTool(options),
   script: (path) => ({ program: path, args: [] }),
+  quote: (value) => `'${value.replaceAll("'", `'\\''`)}'`,
   argv: (command, variables = []) => {
     const { shell, args } = getShellConfig()
     // Pi asks for stdin only for the legacy WSL `bash.exe`, which this platform never selects: `win32` runs PowerShell.
@@ -64,6 +67,8 @@ const bash: Shell = {
 const powershell: Shell = {
   name: 'powershell',
   create: (options) => createPowerShellTool(options),
+  // PowerShell's single-quoted string: literal, with an embedded quote doubled.
+  quote: (value) => `'${value.replaceAll("'", "''")}'`,
   script: (path) => {
     const line = readFileSync(path, 'utf8').split(/\r?\n/, 1)[0]
     if (!line.startsWith('#!')) throw new Error(`Windows script ${path} needs a shebang`)

@@ -1,13 +1,13 @@
 /**
  * Where isolated checkouts live and how they are created and removed: the project's `isolates.worktree.path`, `.add`
  * and `.remove`, each optional. Without them, checkouts are `git worktree add`/`remove` under Ultimate's home.
- */
-import { realpath, rm } from 'node:fs/promises'
+ */ import { realpath, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import { exec } from '../../lib/exec.ts'
 import { git } from '../../lib/git.ts'
+import { shell } from '../../lib/shell.ts'
 
 /** A configured command may fetch, build or register the tree: allow it more than git's 30 seconds. */
 const commandTimeout = 300_000
@@ -53,9 +53,6 @@ async function resolved(path: string): Promise<string> {
   }
 }
 
-/** Single-quoted for `sh`, so a path with spaces or quotes stays one word. */
-const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`
-
 /** Run the configured `isolates.worktree.<key>` in `source`, with `{name}` and `{path}` filled in as shell words. */
 async function command(
   key: 'add' | 'remove',
@@ -64,8 +61,12 @@ async function command(
   name: string,
   path: string,
 ) {
-  const line = template.replaceAll('{name}', quote(name)).replaceAll('{path}', quote(path))
-  await exec('sh', ['-c', line], {
+  const line = template
+    .replaceAll('{name}', shell.quote(name))
+    .replaceAll('{path}', shell.quote(path))
+  // The platform's own shell carries it: hard-coding `sh` fails on a Windows host without Git Bash.
+  const { program, args } = shell.argv(line)
+  await exec(program, args, {
     cwd: source,
     timeout: commandTimeout,
     maxBuffer: 1024 * 1024,
