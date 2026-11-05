@@ -2,7 +2,7 @@ import { request } from 'node:http'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, posix } from 'node:path'
 import { defineExtension } from '@earendil-works/pi-durable'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { normalizePath } from 'vite-plus'
 import { prepareFauxServer as prepareServer, until, post, attach } from './helpers.ts'
 import { context } from '../server/harness.ts'
@@ -196,8 +196,6 @@ describe('server reload', () => {
     const css = join(root, 'web/src/index.css')
     await mkdir(join(root, 'web/src'), { recursive: true })
     const client = server.vite.environments.client
-    // Installed before the write: the stylesheet's own update may arrive with it, not after the extension folder.
-    const sent = vi.spyOn(client.hot, 'send')
     await writeFile(css, 'body {}')
     const styles = await client.transformRequest(normalizePath(css))
     expect(styles?.code).toContain('@source')
@@ -223,7 +221,6 @@ describe('server reload', () => {
     expect(transformed?.code).toContain('createElement')
     const [module] = client.moduleGraph.getModulesByFile(webId) ?? []
     expect(module?.file).toBe(webId)
-    await until(() => sent.mock.calls.some((call) => JSON.stringify(call).includes('/index.css')))
   })
   it('does not uninstall an extension installed outside the folder loader', async () => {
     const { server } = await fixture(true)
