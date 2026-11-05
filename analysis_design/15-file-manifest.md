@@ -142,18 +142,18 @@
 | ---------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------ |
 | extensions\coding-tools\api.ts           | 3    | Coding tools: Pi's read, write, edit and shell tools (Bash, or PowerShell on Windows) and how the transcript shows th... |
 | extensions\coding-tools\bash-command.tsx | 164  | The closing delimiter line as written. */                                                                                |
-| extensions\coding-tools\diff.tsx         | 134  | Pi upstream: @earendil-works/pi-durable@1.4.0 src/tools/edit.ts and src/tools/edit-diff.ts — internal untyped details... |
+| extensions\coding-tools\diff.tsx         | 134  | Pi coupling (@earendil-works/pi-durable@1.5.0 src/tools/edit.ts and src/tools/edit-diff.ts — internal untyped details... |
 | extensions\coding-tools\README.md        | 23   | Commits made through the shell tool (`bash`, or `powershell` on Windows) carry an `Ultimate-Conversation: <id>` trail... |
 | extensions\coding-tools\refs.ts          | 26   | Coding tools in the browser: the event each commit made through the shell tool records. Browser-safe. */                 |
 | extensions\coding-tools\server.ts        | 338  |                                                                                                                          |
 | extensions\coding-tools\ui.tsx           | 2    | Coding tools for other extensions' browser code: the event each commit made through the shell tool records. */           |
-| extensions\coding-tools\web.tsx          | 480  | Pi upstream: @earendil-works/pi-durable@1.4.0 src/tools/bash.ts and src/tools/edit.ts — internal bash exit_code diagn... |
+| extensions\coding-tools\web.tsx          | 480  | Pi coupling (@earendil-works/pi-durable@1.5.0 src/tools/bash.ts and src/tools/edit.ts — internal bash exit_code diagn... |
 
 ## extensions\context
 
 | 文件                            | 行数 | 摘要                                                                                                                     |
 | ------------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------ |
-| extensions\context\breakdown.ts | 317  | Pi upstream: @earendil-works/pi-durable@1.4.0 src/harness/prompt.ts — internal remove-all pi.system entry immediately... |
+| extensions\context\breakdown.ts | 317  | Pi coupling (@earendil-works/pi-durable@1.5.0 src/harness/prompt.ts — internal remove-all pi.system entry immediately... |
 | extensions\context\README.md    | 4    | What the model saw before a conversation's first input: a quiet header above it names the agent, its model and the es... |
 | extensions\context\web.tsx      | 490  |                                                                                                                          |
 
@@ -776,7 +776,7 @@
 | server\extension-settings.ts  | 55   |                                                                                                                          |
 | server\extensions.ts          | 806  |                                                                                                                          |
 | server\harness.ts             | 295  |                                                                                                                          |
-| server\http.ts                | 107  | Pi upstream: @earendil-works/pi-coding-agent@1.4.0 src/core/http-dispatcher.ts — copied, not exported; prevents early... |
+| server\http.ts                | 107  | Pi coupling (@earendil-works/pi-coding-agent@1.5.0 src/core/http-dispatcher.ts — copied, not exported; prevents early... |
 | server\lock.ts                | 119  |                                                                                                                          |
 | server\main.ts                | 316  |                                                                                                                          |
 | server\metadata.ts            | 17   | Published shell metadata: explicit naming plus input naming and activity maintained by conversations. */                 |
@@ -938,8 +938,8 @@
 | web\src\sdk\api.ts                 | 152  |                                                                                                                          |
 | web\src\sdk\client.ts              | 140  |                                                                                                                          |
 | web\src\sdk\conversation-scope.tsx | 33   | The entries loaded by the nearest transcript or composer; a new scope resets inherited history. */                       |
-| web\src\sdk\events.ts              | 33   | Pi upstream: @earendil-works/pi-coding-agent@1.4.0 src/core/event-bus.ts — adapted: Pi's bus uses node:events; use br... |
-| web\src\sdk\format.ts              | 68   | Pi upstream: @earendil-works/pi-coding-agent@1.4.0 src/modes/interactive/components/footer.ts — copied formatTokens h... |
+| web\src\sdk\events.ts              | 33   | Pi coupling (@earendil-works/pi-coding-agent@1.5.0 src/core/event-bus.ts — adapted: Pi's bus uses node:events; use br... |
+| web\src\sdk\format.ts              | 68   | Pi coupling (@earendil-works/pi-coding-agent@1.5.0 src/modes/interactive/components/footer.ts — copied formatTokens h... |
 | web\src\sdk\hooks.ts               | 537  |                                                                                                                          |
 | web\src\sdk\index.ts               | 168  |                                                                                                                          |
 | web\src\sdk\keys.ts                | 41   | Shortcuts: `mod+shift+k`, sequences separated by spaces (`mod+k m`). `mod` is ⌘ on macOS and Ctrl elsewhere. */          |
