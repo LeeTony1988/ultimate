@@ -58,13 +58,42 @@ export function identify(pid: number): string | undefined {
 }
 
 /** Whether any process of group `pid` still exists. */
+/** Darwin returns EPERM for zombie-only groups too; permission denial alone proves nothing. */
+function darwinEnded(pid: number, denied: unknown) {
+  if (process.platform !== 'darwin' || (denied as NodeJS.ErrnoException).code !== 'EPERM')
+    return false
+  try {
+    const output = execFileSync('ps', ['-A', '-o', 'pgid=,stat='], { encoding: 'utf8' })
+    let found = false
+    for (const line of output.trim().split('\n')) {
+      const row = /^(\d+)\s+([?IRSTUZ][+<>AELNSsVWX]*)$/.exec(line.trim())
+      if (!row) return false
+      if (Number(row[1]) !== pid) continue
+      found = true
+      if (!row[2].startsWith('Z')) return false
+    }
+    if (found) return true
+    // A group may disappear during ps; an empty snapshot alone is not proof.
+    try {
+      process.kill(-pid, 0)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return true
+      throw error
+    }
+  } catch (cause) {
+    // Failed inspection must retain the original permission failure, never report the group gone.
+    Object.assign(denied as Error, { cause })
+  }
+  return false
+}
+
 export function groupAlive(pid?: number) {
   if (!pid) return false
   try {
     process.kill(process.platform === 'win32' ? pid : -pid, 0)
     return true
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false
+    if ((error as NodeJS.ErrnoException).code === 'ESRCH' || darwinEnded(pid, error)) return false
     throw error
   }
 }
@@ -85,7 +114,7 @@ function send(pid: number, name: NodeJS.Signals) {
     process.kill(process.platform === 'win32' ? pid : -pid, name)
   } catch (error) {
     // The group may empty between the check and the signal.
-    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH' && !darwinEnded(pid, error)) throw error
   }
 }
 

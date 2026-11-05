@@ -43,6 +43,7 @@ import {
   hasLogin,
   hostDefaultModel,
   previewModel,
+  runtimeToolNames,
   saveDefinition,
   saveOverlay,
 } from '../../lib/agents.ts'
@@ -724,7 +725,7 @@ export default function subagents(
       path: '',
       instructions: [ADHOC, args.instructions?.trim()].filter(Boolean).join('\n\n'),
       family: 'default',
-      ...(args.tools ? { tools: args.tools } : {}),
+      ...(args.tools ? { tools: runtimeToolNames(args.tools) } : {}),
       isolate: WRITE_TOOLS.some((tool) => !args.tools || args.tools.includes(tool))
         ? 'worktree'
         : 'none',
