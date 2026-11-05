@@ -1,5 +1,10 @@
-import { ChevronRightIcon, GitBranchIcon, ListTreeIcon, MessageSquareIcon } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import {
+  ChevronRightIcon,
+  GitBranchIcon,
+  ListTreeIcon,
+  MessageSquareIcon,
+  NetworkIcon,
+} from 'lucide-react'
 import type { ReactNode } from 'react'
 import { ToolStatusIcon } from '@/components/ai/tool'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -16,138 +21,21 @@ import {
   useUltimate,
   useUiState,
 } from '@/sdk'
-import type { TaskGraph, TaskGraphNode } from '@/sdk'
-import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
+import type { TaskGraphNode } from '@/sdk'
 import {
   useWorkspaceConversations as useConversations,
   useWorkspaceIndex,
 } from '../workspaces/ui.tsx'
-import { FeatureTag, hiddenConversationIds, useOverview } from '../conversations/ui.tsx'
+import { FeatureTag, useOverview } from '../conversations/ui.tsx'
 import { Address, MessagesDoc } from '../messages/ui.tsx'
 import { TaskChip, useTaskOf } from '../plan/ui.tsx'
 import { groups, meaning } from './kinds.ts'
 import type { Group, Meaning } from './kinds.ts'
 import { DescribeAction, StartedAction } from './refs.ts'
 import type { TaskFacts } from './refs.ts'
-
-interface Tree {
-  /** Live tasks by owner task id. */
-  children: Map<number, TaskGraphNode[]>
-  /** Conversation-owned running work by conversation id: the tree the Running group draws. */
-  roots: Map<number, TaskGraphNode[]>
-  summaries: Map<number, ConversationSummary>
-  /** When each task first ran, in wall-clock milliseconds. */
-  started: Record<string, number>
-  /** What each task means, by task id. */
-  meanings: Map<number, Meaning>
-  /** Feature tags of top-level conversations. */
-  features: Map<number, string>
-  now: number
-}
-
-function build(
-  graph: TaskGraph | undefined,
-  conversations: readonly ConversationSummary[],
-  concluded: number[],
-) {
-  const hidden = hiddenConversationIds(conversations, concluded)
-  const all = Object.values(graph?.tasks ?? {}).toSorted((a, b) => a.id - b.id)
-  const hiddenTasks = new Set(
-    all.filter((task) => hidden.has(task.conversationId)).map((task) => task.id),
-  )
-  let changed = true
-  while (changed) {
-    changed = false
-    // Task ownership can arrive before the child's summary; child runs have no task owner.
-    for (const task of all) {
-      if (hidden.has(task.conversationId) || (task.owner != null && hiddenTasks.has(task.owner))) {
-        if (!hiddenTasks.has(task.id)) {
-          hiddenTasks.add(task.id)
-          changed = true
-        }
-        for (const id of task.conversations) {
-          if (!hidden.has(id)) {
-            hidden.add(id)
-            changed = true
-          }
-        }
-      }
-    }
-    for (const conversation of conversations) {
-      if (
-        conversation.parentConversationId !== undefined &&
-        hidden.has(conversation.parentConversationId) &&
-        !hidden.has(conversation.id)
-      ) {
-        hidden.add(conversation.id)
-        changed = true
-      }
-    }
-  }
-  const tasks = all
-    .filter((task) => !hiddenTasks.has(task.id))
-    .map((task) => ({
-      ...task,
-      conversations: task.conversations.filter((id) => !hidden.has(id)),
-    }))
-  const children = new Map<number, TaskGraphNode[]>()
-  const roots = new Map<number, TaskGraphNode[]>()
-  for (const task of tasks) {
-    const [map, key] = task.owner == null ? [roots, task.conversationId] : [children, task.owner]
-    map.set(key, [...(map.get(key) ?? []), task])
-  }
-  // Conversations a live task owns appear under that task; the rest are top-level.
-  const owned = new Set<number>(tasks.flatMap((task) => task.conversations))
-  const top = [...roots.keys()].filter((id) => !owned.has(id)).toSorted((a, b) => a - b)
-  return {
-    tasks,
-    top,
-    children,
-    roots,
-    summaries: new Map(conversations.map((summary) => [summary.id, summary])),
-  }
-}
-
-function status(task: TaskGraphNode): {
-  text: ReactNode
-  tone?: string
-  icon: 'running' | 'pending' | 'done' | 'interrupted'
-} {
-  const { state } = task
-  if (task.blocked)
-    return {
-      text: `blocked · ${task.blocked.replaceAll('_', ' ')}`,
-      icon: 'interrupted',
-      tone: 'text-warning',
-    }
-  switch (state.status) {
-    case 'pending':
-      return { text: 'pending', icon: 'pending' }
-    case 'running':
-      return { text: state.phase, icon: 'running', tone: 'text-foreground/80' }
-    case 'waiting':
-      return {
-        text: (
-          <>
-            {state.phase} · waiting on{' '}
-            <span className="text-foreground/70">{state.on.map((id) => `#${id}`).join(' ')}</span>
-            {state.on.length > 1 && (
-              <span className="text-muted-foreground/60"> ({state.policy})</span>
-            )}
-          </>
-        ),
-        icon: 'pending',
-      }
-    case 'sleeping':
-      return { text: `${state.phase} · sleeping`, icon: 'pending' }
-    default:
-      return {
-        text: `completing → ${state.outcome}`,
-        icon: state.outcome === 'completed' ? 'done' : 'interrupted',
-      }
-  }
-}
-
+import { build, status, useOnce } from './shared.tsx'
+import type { Tree } from './shared.tsx'
+import { TaskGraphSurface } from './graph.tsx'
 /**
  * Where a row sits in the tree: its depth, and for each ancestor level whether a sibling follows below (its rail goes
  * on); `last` when no sibling follows this row.
@@ -354,20 +242,6 @@ function ConversationRow({ id, tree, ...place }: { id: number; tree: Tree } & Pl
   )
 }
 
-/** Facts a value never changes for, asked once per id: start times, what a task's input says. */
-function useOnce<T>(
-  ref: Parameters<typeof useAction<{ ids: number[] }, Record<string, T>>>[0],
-  ids: number[],
-) {
-  const [known, setKnown] = useState<Record<string, T>>({})
-  const missing = ids.filter((id) => !(id in known))
-  const { data } = useAction(ref, { ids: missing }, { enabled: missing.length > 0 })
-  useEffect(() => {
-    if (data) setKnown((previous) => ({ ...previous, ...data }))
-  }, [data])
-  return known
-}
-
 function Heading({ children, count }: { children: ReactNode; count?: number }) {
   return (
     <div className="flex items-center gap-2 px-3 pt-3 pb-1 section-label">
@@ -416,6 +290,7 @@ function TasksPanel() {
   const facts = useOnce<TaskFacts>(DescribeAction, ids)
   const states = new Map(log?.messages.map((message) => [message.id, message.state]))
   const { queue } = useWorkspaceIndex()
+  const { showSurface } = useUltimate()
   // A lander works its queue one submission after another: the one it lands now names it.
   const landing = (fact: TaskFacts | undefined) => {
     const item = queue.find((entry) => entry.source === fact?.source && entry.state === 'landing')
@@ -459,7 +334,15 @@ function TasksPanel() {
     <div className="py-2">
       <div className="flex items-center gap-2 px-3 pb-1 section-label">
         Task graph
-        <span className="ml-auto text-muted-foreground/70">
+        <button
+          className="ml-auto cursor-pointer text-muted-foreground/70 hover:text-foreground"
+          onClick={() => showSurface('tasks.dag')}
+          title="Open the live task DAG"
+          type="button"
+        >
+          DAG ↗
+        </button>
+        <span className="text-muted-foreground/70">
           {tasks.length} live{busy > 0 && ` · ${busy} running`}
         </span>
       </div>
@@ -517,11 +400,26 @@ function useRunStart(id: number | undefined): number | undefined {
 export default defineWebExtension({
   provides: [provide(RunStart, useRunStart)],
   panels: [{ id: 'tasks', title: 'Tasks', icon: ListTreeIcon, component: TasksPanel, order: 1 }],
+  surfaces: [
+    {
+      id: 'tasks.dag',
+      title: 'Task DAG',
+      icon: NetworkIcon,
+      description: 'The live pi-durable task graph: what runs, what waits, in what order',
+      order: 65,
+      component: TaskGraphSurface,
+    },
+  ],
   commands: [
     {
       id: 'tasks.open',
-      title: 'Show the task graph',
+      title: 'Show the task list',
       run: (context) => context.openPanel('tasks'),
+    },
+    {
+      id: 'tasks.dag.open',
+      title: 'Show the task DAG',
+      run: (context) => context.showSurface('tasks.dag'),
     },
   ],
 })

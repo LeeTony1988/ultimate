@@ -12,3 +12,5 @@ The composer's status line shows the shown conversation's open messages (`messag
 A task Pi Durable cannot run shows why (missing or too-old definition, failed migration); these clear when the registry changes. A task cut off by crashes `restartLimit` times in a row is not shown here: Pi ends it, and its run, tool call or compaction shows the failure.
 
 Data comes from `useTasks()` (the server's `tasks` event), `useConversations()`, the conversations overview and the messages log; start times and facts come from the `started {ids}` and `describe {ids}` actions, each asked once per task since they never change.
+
+The **Task DAG** surface (order 65, also opened from the Tasks tab's `DAG ↗` link and the `Show the task DAG` command) draws the same live graph as layered columns: a card per task labelled by `meaning()`, solid owner edges, dashed `on` wait edges, conversation bands, and per-node fold. The graph holds live tasks only; the last 30 tasks that left it stay for 30 seconds as dimmed `Finished` cards with their outcome (`done` / `failed` / `aborted`), read through the `ended {ids}` action, then disappear.
