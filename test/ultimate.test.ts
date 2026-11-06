@@ -19,6 +19,9 @@ import { parseDefinition } from '../lib/agents.ts'
 import { fauxServer, seedTally, sourceCopy, temp, removeTemp, until, post } from './helpers.ts'
 
 type Server = Awaited<ReturnType<typeof fauxServer>>
+// Each case boots its own server on its own copy of the repository; three at a time keep the thirty-second
+// budget intact while the rest of the suite is on the machine. Alone the file still takes about 21 s.
+vi.setConfig({ maxConcurrency: 3 })
 const servers: Server[] = []
 const homes: string[] = []
 // Tests run concurrently, each on its own server; close them all once the file is done.
