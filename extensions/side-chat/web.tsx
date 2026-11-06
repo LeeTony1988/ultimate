@@ -3,6 +3,7 @@ import {
   ArrowLeftIcon,
   GitForkIcon,
   LoaderCircleIcon,
+  MessagesSquareIcon,
   MinimizeIcon,
   SparklesIcon,
   SquareArrowOutUpRightIcon,
@@ -28,10 +29,13 @@ import {
   useConversations,
   useDoc,
   useDocOf,
+  useUiState,
   useUltimate,
   useViewport,
 } from '@/sdk'
 import type { ComposerTarget } from '@/sdk'
+import { ComposerModeKey, composerModeOf, nextComposerMode } from '../../lib/composer-mode.ts'
+import type { ComposerMode } from '../../lib/composer-mode.ts'
 import { StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
 import { UnderUltimate, Unlisted } from '../sidebar/ui.tsx'
 import { createEndings, endings, frontSide, openSides, togglesSideMode } from './logic.ts'
@@ -40,22 +44,6 @@ import type { SideChatIndex, SideChatSummary } from './refs.ts'
 import { useSideChatFront as useFront } from './ui.tsx'
 
 // ---- state ---------------------------------------------------------------------------------------------------------
-
-/** Whether @ultimate's composer forks a side chat on Enter; this tab's own, back to normal once one opened. */
-let sideMode = false
-const listeners = new Set<() => void>()
-const setSide = (value: boolean) => {
-  sideMode = value
-  for (const listener of listeners) listener()
-}
-const useSideMode = () =>
-  useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener)
-      return () => void listeners.delete(listener)
-    },
-    () => sideMode,
-  )
 
 /** Each side chat's ending in flight and its last failure. */
 const sideEndings = createEndings(errorMessage)
@@ -71,52 +59,82 @@ const ease = 'cubic-bezier(0.2, 0.8, 0.2, 1)'
 const duration = 420
 const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches
 
-// ---- composer: Tab toggles, Enter forks ----------------------------------------------------------------------------
+// ---- composer: Tab cycles, Enter forks -----------------------------------------------------------------------------
 
-function ModeSwitch({ on, onToggle }: { on: boolean; onToggle: () => void }) {
+/** A segment of the mode switch; the moving thumb behind them shows which one is on. */
+function ModeButton({
+  active,
+  brand,
+  children,
+  onClick,
+}: {
+  active: boolean
+  brand?: boolean
+  children: ReactNode
+  onClick: () => void
+}) {
   return (
     <button
-      aria-label={`Composer sends to ${on ? 'a new side chat' : '@ultimate'} · Tab switches`}
-      aria-pressed={on}
-      data-ui="side-chat-switch"
-      className="relative flex h-5 cursor-pointer items-center rounded-full bg-muted/60 p-0.5 font-mono text-[10.5px] outline-none focus-visible:ring-1 focus-visible:ring-ring"
-      onClick={onToggle}
+      aria-pressed={active}
+      className={cn(
+        'relative z-10 flex w-[4.25rem] cursor-pointer items-center justify-center gap-1 rounded-full whitespace-nowrap transition-colors outline-none focus-visible:ring-1 focus-visible:ring-ring',
+        active ? (brand ? 'text-brand' : 'text-foreground') : 'text-muted-foreground/70',
+      )}
+      onClick={onClick}
       type="button"
     >
-      <span
-        aria-hidden
-        className={cn(
-          'absolute top-0.5 bottom-0.5 left-0.5 w-[4.75rem] rounded-full bg-background shadow-xs transition-transform duration-300 motion-reduce:transition-none',
-          on && 'translate-x-[4.75rem] ring-1 ring-brand/40',
-        )}
-        style={{ transitionTimingFunction: ease }}
-      />
-      <span
-        className={cn(
-          'relative z-10 w-[4.75rem] text-center whitespace-nowrap transition-colors',
-          on ? 'text-muted-foreground/70' : 'text-foreground',
-        )}
-      >
-        Normal
-      </span>
-      <span
-        className={cn(
-          'relative z-10 flex w-[4.75rem] items-center justify-center gap-1 whitespace-nowrap transition-colors',
-          on ? 'text-brand' : 'text-muted-foreground/70',
-        )}
-      >
-        <GitForkIcon className="size-2.5" />
-        Side chat
-      </span>
+      {children}
     </button>
   )
 }
 
-/** Wraps @ultimate's composer: the mode switch above it, and Enter forking a side chat while it is on. */
+/** Normal / Side chat / btw, one switch over the shared composer mode. */
+function ModeSwitch({
+  mode,
+  onChange,
+}: {
+  mode: ComposerMode
+  onChange: (mode: ComposerMode) => void
+}) {
+  return (
+    <div
+      aria-label={`Composer sends to ${mode === 'side' ? 'a new side chat' : '@ultimate'} · ${mode === 'btw' ? 'btw panel open' : 'Tab switches'}`}
+      className="relative flex h-5 items-center rounded-full bg-muted/60 p-0.5 font-mono text-[10.5px]"
+      data-ui="side-chat-switch"
+      role="group"
+    >
+      <span
+        aria-hidden
+        className={cn(
+          'absolute top-0.5 bottom-0.5 left-0.5 w-[4.25rem] rounded-full bg-background shadow-xs transition-transform duration-300 motion-reduce:transition-none',
+          mode !== 'normal' && 'ring-1 ring-brand/40',
+          mode === 'side' && 'translate-x-[4.25rem]',
+          mode === 'btw' && 'translate-x-[8.5rem]',
+        )}
+        style={{ transitionTimingFunction: ease }}
+      />
+      <ModeButton active={mode === 'normal'} onClick={() => onChange('normal')}>
+        Normal
+      </ModeButton>
+      <ModeButton active={mode === 'side'} brand onClick={() => onChange('side')}>
+        <GitForkIcon className="size-2.5" />
+        Side chat
+      </ModeButton>
+      <ModeButton active={mode === 'btw'} brand onClick={() => onChange('btw')}>
+        <MessagesSquareIcon className="size-2.5" />
+        btw
+      </ModeButton>
+    </div>
+  )
+}
+
+/** Wraps @ultimate's composer: the mode switch above it, and Enter forking a side chat while side mode is on. */
 function SideComposer({ core, dock }: { core: ReactNode; dock?: boolean }) {
   const id = useConversation((conversation) => conversation.id)
   const { main, index } = useMain()
-  const on = useSideMode()
+  const [storedMode, setMode] = useUiState<string>(ComposerModeKey, 'normal')
+  const mode = composerModeOf(storedMode)
+  const on = mode === 'side'
   const [front, setFront] = useFront()
   const shown = frontSide(front, index)
   // A side chat's own composer, and @ultimate's in a docked region, stay as they are: one level only.
@@ -127,7 +145,7 @@ function SideComposer({ core, dock }: { core: ReactNode; dock?: boolean }) {
         placeholder: 'Ask on the side — @ultimate keeps running…',
         send: async (text) => {
           const opened = await api.action(OpenAction, { text }, { conversationId: main })
-          setSide(false)
+          setMode('normal')
           setFront(opened.id)
         },
       }
@@ -138,10 +156,10 @@ function SideComposer({ core, dock }: { core: ReactNode; dock?: boolean }) {
     const key = { ...event, isComposing: event.nativeEvent.isComposing }
     if (!togglesSideMode(key, { conversation: id, ultimate: main, popup })) return
     event.preventDefault()
-    setSide(!on)
+    setMode(nextComposerMode(mode))
   }
   return (
-    <div className="relative" data-side-mode={on ? 'side' : 'normal'} onKeyDownCapture={onKeyDown}>
+    <div className="relative" data-side-mode={mode} onKeyDownCapture={onKeyDown}>
       {/* Covered by a side chat in front, main's composer and its controls take no focus, typing or clicks. */}
       <div data-main-composer inert={!!shown}>
         <div className="mx-auto flex w-full max-w-[46rem] items-center justify-between gap-2 px-3 pb-1.5 sm:px-6">
@@ -166,8 +184,11 @@ function SideComposer({ core, dock }: { core: ReactNode; dock?: boolean }) {
               <span className="truncate pointer-coarse:hidden">
                 {on ? (
                   <>
-                    <span className="text-brand">↵</span> forks @ultimate · <Kbd>Tab</Kbd> back to
-                    normal
+                    <span className="text-brand">↵</span> forks @ultimate · <Kbd>Tab</Kbd> btw
+                  </>
+                ) : mode === 'btw' ? (
+                  <>
+                    <Kbd>Tab</Kbd> normal · Enter sends to @ultimate
                   </>
                 ) : (
                   <>
@@ -177,7 +198,7 @@ function SideComposer({ core, dock }: { core: ReactNode; dock?: boolean }) {
               </span>
             )}
           </div>
-          <ModeSwitch on={on} onToggle={() => setSide(!on)} />
+          <ModeSwitch mode={mode} onChange={setMode} />
         </div>
         <div
           className={cn(
