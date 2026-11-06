@@ -467,22 +467,27 @@ function RunFrame({
               {detail && detail.children.length > 0 ? (
                 <span className="text-muted-foreground/60">
                   {childLabel(detail.children.length)} ·{' '}
-                  <span className={provenChildren === detail.children.length ? '' : 'text-warning'}>
-                    {provenChildren} proven
-                    {provenChildren === detail.children.length
-                      ? ''
-                      : `, ${detail.children.length - provenChildren} inferred`}
+                  <span
+                    className={
+                      provenChildren === detail.children.length ? 'text-success' : 'text-warning'
+                    }
+                  >
+                    {provenChildren === 0
+                      ? 'attribution unproven ⚠'
+                      : provenChildren === detail.children.length
+                        ? 'all proven'
+                        : `${provenChildren} proven, ${detail.children.length - provenChildren} inferred ⚠`}
                   </span>
                 </span>
               ) : summary.childCount !== undefined && summary.childCount > 0 ? (
                 <span className="text-muted-foreground/60">{childLabel(summary.childCount)}</span>
               ) : null}
-              {detail && detail.uncertainties.length > 0 && (
+              {detail && detail.children.length === 0 && detail.uncertainties.length > 0 && (
                 <span
                   className="cursor-help text-warning"
                   title={detail.uncertainties.map((item) => item.note).join('\n')}
                 >
-                  ⚠
+                  uncertain ⚠
                 </span>
               )}
               <span className="ml-auto flex shrink-0 items-center gap-2 text-muted-foreground/60">
