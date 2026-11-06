@@ -9,7 +9,7 @@ subscribes to a conversation and `DELETE` ends that (`ServerEvents` in `shared/p
 `view`, `ops`, `doc` and `docOps` events carry its id on their first data line, so their `data` reads `<sub>\n{…}`:
 parse what follows the first newline.
 The Documents tab shows each exported kind through the renderer a web facet registers (`documents: [{ kind, title, component }]`), or as JSON.
-Local imported modules reload with the facet. Failed loads leave the previous version installed.
+Local imported modules reload with the facet, and edits to an already-loaded extension reload live; a new extension folder is discovered only when the host starts. Use codemode's `ultimate.extensions()` to check whether yours loaded at all; failed loads leave the previous version installed.
 
 Server extensions coordinate through typed contracts in each provider's `api.ts`: services, extension points,
 documents and durable events (below). The
