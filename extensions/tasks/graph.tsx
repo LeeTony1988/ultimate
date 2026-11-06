@@ -107,7 +107,7 @@ function stateOf(task: RunTask): {
 const outcomeTone = (outcome: RunSummary['outcome'] | undefined) => {
   if (outcome === 'completed') return 'bg-success'
   if (outcome === 'running') return 'bg-brand'
-  if (outcome === 'aborted') return 'bg-warning'
+  if (outcome === 'aborted' || outcome === 'unanswered') return 'bg-warning'
   return 'bg-error'
 }
 
@@ -115,6 +115,7 @@ const outcomeText = (outcome: RunSummary['outcome'] | undefined) => {
   if (outcome === 'completed') return 'done'
   if (outcome === 'running') return 'running'
   if (outcome === 'aborted') return 'aborted'
+  if (outcome === 'unanswered') return 'unanswered'
   if (outcome === undefined) return '—'
   return 'failed'
 }
@@ -310,6 +311,7 @@ function RunFrame({
   showCritical,
   filter,
   now,
+  nested,
 }: {
   conversationId: number
   agent: string
@@ -324,6 +326,7 @@ function RunFrame({
   showCritical: boolean
   filter: TaskFilter
   now: number
+  nested?: boolean
 }) {
   const { switchConversation, showSurface } = useUltimate()
   const { data, error, refetch } = useAction(
@@ -352,7 +355,7 @@ function RunFrame({
   const started = useOnce(StartedAction, liveIds)
   const facts = useOnce<TaskFacts>(DescribeAction, liveIds)
   const merged = useMemo(() => {
-    const stored = detail?.tasks ?? []
+    const stored = (detail?.tasks ?? []).filter((task) => task.conversationId === conversationId)
     const all = mergeLive(stored, liveHere, runId ?? -1, started)
     return all.map((task) => ({
       ...task,
@@ -363,7 +366,7 @@ function RunFrame({
         ? { startedAt: started[task.id] }
         : {}),
     }))
-  }, [detail, liveHere, runId, started, facts])
+  }, [detail, liveHere, runId, started, facts, conversationId])
   const tasks = merged
   const descendants = useMemo(() => descendantsOf(tasks), [tasks])
   const auto = useMemo(() => foldedByDefault(tasks), [tasks])
@@ -423,198 +426,246 @@ function RunFrame({
       : summarizeRun(taskOfPlaceholder(runId, conversationId), agent, tasks)
   const title = `@${agent} #${conversationId}`
   return (
-    <section
-      className="relative rounded-lg border border-border/70 bg-card/15"
-      data-frame={conversationId}
-    >
-      <div className="flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-1.5 font-mono text-[10.5px]">
-        <span className="flex min-w-0 items-center gap-1.5">
-          <MessageSquareIcon className="size-3 shrink-0 text-muted-foreground/60" />
-          <span className="truncate font-sans text-[11.5px] text-foreground/85">{title}</span>
-        </span>
-        {summary ? (
-          <>
-            <span className={cn('size-1.5 shrink-0 rounded-full', outcomeTone(summary.outcome))} />
-            <span className="text-muted-foreground/70">{outcomeText(summary.outcome)}</span>
-            <span className="text-muted-foreground/50">·</span>
-            <span className="text-muted-foreground/70">
-              {summary.truncated ? '≥' : ''}
-              {plural(summary.taskCount, 'task')}
-            </span>
-            {summary.failedCount > 0 && (
-              <span className="text-warning">
+    <>
+      <section
+        className={cn(
+          'relative rounded-lg border border-border/70 bg-card/15',
+          nested && 'border-brand/30',
+        )}
+        data-frame={conversationId}
+      >
+        <div className="flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-1.5 font-mono text-[10.5px]">
+          <span className="flex min-w-0 items-center gap-1.5">
+            <MessageSquareIcon className="size-3 shrink-0 text-muted-foreground/60" />
+            <span className="truncate font-sans text-[11.5px] text-foreground/85">{title}</span>
+          </span>
+          {summary ? (
+            <>
+              <span
+                className={cn('size-1.5 shrink-0 rounded-full', outcomeTone(summary.outcome))}
+              />
+              <span className="text-muted-foreground/70">{outcomeText(summary.outcome)}</span>
+              <span className="text-muted-foreground/50">·</span>
+              <span className="text-muted-foreground/70">
                 {summary.truncated ? '≥' : ''}
-                {summary.failedCount} failed
+                {plural(summary.taskCount, 'task')}
               </span>
-            )}
-            <span className="ml-auto flex shrink-0 items-center gap-2 text-muted-foreground/60">
-              {summary.startedAt > 0 && <span>{formatTime(summary.startedAt, true)}</span>}
-              {summary.startedAt > 0 && (
-                <span>
-                  {summary.endedAt
-                    ? formatDuration(summary.endedAt - summary.startedAt)
-                    : 'running'}
+              {summary.failedCount > 0 && (
+                <span className="text-warning">
+                  {summary.truncated ? '≥' : ''}
+                  {summary.failedCount} failed
                 </span>
               )}
-            </span>
-          </>
-        ) : (
-          <span className="ml-auto text-muted-foreground/60">
-            {runId === undefined ? 'no runs in window' : 'loading…'}
-          </span>
-        )}
-      </div>
-      {error && (
-        <div
-          className="border-b border-warning/30 px-3 py-2 font-mono text-[10.5px] text-warning"
-          role="alert"
-        >
-          Could not load run: {error.message}{' '}
-          <button
-            className="underline"
-            onClick={() => refetch().catch((cause) => console.error(cause))}
-            type="button"
-          >
-            Retry
-          </button>
-        </div>
-      )}
-      {detail?.truncated && (
-        <div
-          className="border-b border-warning/30 px-3 py-2 font-mono text-[10.5px] text-warning"
-          role="status"
-        >
-          Showing the first 5,000 tasks; this run was truncated.
-        </div>
-      )}
-      {tab === 'structure' ? (
-        <div className="max-h-[460px] overflow-auto p-3">
-          {visible.length === 0 ? (
-            <div className="flex min-h-24 items-center justify-center font-mono text-[11px] text-muted-foreground/60">
-              {tasks.length > 0
-                ? 'no tasks match this filter'
-                : runId === undefined
-                  ? 'no run in the visible history'
-                  : 'loading run…'}
-            </div>
+              {summary.generationCount !== undefined && summary.generationCount > 1 && (
+                <span className="text-muted-foreground/60">{summary.generationCount} rounds</span>
+              )}
+              {summary.childCount !== undefined && summary.childCount > 0 && (
+                <span className="text-muted-foreground/60">{summary.childCount} children</span>
+              )}
+              {detail && detail.uncertainties.length > 0 && (
+                <span
+                  className="cursor-help text-warning"
+                  title={detail.uncertainties.map((item) => item.note).join('\n')}
+                >
+                  inferred
+                </span>
+              )}
+              <span className="ml-auto flex shrink-0 items-center gap-2 text-muted-foreground/60">
+                {summary.startedAt > 0 && <span>{formatTime(summary.startedAt, true)}</span>}
+                {summary.startedAt > 0 && (
+                  <span>
+                    {summary.endedAt
+                      ? formatDuration(summary.endedAt - summary.startedAt)
+                      : 'running'}
+                  </span>
+                )}
+              </span>
+            </>
           ) : (
-            <div
-              className="relative"
-              style={{
-                width: Math.max(drawing.width + 16, 300),
-                height: Math.max(drawing.height + 8, 48),
-              }}
+            <span className="ml-auto text-muted-foreground/60">
+              {runId === undefined ? 'no runs in window' : 'loading…'}
+            </span>
+          )}
+        </div>
+        {error && (
+          <div
+            className="border-b border-warning/30 px-3 py-2 font-mono text-[10.5px] text-warning"
+            role="alert"
+          >
+            Could not load run: {error.message}{' '}
+            <button
+              className="underline"
+              onClick={() => refetch().catch((cause) => console.error(cause))}
+              type="button"
             >
-              <svg
-                aria-hidden
-                className="pointer-events-none absolute inset-0 overflow-visible"
-                height={drawing.height}
-                width={drawing.width}
+              Retry
+            </button>
+          </div>
+        )}
+        {detail?.truncated && (
+          <div
+            className="border-b border-warning/30 px-3 py-2 font-mono text-[10.5px] text-warning"
+            role="status"
+          >
+            Showing the first 5,000 tasks; this run was truncated.
+          </div>
+        )}
+        {tab === 'structure' ? (
+          <div className="max-h-[460px] overflow-auto p-3">
+            {visible.length === 0 ? (
+              <div className="flex min-h-24 items-center justify-center font-mono text-[11px] text-muted-foreground/60">
+                {tasks.length > 0
+                  ? 'no tasks match this filter'
+                  : runId === undefined
+                    ? 'no run in the visible history'
+                    : 'loading run…'}
+              </div>
+            ) : (
+              <div
+                className="relative"
+                style={{
+                  width: Math.max(drawing.width + 16, 300),
+                  height: Math.max(drawing.height + 8, 48),
+                }}
               >
-                <defs>
-                  <marker
-                    id="history-arrow-owner"
-                    markerHeight="6"
-                    markerWidth="6"
-                    orient="auto"
-                    refX="5"
-                    refY="3"
-                  >
-                    <path className="fill-muted-foreground/40" d="M0,0 L6,3 L0,6 z" />
-                  </marker>
-                  <marker
-                    id="history-arrow-wait"
-                    markerHeight="6"
-                    markerWidth="6"
-                    orient="auto"
-                    refX="5"
-                    refY="3"
-                  >
-                    <path className="fill-brand/60" d="M0,0 L6,3 L0,6 z" />
-                  </marker>
-                </defs>
-                {drawing.edges.map((edge: DagEdge) => {
-                  const from = nodeAt.get(edge.to) && nodeAt.get(edge.from)
-                  if (!from) return null
-                  const a = nodeAt.get(edge.from)!
-                  const b = nodeAt.get(edge.to)!
-                  const x1 = a.x + NODE_WIDTH
-                  const y1 = a.y + NODE_HEIGHT / 2
-                  const x2 = b.x - 3
-                  const y2 = b.y + NODE_HEIGHT / 2
-                  const onPath = critical.has(edge.from) && critical.has(edge.to)
+                <svg
+                  aria-hidden
+                  className="pointer-events-none absolute inset-0 overflow-visible"
+                  height={drawing.height}
+                  width={drawing.width}
+                >
+                  <defs>
+                    <marker
+                      id="history-arrow-owner"
+                      markerHeight="6"
+                      markerWidth="6"
+                      orient="auto"
+                      refX="5"
+                      refY="3"
+                    >
+                      <path className="fill-muted-foreground/40" d="M0,0 L6,3 L0,6 z" />
+                    </marker>
+                    <marker
+                      id="history-arrow-wait"
+                      markerHeight="6"
+                      markerWidth="6"
+                      orient="auto"
+                      refX="5"
+                      refY="3"
+                    >
+                      <path className="fill-brand/60" d="M0,0 L6,3 L0,6 z" />
+                    </marker>
+                  </defs>
+                  {drawing.edges.map((edge: DagEdge) => {
+                    const from = nodeAt.get(edge.to) && nodeAt.get(edge.from)
+                    if (!from) return null
+                    const a = nodeAt.get(edge.from)!
+                    const b = nodeAt.get(edge.to)!
+                    const x1 = a.x + NODE_WIDTH
+                    const y1 = a.y + NODE_HEIGHT / 2
+                    const x2 = b.x - 3
+                    const y2 = b.y + NODE_HEIGHT / 2
+                    const onPath = critical.has(edge.from) && critical.has(edge.to)
+                    return (
+                      <path
+                        className={cn(
+                          edge.kind === 'wait' ? 'stroke-brand/55' : 'stroke-muted-foreground/35',
+                          onPath && 'stroke-brand/80',
+                        )}
+                        d={`M${x1} ${y1} C${x1 + 36} ${y1}, ${x2 - 36} ${y2}, ${x2} ${y2}`}
+                        fill="none"
+                        key={`${edge.from}:${edge.to}`}
+                        markerEnd={
+                          edge.kind === 'wait'
+                            ? 'url(#history-arrow-wait)'
+                            : 'url(#history-arrow-owner)'
+                        }
+                        strokeDasharray={edge.kind === 'wait' ? '3 4' : undefined}
+                        strokeWidth={onPath ? 1.8 : undefined}
+                      />
+                    )
+                  })}
+                </svg>
+                {drawing.nodes.map((node) => {
+                  const task = byTask.get(node.task.id)
+                  if (!task) return null
                   return (
-                    <path
-                      className={cn(
-                        edge.kind === 'wait' ? 'stroke-brand/55' : 'stroke-muted-foreground/35',
-                        onPath && 'stroke-brand/80',
-                      )}
-                      d={`M${x1} ${y1} C${x1 + 36} ${y1}, ${x2 - 36} ${y2}, ${x2} ${y2}`}
-                      fill="none"
-                      key={`${edge.from}:${edge.to}`}
-                      markerEnd={
-                        edge.kind === 'wait'
-                          ? 'url(#history-arrow-wait)'
-                          : 'url(#history-arrow-owner)'
-                      }
-                      strokeDasharray={edge.kind === 'wait' ? '3 4' : undefined}
-                      strokeWidth={onPath ? 1.8 : undefined}
+                    <HistoryNode
+                      collapsed={folded.has(task.id)}
+                      critical={critical.has(task.id)}
+                      folded={descendants.get(task.id) ?? 0}
+                      key={task.id}
+                      named={meaningOf(task)}
+                      now={now}
+                      onFold={() => onFold(task.id, !folded.has(task.id))}
+                      onSelect={() => onSelectTask(task.id)}
+                      onNavigate={() => {
+                        switchConversation(task.conversationId)
+                        showSurface('agent')
+                      }}
+                      selected={selectedTask === task.id}
+                      started={task.startedAt ?? started[task.id]}
+                      task={task}
+                      x={node.x}
+                      y={node.y}
                     />
                   )
                 })}
-              </svg>
-              {drawing.nodes.map((node) => {
-                const task = byTask.get(node.task.id)
-                if (!task) return null
-                return (
-                  <HistoryNode
-                    collapsed={folded.has(task.id)}
-                    critical={critical.has(task.id)}
-                    folded={descendants.get(task.id) ?? 0}
-                    key={task.id}
-                    named={meaningOf(task)}
-                    now={now}
-                    onFold={() => onFold(task.id, !folded.has(task.id))}
-                    onSelect={() => onSelectTask(task.id)}
-                    onNavigate={() => {
-                      switchConversation(task.conversationId)
-                      showSurface('agent')
-                    }}
-                    selected={selectedTask === task.id}
-                    started={task.startedAt ?? started[task.id]}
-                    task={task}
-                    x={node.x}
-                    y={node.y}
-                  />
-                )
-              })}
-            </div>
-          )}
-        </div>
-      ) : (
-        <Timeline
-          tasks={filtered}
-          run={summary}
-          now={now}
-          selected={selectedTask}
-          onSelect={onSelectTask}
-        />
-      )}
-      {selectedTask !== undefined &&
-        (() => {
-          const task = tasks.find((item) => item.id === selectedTask)
-          return task ? (
-            <TaskDetail
+              </div>
+            )}
+          </div>
+        ) : (
+          <Timeline
+            tasks={filtered}
+            run={summary}
+            now={now}
+            selected={selectedTask}
+            onSelect={onSelectTask}
+          />
+        )}
+        {selectedTask !== undefined &&
+          (() => {
+            const task = tasks.find((item) => item.id === selectedTask)
+            return task ? (
+              <TaskDetail
+                now={now}
+                onClose={() => onSelectTask(undefined)}
+                run={summary}
+                childCount={descendants.get(task.id) ?? 0}
+                settings={settings}
+                task={task}
+              />
+            ) : null
+          })()}
+      </section>
+      {!nested &&
+        detail?.children
+          ?.filter(
+            (child) =>
+              child.confidence === 'proven' &&
+              child.generationIds &&
+              child.generationIds.length > 0,
+          )
+          .map((child) => (
+            <RunFrame
+              agent={child.agent}
+              conversationId={child.conversationId}
+              expanded={expanded}
+              filter={filter}
+              key={`child:${child.conversationId}`}
+              live={live}
+              nested
               now={now}
-              onClose={() => onSelectTask(undefined)}
-              run={summary}
-              childCount={descendants.get(task.id) ?? 0}
+              onFold={onFold}
+              onSelectTask={onSelectTask}
+              runId={runId}
+              selectedTask={selectedTask}
               settings={settings}
-              task={task}
+              showCritical={showCritical}
+              tab={tab}
             />
-          ) : null
-        })()}
-    </section>
+          ))}
+    </>
   )
 }
 
@@ -788,18 +839,7 @@ function Timeline({
               {lane.label}
             </text>
             {lane.tasks.map((task, taskIndex) => (
-              <g key={task.id}>
-                {lane.key === 'tools' && (
-                  <text
-                    className="fill-muted-foreground/60 font-mono text-[9px]"
-                    x={8}
-                    y={laneTops[index] + taskIndex * barGap + 13}
-                  >
-                    {(meaningOf(task)?.text ?? task.tool ?? task.kind).slice(0, 15)}
-                  </text>
-                )}
-                {bar(task, index, taskIndex)}
-              </g>
+              <g key={task.id}>{bar(task, index, taskIndex)}</g>
             ))}
           </g>
         ))}
@@ -1237,7 +1277,7 @@ function RunSummaryBar({ run }: { run: RunSummary | undefined }) {
   if (!run) return null
   const chips: { label: string; value: string }[] = [
     { label: 'tasks', value: `${run.truncated ? '≥' : ''}${run.taskCount}` },
-    { label: 'agents', value: '1' },
+    { label: 'agents', value: String(1 + (run.childCount ?? 0)) },
     { label: 'tool calls', value: `${run.truncated ? '≥' : ''}${run.toolCount ?? 0}` },
   ]
   if (run.tokens !== undefined)
