@@ -223,14 +223,6 @@ cmd_prepare() {
   fi
   printf 'prepare: %s tip %s\n' "$branch" "$tip"
 
-  pnpm_install
-
-  if ((merge == 0)); then
-    printf 'prepare: base at %s is ready; run "%s gate", then prepare again without --no-merge\n' \
-      "$(git -C "$CLONE" rev-parse --short HEAD)" "$SCRIPT_NAME"
-    return 0
-  fi
-
   if git -C "$CLONE" merge-base --is-ancestor refs/heads/landing-branch HEAD; then
     printf 'prepare: %s is already merged at %s; nothing to do\n' \
       "$branch" "$(git -C "$CLONE" rev-parse --short HEAD)"
@@ -241,6 +233,14 @@ cmd_prepare() {
   ahead="$(git -C "$CLONE" rev-list --count origin/dev/lxy..HEAD)"
   if ((ahead > 0)); then
     die "the landing clone is $ahead commit(s) ahead of origin/dev/lxy; choose a fresh WSL_GATE_CLONE"
+  fi
+
+  pnpm_install
+
+  if ((merge == 0)); then
+    printf 'prepare: base at %s is ready; run "%s gate", then prepare again without --no-merge\n' \
+      "$(git -C "$CLONE" rev-parse --short HEAD)" "$SCRIPT_NAME"
+    return 0
   fi
 
   local short="${tip:0:7}"
