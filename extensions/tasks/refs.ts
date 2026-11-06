@@ -65,6 +65,8 @@ export type RunTask = {
   background: boolean
   abortRequested: boolean
   status: TaskStatus
+  /** A missing or un-migratable task definition prevents this live task running. */
+  blocked?: string
   phase?: string
   /** The tasks a `waiting` task is parked on. */
   on?: number[]

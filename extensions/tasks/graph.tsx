@@ -57,6 +57,7 @@ import { useOnce } from './shared.tsx'
 const NODE_WIDTH = 192
 const NODE_HEIGHT = 38
 const POLL_MS = 2000
+const NO_RUNS: RunSummary[] = []
 
 /** The node's plain state, for its card and its title. */
 function stateOf(task: RunTask): {
@@ -64,6 +65,12 @@ function stateOf(task: RunTask): {
   icon: 'running' | 'pending' | 'done' | 'interrupted'
   tone: string
 } {
+  if (task.blocked)
+    return {
+      text: `blocked · ${task.blocked.replaceAll('_', ' ')}`,
+      icon: 'interrupted',
+      tone: 'text-warning',
+    }
   if (task.status === 'waiting')
     return {
       text: `waiting${task.phase ? ` · ${task.phase}` : ''}`,
@@ -201,13 +208,15 @@ function HistoryNode({
     <div
       className={cn(
         'group absolute flex h-[38px] w-[192px] items-center gap-1.5 overflow-hidden rounded-md border px-2 font-mono text-[11px] transition-colors',
-        running
-          ? 'border-brand/45 bg-brand/5'
-          : task.status === 'waiting'
-            ? 'border-border/80 bg-card/45'
-            : failed(task)
-              ? 'border-warning/60 bg-warning/5'
-              : 'border-border/70 bg-card/35',
+        task.blocked
+          ? 'border-warning/60 bg-warning/5'
+          : running
+            ? 'border-brand/45 bg-brand/5'
+            : task.status === 'waiting'
+              ? 'border-border/80 bg-card/45'
+              : failed(task)
+                ? 'border-warning/60 bg-warning/5'
+                : 'border-border/70 bg-card/35',
         settled && 'opacity-60',
         critical && 'ring-1 ring-brand/55',
         selected && 'ring-1 ring-foreground/50',
@@ -382,11 +391,21 @@ function RunFrame({
   const nodeAt = new Map<number, (typeof drawing.nodes)[number]>(
     drawing.nodes.map((node) => [Number(node.task.id), node]),
   )
+  const root = tasks.find((task) => task.id === runId)
   const summary =
-    detail?.run ??
-    (runId === undefined
-      ? undefined
-      : summarizeRun(taskOfPlaceholder(runId, conversationId), agent, tasks))
+    detail?.run && root
+      ? {
+          ...detail.run,
+          ...summarizeRun(root, agent, tasks, detail.run.model),
+          startedAt: root.startedAt ?? detail.run.startedAt,
+          tokens: detail.run.tokens,
+          cost: detail.run.cost,
+          truncated: detail.run.truncated,
+        }
+      : (detail?.run ??
+        (runId === undefined
+          ? undefined
+          : summarizeRun(taskOfPlaceholder(runId, conversationId), agent, tasks)))
   const title = `@${agent} #${conversationId}`
   return (
     <section
@@ -604,6 +623,7 @@ function Timeline({
   onSelect: (id: number | undefined) => void
 }) {
   const [hover, setHover] = useState<{ task: RunTask; x: number; y: number }>()
+  const [zoom, setZoom] = useState(1)
   const start = run?.startedAt ?? Math.min(...tasks.map((task) => task.startedAt ?? Infinity))
   const end = Math.max(
     run?.endedAt ?? start,
@@ -612,7 +632,7 @@ function Timeline({
     ),
   )
   const span = Math.max(1000, end - start)
-  const chartWidth = Math.max(640, Math.min(1600, Math.round(span / 1000) * 8))
+  const chartWidth = Math.max(640, Math.min(1600, Math.round(span / 1000) * 8)) * zoom
   const gutter = 84
   const width = chartWidth + gutter
   const lanes: Lane[] = []
@@ -625,9 +645,15 @@ function Timeline({
   if (toolTasks.length)
     lanes.push({ key: 'tools', label: `tools · #${run?.conversationId ?? ''}`, tasks: toolTasks })
   if (lanes.length === 0) return null
-  const laneHeight = 30
   const top = 24
-  const height = top + lanes.length * laneHeight + 20
+  const laneGap = 12
+  const barGap = 20
+  const laneTops: number[] = []
+  let height = top
+  for (const lane of lanes) {
+    laneTops.push(height)
+    height += Math.max(1, lane.tasks.length) * barGap + laneGap
+  }
   const xOf = (at: number) => gutter + ((at - start) / span) * chartWidth
   const barWidth = (task: RunTask) =>
     Math.max(
@@ -637,8 +663,8 @@ function Timeline({
         span) *
         chartWidth,
     )
-  const bar = (task: RunTask, index: number) => {
-    const y = top + index * laneHeight + 6
+  const bar = (task: RunTask, laneIndex: number, taskIndex: number) => {
+    const y = laneTops[laneIndex] + taskIndex * barGap + 2
     const left = Math.max(gutter, xOf(task.startedAt ?? start))
     const w = Math.max(4, Math.min(width - left, barWidth(task)))
     const tone = failed(task)
@@ -679,8 +705,8 @@ function Timeline({
   }
   const geometry = new Map<number, { x: number; y: number }>()
   for (const [laneIndex, lane] of lanes.entries())
-    for (const task of lane.tasks) {
-      const y = top + laneIndex * laneHeight + 14
+    for (const [taskIndex, task] of lane.tasks.entries()) {
+      const y = laneTops[laneIndex] + taskIndex * barGap + 10
       geometry.set(task.id, {
         x: xOf(task.endedAt ?? (outcomeOf(task) === 'running' ? now : (task.startedAt ?? start))),
         y,
@@ -688,7 +714,28 @@ function Timeline({
     }
   const ticks = 6
   return (
-    <div className="relative overflow-auto p-3">
+    <div className="relative max-h-[460px] overflow-auto p-3">
+      <div className="sticky left-0 flex w-fit items-center gap-1 pb-2 font-mono text-[10px] text-muted-foreground">
+        <button
+          aria-label="Zoom timeline out"
+          className="rounded px-1 hover:bg-accent disabled:opacity-40"
+          disabled={zoom === 1}
+          onClick={() => setZoom(zoom / 2)}
+          type="button"
+        >
+          −
+        </button>
+        {zoom}×
+        <button
+          aria-label="Zoom timeline in"
+          className="rounded px-1 hover:bg-accent disabled:opacity-40"
+          disabled={zoom === 16}
+          onClick={() => setZoom(zoom * 2)}
+          type="button"
+        >
+          +
+        </button>
+      </div>
       <svg className="block" height={height} width={width + 8}>
         {Array.from({ length: ticks + 1 }, (_, index) => {
           const x = gutter + (index / ticks) * chartWidth
@@ -713,11 +760,11 @@ function Timeline({
             <text
               className="fill-muted-foreground/80 font-mono text-[10px]"
               x={0}
-              y={top + index * laneHeight + 11}
+              y={laneTops[index] + 13}
             >
               {lane.label}
             </text>
-            {lane.tasks.map((task) => bar(task, index))}
+            {lane.tasks.map((task, taskIndex) => bar(task, index, taskIndex))}
           </g>
         ))}
         {tasks
@@ -932,28 +979,29 @@ function TaskDetail({
 }
 
 /** The settings popover: history days and cost detail; changes write project settings; no history is deleted. */
-function SettingsMenu({
-  settings,
-  onSaved,
-}: {
-  settings: TaskSettings
-  onSaved: (next: TaskSettings) => void
-}) {
+function SettingsMenu({ settings }: { settings: TaskSettings }) {
   const [draftDays, setDraftDays] = useState(settings.historyDays)
   const [draftCost, setDraftCost] = useState(settings.costDetail)
   const [error, setError] = useState<string>()
+  const [saving, setSaving] = useState(false)
   useEffect(() => {
     setDraftDays(settings.historyDays)
     setDraftCost(settings.costDetail)
   }, [settings.historyDays, settings.costDetail])
-  const save = (patch: { historyDays?: number; costDetail?: 'run' | 'tool' }) => {
+  const save = () => {
+    if (!Number.isSafeInteger(draftDays) || draftDays < 1) {
+      setError('Enter a positive whole number of days.')
+      return
+    }
+    setSaving(true)
     void (async () => {
       try {
-        const next = await api.action(SettingsAction, patch)
+        await api.action(SettingsAction, { historyDays: draftDays, costDetail: draftCost })
         setError(undefined)
-        onSaved(next)
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : String(cause))
+      } finally {
+        setSaving(false)
       }
     })().catch((cause) => setError(String(cause)))
   }
@@ -977,11 +1025,7 @@ function SettingsMenu({
             <input
               className="w-14 rounded border border-border/70 bg-background px-1.5 py-0.5 text-right text-foreground outline-none focus:border-brand/60"
               min={1}
-              onChange={(event) => {
-                const days = Number(event.target.value)
-                setDraftDays(days)
-                if (Number.isSafeInteger(days) && days >= 1) save({ historyDays: days })
-              }}
+              onChange={(event) => setDraftDays(Number(event.target.value))}
               type="number"
               value={draftDays}
             />
@@ -992,17 +1036,23 @@ function SettingsMenu({
           <span className="text-muted-foreground">Cost detail</span>
           <select
             className="rounded border border-border/70 bg-background px-1.5 py-0.5 text-foreground outline-none focus:border-brand/60"
-            onChange={(event) => {
-              const costDetail = event.target.value === 'tool' ? 'tool' : 'run'
-              setDraftCost(costDetail)
-              save({ costDetail })
-            }}
+            onChange={(event) => setDraftCost(event.target.value === 'tool' ? 'tool' : 'run')}
             value={draftCost}
           >
             <option value="run">per run</option>
             <option value="tool">per tool</option>
           </select>
         </label>
+        <button
+          className="mt-2 rounded-md border border-border/70 px-2 py-1 text-foreground hover:bg-accent disabled:opacity-50"
+          disabled={
+            saving || (draftDays === settings.historyDays && draftCost === settings.costDetail)
+          }
+          onClick={save}
+          type="button"
+        >
+          {saving ? 'Saving…' : 'Save settings'}
+        </button>
         {error && (
           <p className="mt-2 text-warning" role="alert">
             {error}
@@ -1199,17 +1249,33 @@ function TaskGraphSurface() {
     'dag.conversations',
     conversationId ? [conversationId] : [],
   )
-  const [pickedRuns, setPickedRuns] = useExtensionUiState<Record<string, number>>(
-    'dag.runByConversation',
-    {},
-  )
+  const [pickedRuns, setPickedRuns] = useState<Record<string, RunSummary>>({})
   const [foldState, setFoldState] = useExtensionUiState<Record<string, boolean>>('dag.fold', {})
   const [primaryRun, setPrimaryRun] = useExtensionUiState<number | null>('dag.primaryRun', null)
   const [selectedTask, setSelectedTask] = useState<number>()
-  const [more, setMore] = useState<{ runs: RunSummary[]; cursor?: string }>({ runs: [] })
-  const [savedSettings, setSavedSettings] = useState<TaskSettings>()
-  const effective = savedSettings ?? settings
+  const [more, setMore] = useState<{ key: string; runs: RunSummary[]; cursor?: string }>({
+    key: '',
+    runs: [],
+  })
+  const [loadingMore, setLoadingMore] = useState(false)
+  const pendingPage = useRef<AbortController | undefined>(undefined)
+  const effective = settings
   const previousDays = useRef(effective.historyDays)
+  const selectedRuns = useMemo(
+    () =>
+      Object.values(graph?.tasks ?? {}).filter(
+        (task) =>
+          task.kind === 'pi.generation' &&
+          task.owner === undefined &&
+          selected.includes(task.conversationId),
+      ),
+    [graph, selected],
+  )
+  const liveSignature = selectedRuns
+    .map((task) => `${task.id}:${task.state.status}`)
+    .toSorted()
+    .join(',')
+  const previousSignature = useRef(liveSignature)
   useEffect(() => {
     if (previousDays.current === effective.historyDays) return
     previousDays.current = effective.historyDays
@@ -1228,40 +1294,38 @@ function TaskGraphSurface() {
     [selected, effective.historyDays],
   )
   const history = useAction(HistoryAction, historyArgs, { enabled: selected.length > 0 })
-  useEffect(() => {
-    setMore({ runs: [] })
-  }, [historyArgs])
+  const pageKey = JSON.stringify([historyArgs, liveSignature])
+  useEffect(
+    () => () => {
+      pendingPage.current?.abort()
+      pendingPage.current = undefined
+      setLoadingMore(false)
+    },
+    [pageKey],
+  )
+  const older = more.key === pageKey ? more.runs : NO_RUNS
+  const olderCursor = more.key === pageKey ? more.cursor : undefined
   const runs = useMemo(() => {
     const seen = new Set<number>()
-    return [...(history.data?.runs ?? []), ...more.runs].filter((run) => {
+    return [...(history.data?.runs ?? []), ...older].filter((run) => {
       if (seen.has(run.id)) return false
       seen.add(run.id)
       return true
     })
-  }, [history.data, more.runs])
+  }, [history.data, older])
   const anyRunning = runs.some((run) => run.outcome === 'running')
   const poll = useNow(POLL_MS, anyRunning)
   const conversationPoll = useNow(5000, anyRunning)
   const wasRunning = useRef(false)
   const refetchHistory = history.refetch
   const refetchConversations = conversations.refetch
-  const liveRuns = Object.values(graph?.tasks ?? {})
-    .filter(
-      (task) =>
-        task.kind === 'pi.generation' &&
-        task.owner === undefined &&
-        selected.includes(task.conversationId),
-    )
-    .map((task) => task.id)
-    .toSorted((a, b) => a - b)
-    .join(',')
-  const previousLiveRuns = useRef(liveRuns)
   useEffect(() => {
-    if (previousLiveRuns.current === liveRuns) return
-    previousLiveRuns.current = liveRuns
+    if (previousSignature.current === liveSignature) return
+    previousSignature.current = liveSignature
+    // A live run entering, leaving or changing phase invalidates older pages' ordering and outcomes.
     refetchHistory().catch((error) => console.error(error))
     refetchConversations().catch((error) => console.error(error))
-  }, [liveRuns, refetchHistory, refetchConversations])
+  }, [liveSignature, refetchHistory, refetchConversations])
   useEffect(() => {
     if (anyRunning) refetchConversations().catch((error) => console.error(error))
   }, [conversationPoll, anyRunning, refetchConversations])
@@ -1288,9 +1352,11 @@ function TaskGraphSurface() {
     selectedConversations.map((id) => {
       const conversation = known.get(id)
       const picked = pickedRuns[String(id)]
+      const validPick =
+        picked && picked.startedAt >= now - effective.historyDays * 86_400_000 ? picked : undefined
       const latest = runs.find((item) => item.conversationId === id)
-      const runId = picked ?? latest?.id ?? conversation?.lastRunId
-      const run = runs.find((item) => item.id === runId)
+      const runId = validPick?.id ?? latest?.id ?? conversation?.lastRunId
+      const run = runs.find((item) => item.id === runId) ?? validPick
       return {
         conversationId: id,
         agent: conversation?.agent ?? run?.agent ?? 'agent',
@@ -1300,12 +1366,12 @@ function TaskGraphSurface() {
     }),
   )
   const primary =
-    runs.find((run) => run.id === primaryRun) ??
+    runs.find((run) => run.id === primaryRun && selected.includes(run.conversationId)) ??
     frames.map((frame) => runs.find((run) => run.id === frame.runId)).find(Boolean)
   const primarySummary = primary
   const pick = (run: RunSummary) => {
     setPrimaryRun(run.id)
-    setPickedRuns({ ...pickedRuns, [String(run.conversationId)]: run.id })
+    setPickedRuns({ ...pickedRuns, [String(run.conversationId)]: run })
     if (!selected.includes(run.conversationId)) setSelected([...selected, run.conversationId])
   }
   const toggle = (id: number) =>
@@ -1313,20 +1379,34 @@ function TaskGraphSurface() {
       selected.includes(id) ? selected.filter((value) => value !== id) : [...selected, id],
     )
   const loadMore = async () => {
-    const cursor = more.cursor ?? history.data?.cursor
-    if (!cursor) return
+    const cursor = older.length ? olderCursor : history.data?.cursor
+    if (!cursor || pendingPage.current) return
+    const controller = new AbortController()
+    pendingPage.current = controller
+    setLoadingMore(true)
     try {
-      const page = await api.action(HistoryAction, {
-        ...historyArgs,
-        before: Number(cursor),
-        limit: 20,
-      })
-      setMore({
-        runs: [...more.runs, ...page.runs],
-        ...(page.cursor ? { cursor: page.cursor } : {}),
-      })
+      const page = await api.action(
+        HistoryAction,
+        {
+          ...historyArgs,
+          before: Number(cursor),
+          limit: 20,
+        },
+        { signal: controller.signal },
+      )
+      if (!controller.signal.aborted)
+        setMore({
+          key: pageKey,
+          runs: [...older, ...page.runs],
+          ...(page.cursor ? { cursor: page.cursor } : {}),
+        })
     } catch (error) {
-      console.error(error)
+      if (!controller.signal.aborted) console.error(error)
+    } finally {
+      if (pendingPage.current === controller) {
+        pendingPage.current = undefined
+        setLoadingMore(false)
+      }
     }
   }
   const live = useMemo(() => Object.values(graph?.tasks ?? {}), [graph])
@@ -1380,14 +1460,14 @@ function TaskGraphSurface() {
             />
             duration chain
           </button>
-          <SettingsMenu onSaved={(next) => setSavedSettings(next)} settings={effective} />
+          <SettingsMenu settings={effective} />
         </span>
       </Header>
       <div className="flex min-h-0 flex-1">
         <Rail
           all={() => setSelected(conversations.data?.map((conversation) => conversation.id) ?? [])}
           conversations={conversationList}
-          cursor={more.runs.length ? more.cursor : history.data?.cursor}
+          cursor={loadingMore ? undefined : older.length ? olderCursor : history.data?.cursor}
           none={() => setSelected([])}
           now={now}
           onMore={loadMore}

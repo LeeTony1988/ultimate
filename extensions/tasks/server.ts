@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 import type { JsonValue } from '@earendil-works/chord'
-import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
+import { BACKGROUND_CONTEXT as context, withAbortSignal } from '@earendil-works/chord/context'
 import { AssistantEntry } from '@earendil-works/pi-durable'
 import type { ConversationId, EntryId, TaskId, TaskRecord, Tx } from '@earendil-works/pi-durable'
 import { implementAction } from '../../lib/actions.ts'
@@ -195,10 +195,16 @@ function taskOf(record: AnyTask): RunTask {
  * A conversation's tasks, newest first until `stopId`; scanning stops at the first older id because a child is always
  * created after its owner. 1000 per page keeps the transaction short.
  */
-async function scanConversation(tx: Tx, conversationId: number, stopId = 0): Promise<RunTask[]> {
+async function scanConversation(
+  tx: Tx,
+  conversationId: number,
+  stopId: number,
+  signal: AbortSignal,
+): Promise<RunTask[]> {
   const out: RunTask[] = []
   let cursor: Parameters<Tx['scanTasks']>[2]
   while (true) {
+    signal.throwIfAborted()
     const result = await tx.scanTasks(
       { conversationId: conversationId as ConversationId, order: 'descending' },
       1000,
@@ -215,10 +221,11 @@ async function scanConversation(tx: Tx, conversationId: number, stopId = 0): Pro
 }
 
 /** All top-level generations; the stored scan orders by id, not by the time a task first ran. */
-async function scanGenerations(tx: Tx): Promise<RunTask[]> {
+async function scanGenerations(tx: Tx, signal: AbortSignal): Promise<RunTask[]> {
   const out: RunTask[] = []
   let cursor: Parameters<Tx['scanTasks']>[2]
   while (true) {
+    signal.throwIfAborted()
     const result = await tx.scanTasks({ kind: 'pi.generation', order: 'descending' }, 1000, cursor)
     for (const record of result.items) {
       const task = taskOf(record)
@@ -262,9 +269,11 @@ async function summaryOf(
   host: ExtensionHost,
   run: RunTask,
   pool: RunTask[],
+  signal: AbortSignal,
 ): Promise<RunSummary> {
   const { tasks, truncated } = collectRunTasks(run, pool)
   for (const task of tasks) {
+    signal.throwIfAborted()
     const record = await tx.task(task.id as TaskId)
     const found = record ? await resultOf(tx, record, task) : undefined
     if (found) task.usage = found
@@ -276,6 +285,9 @@ async function summaryOf(
 }
 
 export default { name: 'tasks' }
+
+/** Only the person at the browser may persist project display settings. */
+export const userActions = ['settings']
 
 export const actions = {
   /** When each of `ids` first ran, in wall-clock milliseconds; tasks not yet started or gone are left out. */
@@ -327,65 +339,68 @@ export const actions = {
   /** Every conversation with a run, its agent name, run count and last activity; the current one even with no run. */
   conversations: implementAction(
     ConversationsAction,
-    async (args, { host, conversationId: current }) => {
+    async (args, { host, conversationId: current, signal }) => {
       const input = (args ?? {}) as { days?: unknown }
       const days =
         typeof input.days === 'number' && Number.isSafeInteger(input.days) && input.days >= 1
           ? input.days
           : DEFAULT_TASK_SETTINGS.historyDays
       const cutoff = Date.now() - days * 24 * 60 * 60 * 1000
-      return host.harness().commit(async (tx) => {
-        const runs = await scanGenerations(tx)
-        const byConversation = new Map<
-          number,
-          { runs: number; lastAt: number; lastRunId?: number; lastRunAt?: number }
-        >()
-        for (const run of runs) {
-          const at = run.endedAt ?? run.startedAt ?? 0
-          const known = byConversation.get(run.conversationId)
-          if (!known) byConversation.set(run.conversationId, { runs: 1, lastAt: at })
-          else {
-            known.runs++
-            if (at >= known.lastAt) known.lastAt = at
+      return host.harness().commit(
+        async (tx) => {
+          const runs = await scanGenerations(tx, signal)
+          const byConversation = new Map<
+            number,
+            { runs: number; lastAt: number; lastRunId?: number; lastRunAt?: number }
+          >()
+          for (const run of runs) {
+            const at = run.endedAt ?? run.startedAt ?? 0
+            const known = byConversation.get(run.conversationId)
+            if (!known) byConversation.set(run.conversationId, { runs: 1, lastAt: at })
+            else {
+              known.runs++
+              if (at >= known.lastAt) known.lastAt = at
+            }
+            const entry = byConversation.get(run.conversationId)!
+            // Task IDs order creation, so compare start times when finding the newest started run.
+            if (
+              run.startedAt !== undefined &&
+              run.startedAt >= cutoff &&
+              (entry.lastRunAt === undefined ||
+                run.startedAt > entry.lastRunAt ||
+                (run.startedAt === entry.lastRunAt && run.id > (entry.lastRunId ?? 0)))
+            ) {
+              entry.lastRunId = run.id
+              entry.lastRunAt = run.startedAt
+            }
           }
-          const entry = byConversation.get(run.conversationId)!
-          // Task IDs order creation, so compare start times when finding the newest started run.
-          if (
-            run.startedAt !== undefined &&
-            run.startedAt >= cutoff &&
-            (entry.lastRunAt === undefined ||
-              run.startedAt > entry.lastRunAt ||
-              (run.startedAt === entry.lastRunAt && run.id > (entry.lastRunId ?? 0)))
-          ) {
-            entry.lastRunId = run.id
-            entry.lastRunAt = run.startedAt
-          }
-        }
-        if (current !== undefined && !byConversation.has(current))
-          byConversation.set(current, { runs: 0, lastAt: 0 })
-        // The sidebar's active conversations stay listed even before their first run, so the current one is checkable.
-        for (const summary of host.conversations())
-          if (!byConversation.has(summary.id))
-            byConversation.set(summary.id, {
-              runs: 0,
-              lastAt: summary.answerAt ?? summary.inputAt ?? 0,
+          if (current !== undefined && !byConversation.has(current))
+            byConversation.set(current, { runs: 0, lastAt: 0 })
+          // The sidebar's active conversations stay listed even before their first run, so the current one is checkable.
+          for (const summary of host.conversations())
+            if (!byConversation.has(summary.id))
+              byConversation.set(summary.id, {
+                runs: 0,
+                lastAt: summary.answerAt ?? summary.inputAt ?? 0,
+              })
+          const list: RunConversation[] = []
+          for (const [id, value] of byConversation)
+            list.push({
+              id,
+              agent: agentOf(host, id),
+              runs: value.runs,
+              lastAt: value.lastAt,
+              ...(value.lastRunId === undefined ? {} : { lastRunId: value.lastRunId }),
+              ...(value.lastRunAt === undefined ? {} : { lastRunAt: value.lastRunAt }),
             })
-        const list: RunConversation[] = []
-        for (const [id, value] of byConversation)
-          list.push({
-            id,
-            agent: agentOf(host, id),
-            runs: value.runs,
-            lastAt: value.lastAt,
-            ...(value.lastRunId === undefined ? {} : { lastRunId: value.lastRunId }),
-            ...(value.lastRunAt === undefined ? {} : { lastRunAt: value.lastRunAt }),
-          })
-        return list.toSorted((a, b) => b.lastAt - a.lastAt || a.id - b.id)
-      }, context)
+          return list.toSorted((a, b) => b.lastAt - a.lastAt || a.id - b.id)
+        },
+        withAbortSignal(signal, context),
+      )
     },
   ),
   /** One newest-first page of runs in the selected conversations, inside the visible days window. */
-  history: implementAction(HistoryAction, async (args, { host }) => {
+  history: implementAction(HistoryAction, async (args, { host, signal }) => {
     const input = (args ?? {}) as {
       conversationIds?: unknown
       days?: unknown
@@ -411,93 +426,103 @@ export const actions = {
         ? input.before
         : undefined
     const cutoff = Date.now() - days * 24 * 60 * 60 * 1000
-    return host.harness().commit(async (tx) => {
-      const boundary = before === undefined ? undefined : await tx.task(before as TaskId)
-      if (before !== undefined && (!boundary || boundary.startedAt === undefined))
-        throw new Error('Invalid history cursor')
-      const runs = await scanGenerations(tx)
-      const matched = runs
-        .filter((run) => {
-          if (
-            !selected.has(run.conversationId) ||
-            run.startedAt === undefined ||
-            run.startedAt < cutoff
+    return host.harness().commit(
+      async (tx) => {
+        const boundary = before === undefined ? undefined : await tx.task(before as TaskId)
+        if (before !== undefined && (!boundary || boundary.startedAt === undefined))
+          throw new Error('Invalid history cursor')
+        const runs = await scanGenerations(tx, signal)
+        const matched = runs
+          .filter((run) => {
+            if (
+              !selected.has(run.conversationId) ||
+              run.startedAt === undefined ||
+              run.startedAt < cutoff
+            )
+              return false
+            if (!boundary || boundary.startedAt === undefined) return true
+            return (
+              run.startedAt < boundary.startedAt ||
+              (run.startedAt === boundary.startedAt && run.id < boundary.id)
+            )
+          })
+          .toSorted((a, b) => b.startedAt! - a.startedAt! || b.id - a.id)
+        const page = matched.slice(0, limit)
+        const more = matched.length > limit
+        // One conversation scan per conversation in the page, then the owner-chain walk for each run.
+        const pools = new Map<number, RunTask[]>()
+        for (const run of page) {
+          if (pools.has(run.conversationId)) continue
+          const oldest = Math.min(
+            ...page
+              .filter((item) => item.conversationId === run.conversationId)
+              .map((item) => item.id),
           )
-            return false
-          if (!boundary || boundary.startedAt === undefined) return true
-          return (
-            run.startedAt < boundary.startedAt ||
-            (run.startedAt === boundary.startedAt && run.id < boundary.id)
+          pools.set(
+            run.conversationId,
+            await scanConversation(tx, run.conversationId, oldest, signal),
           )
-        })
-        .toSorted((a, b) => b.startedAt! - a.startedAt! || b.id - a.id)
-      const page = matched.slice(0, limit)
-      const more = matched.length > limit
-      // One conversation scan per conversation in the page, then the owner-chain walk for each run.
-      const pools = new Map<number, RunTask[]>()
-      for (const run of page) {
-        if (pools.has(run.conversationId)) continue
-        const oldest = Math.min(
-          ...page
-            .filter((item) => item.conversationId === run.conversationId)
-            .map((item) => item.id),
-        )
-        pools.set(run.conversationId, await scanConversation(tx, run.conversationId, oldest))
-      }
-      const summaries: RunSummary[] = []
-      for (const run of page)
-        summaries.push(await summaryOf(tx, host, run, pools.get(run.conversationId)!))
-      return {
-        runs: summaries,
-        ...(more && page.length ? { cursor: String(page.at(-1)!.id) } : {}),
-      }
-    }, context)
+        }
+        const summaries: RunSummary[] = []
+        for (const run of page)
+          summaries.push(await summaryOf(tx, host, run, pools.get(run.conversationId)!, signal))
+        return {
+          runs: summaries,
+          ...(more && page.length ? { cursor: String(page.at(-1)!.id) } : {}),
+        }
+      },
+      withAbortSignal(signal, context),
+    )
   }),
   /** One run's tasks: scanned across its time window, then kept by the owner chain; at most 5000, flagged if cut. */
-  run: implementAction(RunAction, async (args, { host }) => {
+  run: implementAction(RunAction, async (args, { host, signal }) => {
     const input = (args ?? {}) as { id?: unknown; costDetail?: unknown }
     if (typeof input.id !== 'number' || !Number.isSafeInteger(input.id))
       throw new Error('Expected a run id')
     const id = input.id
     const costDetail = input.costDetail === 'tool' ? 'tool' : 'run'
-    return host.harness().commit(async (tx) => {
-      const record = await tx.task(id as TaskId)
-      if (!record) throw new Error(`No run #${id}`)
-      const run = taskOf(record)
-      if (!isRun(run)) throw new Error(`Task #${id} is not a top-level generation`)
-      const pool = await scanConversation(tx, run.conversationId, run.id)
-      const { tasks, truncated } = collectRunTasks(run, pool, RUN_TASK_CAP)
-      const assistants = new Map<number, Map<string, { name: string; detail: string }>>()
-      const usages = new Map<number, UsageTotals | undefined>()
-      for (const task of tasks) {
-        const source = await tx.task(task.id as TaskId)
-        if (!source) continue
-        if (task.kind === 'pi.tool') {
-          const found = await toolFacts(tx, source.input as Input, assistants)
-          const fact = await facts(host, tx, task.kind, source.input as Input)
-          if (found.detail) task.detail = found.detail
-          if (fact.tool) {
-            task.tool = fact.tool
-            task.facts = { tool: fact.tool }
+    return host.harness().commit(
+      async (tx) => {
+        const record = await tx.task(id as TaskId)
+        if (!record) throw new Error(`No run #${id}`)
+        const run = taskOf(record)
+        if (!isRun(run)) throw new Error(`Task #${id} is not a top-level generation`)
+        const pool = await scanConversation(tx, run.conversationId, run.id, signal)
+        const { tasks, truncated } = collectRunTasks(run, pool, RUN_TASK_CAP)
+        const assistants = new Map<number, Map<string, { name: string; detail: string }>>()
+        const usages = new Map<number, UsageTotals | undefined>()
+        for (const task of tasks) {
+          signal.throwIfAborted()
+          const source = await tx.task(task.id as TaskId)
+          if (!source) continue
+          if (task.kind === 'pi.tool') {
+            const found = await toolFacts(tx, source.input as Input, assistants)
+            const fact = await facts(host, tx, task.kind, source.input as Input)
+            if (found.detail) task.detail = found.detail
+            if (fact.tool) {
+              task.tool = fact.tool
+              task.facts = { tool: fact.tool }
+            }
+          } else if (task.kind !== 'ultimate.automation-scheduler') {
+            // The scheduler's name is in an automation document; opening it would make this read action create it.
+            const fact = await facts(host, tx, task.kind, source.input as Input)
+            if (Object.keys(fact).length) task.facts = fact
           }
-        } else if (task.kind !== 'ultimate.automation-scheduler') {
-          // The scheduler's name is in an automation document; opening it would make this read action create it.
-          const fact = await facts(host, tx, task.kind, source.input as Input)
-          if (Object.keys(fact).length) task.facts = fact
+          const usage = await resultOf(tx, source, task)
+          usages.set(task.id, usage)
+          if (costDetail === 'tool' && usage) task.usage = usage
         }
-        const usage = await resultOf(tx, source, task)
-        usages.set(task.id, usage)
-        if (costDetail === 'tool' && usage) task.usage = usage
-      }
-      // Run totals need every task's usage even when only per-tool detail was asked for.
-      for (const task of tasks) if (!task.usage) task.usage = usages.get(task.id)
-      const summary = {
-        ...summarizeRun(run, agentOf(host, run.conversationId), tasks, await modelOf(tx, run)),
-        ...(truncated ? { truncated: true } : {}),
-      }
-      if (costDetail === 'run') for (const task of tasks) delete task.usage
-      return { run: summary, tasks, truncated } satisfies RunDetail
-    }, context)
+        // Run totals need every task's usage even when only per-tool detail was asked for.
+        for (const task of tasks) if (!task.usage) task.usage = usages.get(task.id)
+        const summary = {
+          ...summarizeRun(run, agentOf(host, run.conversationId), tasks, await modelOf(tx, run)),
+          ...(truncated ? { truncated: true } : {}),
+        }
+        if (costDetail === 'run') for (const task of tasks) delete task.usage
+        return { run: summary, tasks, truncated } satisfies RunDetail
+      },
+      withAbortSignal(signal, context),
+    )
   }),
   /** `{ historyDays?, costDetail? }`: write the project's `tasks` settings; history itself is never touched. */
   settings: implementAction(SettingsAction, async (args, { host }) => {

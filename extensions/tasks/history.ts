@@ -227,6 +227,7 @@ export function taskOfLive(node: TaskGraphNode, startedAt?: number): RunTask {
     background: node.background,
     abortRequested: node.abortRequested,
     status: state.status,
+    ...(node.blocked === undefined ? {} : { blocked: node.blocked }),
     ...(startedAt === undefined ? {} : { startedAt }),
   }
   if (state.status === 'waiting')
@@ -255,7 +256,13 @@ export function mergeLive(
   const merged = stored.map((task) => {
     const node = liveById.get(task.id)
     if (!node) return task
-    return { ...task, ...taskOfLive(node, task.startedAt), facts: task.facts, usage: task.usage }
+    return {
+      ...task,
+      ...taskOfLive(node, task.startedAt),
+      blocked: node.blocked,
+      facts: task.facts,
+      usage: task.usage,
+    }
   })
   const known = new Set(merged.map((task) => task.id))
   for (const node of live) {
