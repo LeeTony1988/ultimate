@@ -64,6 +64,7 @@ type TaskFilter = 'all' | 'failed' | 'slow'
 
 const formatCost = (cost: number) =>
   cost > 0 && cost < 0.001 ? '<$0.001' : `$${cost.toFixed(cost < 1 ? 3 : 2)}`
+const childLabel = (count: number) => (count === 1 ? '1 child' : `${count} children`)
 
 /** The node's plain state, for its card and its title. */
 function stateOf(task: RunTask): {
@@ -424,6 +425,8 @@ function RunFrame({
     : runId === undefined
       ? undefined
       : summarizeRun(taskOfPlaceholder(runId, conversationId), agent, tasks)
+  const provenChildren =
+    detail?.children.filter((child) => child.confidence === 'proven').length ?? 0
   const title = `@${agent} #${conversationId}`
   return (
     <>
@@ -457,17 +460,29 @@ function RunFrame({
                 </span>
               )}
               {summary.generationCount !== undefined && summary.generationCount > 1 && (
-                <span className="text-muted-foreground/60">{summary.generationCount} rounds</span>
+                <span className="text-muted-foreground/60">
+                  {plural(summary.generationCount, 'round')}
+                </span>
               )}
-              {summary.childCount !== undefined && summary.childCount > 0 && (
-                <span className="text-muted-foreground/60">{summary.childCount} children</span>
-              )}
+              {detail && detail.children.length > 0 ? (
+                <span className="text-muted-foreground/60">
+                  {childLabel(detail.children.length)} ·{' '}
+                  <span className={provenChildren === detail.children.length ? '' : 'text-warning'}>
+                    {provenChildren} proven
+                    {provenChildren === detail.children.length
+                      ? ''
+                      : `, ${detail.children.length - provenChildren} inferred`}
+                  </span>
+                </span>
+              ) : summary.childCount !== undefined && summary.childCount > 0 ? (
+                <span className="text-muted-foreground/60">{childLabel(summary.childCount)}</span>
+              ) : null}
               {detail && detail.uncertainties.length > 0 && (
                 <span
                   className="cursor-help text-warning"
                   title={detail.uncertainties.map((item) => item.note).join('\n')}
                 >
-                  inferred
+                  ⚠
                 </span>
               )}
               <span className="ml-auto flex shrink-0 items-center gap-2 text-muted-foreground/60">
@@ -1221,7 +1236,7 @@ function Rail({
           </span>
         </div>
         <p className="px-3 pb-2 font-mono text-[10px] text-muted-foreground/60">
-          One generation per run; a turn may span runs.
+          One Run per input; a turn may span several generation rounds.
         </p>
         <div className="min-h-0 flex-1 overflow-auto" data-run-list>
           {runs.map((run) => (
@@ -1276,9 +1291,18 @@ function Rail({
 function RunSummaryBar({ run }: { run: RunSummary | undefined }) {
   if (!run) return null
   const chips: { label: string; value: string }[] = [
-    { label: 'tasks', value: `${run.truncated ? '≥' : ''}${run.taskCount}` },
-    { label: 'agents', value: String(1 + (run.childCount ?? 0)) },
-    { label: 'tool calls', value: `${run.truncated ? '≥' : ''}${run.toolCount ?? 0}` },
+    {
+      label: run.taskCount === 1 ? 'task' : 'tasks',
+      value: `${run.truncated ? '≥' : ''}${run.taskCount}`,
+    },
+    {
+      label: 1 + (run.childCount ?? 0) === 1 ? 'agent' : 'agents',
+      value: String(1 + (run.childCount ?? 0)),
+    },
+    {
+      label: (run.toolCount ?? 0) === 1 ? 'tool call' : 'tool calls',
+      value: `${run.truncated ? '≥' : ''}${run.toolCount ?? 0}`,
+    },
   ]
   if (run.tokens !== undefined)
     chips.push({ label: 'recorded tokens', value: formatTokens(run.tokens) })

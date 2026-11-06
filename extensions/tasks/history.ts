@@ -24,7 +24,7 @@ export const RUN_TASK_CAP = 5000
 /** The design's defaults, used when project settings leave `tasks` unset or invalid. */
 export const DEFAULT_TASK_SETTINGS: TaskSettings = { historyDays: 3, costDetail: 'run' }
 
-/** A run is a top-level `pi.generation`: the kind and no owner (§3 of the design). */
+/** A generation round: one top-level `pi.generation`. A session Run is reconstructed from several of these. */
 export function isRun(task: { kind: string; owner?: number }): boolean {
   return task.kind === 'pi.generation' && task.owner == null
 }
