@@ -21,37 +21,30 @@ the gate; Windows owns the checkout and pushes. A red gate is never bypassed.
 ## 1. Clean ext4 clone in WSL
 
 Use Ubuntu-24.04. Work in the Linux home, never in `/mnt/d`: that mount is slow and is the Windows checkout. The
-tools are user-local, not system-wide. Run the blocks inside WSL; if the host shell expands `$` before WSL sees it,
-put a block in a `.sh` file and run it with `bash`.
+tools are user-local, not system-wide. Run the script inside WSL; it owns its clone and never pushes.
 
 ```bash
-set -euo pipefail
-export PATH=/home/lee/ultimate-10789-tools/git-2.55/usr/bin:/home/lee/ultimate-10789-tools/git-2.55/usr/lib/git-core:/home/lee/ultimate-10789-tools/node/bin:/home/lee/ultimate-10789-tools/wrappers:/usr/local/bin:/usr/bin:/bin
-export GIT_EXEC_PATH=/home/lee/ultimate-10789-tools/git-2.55/usr/lib/git-core
-export LD_LIBRARY_PATH=/home/lee/ultimate-10789-tools/debs/root/usr/lib/x86_64-linux-gnu
+# From the repository root, inside WSL. No machine paths are baked into the script.
+export WSL_GATE_SOURCE=/mnt/d/learnspace/git/ultimate   # the Windows checkout, as WSL sees it
 
-cd /home/lee
-test ! -e landing-1 || { echo "landing-1 exists; choose a new number"; exit 1; }
-git clone /mnt/d/learnspace/git/ultimate landing-1
-cd landing-1
-git config user.name Lee && git config user.email lee@localhost
-git checkout -B dev/lxy refs/remotes/origin/dev/lxy
-git fetch /mnt/d/learnspace/git/ultimate refs/heads/ultimate/d9ec68-27247:refs/heads/landing-branch
-git status --porcelain | grep -E '.' >/dev/null && { echo 'checkout is dirty'; exit 1; }
-git ls-files --eol | grep -E 'i/crlf|w/crlf' >/dev/null && { echo 'checkout is not LF'; exit 1; }
-pnpm install --frozen-lockfile
+# Fresh clone: create it at origin/dev/lxy and stop before merging.
+bash skills/wsl-gate/gate.sh prepare <branch> <conversation> --no-merge
 ```
 
-`.../node/bin` is Node 26, `.../wrappers/pnpm` is pnpm, `.../debs/root` supplies `libatomic`, and
-`.../git-2.55` provides `hook.<name>.command`, which the distro's Git 2.43 lacks. Use a new number instead of `1`
-per run, replace `d9ec68-27247` with the branch to land, and choose any local name for `landing-branch`. Never
-reuse a clone whose state you did not create.
+The script prepends `.../node/bin` (Node 26), `.../wrappers/pnpm` and the newest `.../git-*/usr/bin` from
+`ULTIMATE_TOOLS`, and puts `.../debs/root` on `LD_LIBRARY_PATH` for `libatomic`; Git 2.55 provides
+`hook.<name>.command`, which the distro's Git 2.43 lacks. `ULTIMATE_TOOLS` defaults to a detected
+`$HOME/ultimate-*-tools`; set it when the prefix is elsewhere. `WSL_GATE_CLONE` names the one clone the script
+reuses (default `$HOME/wsl-gate/landing`); never point it at a checkout whose state you did not create.
 
 ## 2. Gate the base
 
-Run `pnpm check`, then `pnpm test`, then `pnpm test:e2e`. Zero failures are required before any merge. Record the
-files and tests passed and name every skip: a capability skip is one the suite itself reports for this host (on WSL,
-the Windows-only `test/e2e/process-group-windows.test.ts` cases and the `pwsh` shebang case in `test/shell.test.ts`).
+Run `bash skills/wsl-gate/gate.sh gate`. It runs `pnpm check`, `pnpm test` and `pnpm test:e2e` in that order in the
+clone, prints `/proc/loadavg` before and after each phase and the exit code of each, and stops at the first red with
+the failing phase named. (`gate check` and the like are partial development runs, never a landing gate.) Zero
+failures are required before any merge. Record the files and tests passed and name every skip: a capability skip is
+one the suite itself reports for this host (on WSL, the Windows-only `test/e2e/process-group-windows.test.ts` cases and
+the `pwsh` shebang case in `test/shell.test.ts`).
 
 A red suite is not automatically the change's. This host is shared and load-sensitive: at load above ~3, suites that
 spawn a server time out at 30 s in files the change never touches, and which files fail changes from run to run. Before
@@ -59,8 +52,9 @@ blaming the branch, prove it:
 
 - Run the same suite at the base, in the same clone: `git switch --detach <base>`, then the suite, then `git switch dev/lxy`.
   Red at both ends is environmental.
-- Re-run the failing file alone (`npx vitest run <file>`) at both ends. Green alone and red only in the full suite is load.
-- Record the load with it: `cut -d' ' -f1 /proc/loadavg`, before and after.
+- Re-run the failing file alone with `bash skills/wsl-gate/gate.sh alone <file>` at both ends. Green alone and red only
+  in the full suite is load.
+- The script prints the load with every phase; keep that output with the run.
 
 Then run the suite again unchanged, at most twice. Never block on the load average: the suite itself pins every core
 for its whole run, so a threshold high enough to wait for is one the run it just finished keeps alive, and the gate
@@ -77,26 +71,26 @@ and why, and give the last full e2e result you have.
 For each branch, verify its tip, merge it with the lander's message format, and rerun the whole gate:
 
 ```bash
-set -euo pipefail
-git rev-parse landing-branch           # compare with the branch report
-git merge --no-ff landing-branch -m "Merge <sha7> from #<conversation> into dev/lxy"
-pnpm check && pnpm test && pnpm test:e2e
+# From the repository root, inside WSL. <expected-tip> is optional; without it
+# prepare prints the fetched tip so it can be compared with the branch report.
+bash skills/wsl-gate/gate.sh prepare <branch> <conversation> <expected-tip>
+bash skills/wsl-gate/gate.sh gate
 ```
 
-Resolve a conflict only where both intents are unambiguous; otherwise stop and report. A failed gate after a merge
-stops the run.
+`prepare` fetches the branch into `landing-branch` and merges it with `--no-ff` and the message
+`Merge <sha7> from #<conversation> into dev/lxy`. Resolve a conflict only where both intents are unambiguous;
+otherwise stop and report. A failed gate after a merge stops the run.
 
 ## 4. Bundle the result
 
 At the final head:
 
 ```bash
-set -euo pipefail
-git status --porcelain | grep -E '.' >/dev/null && { echo 'checkout is dirty'; exit 1; }
-git bundle create /mnt/c/Users/29155/ultimate-landing-1.bundle dev/lxy
-git bundle verify /mnt/c/Users/29155/ultimate-landing-1.bundle
-git bundle list-heads /mnt/c/Users/29155/ultimate-landing-1.bundle
+bash skills/wsl-gate/gate.sh bundle /mnt/c/Users/29155/ultimate-landing-1.bundle
 ```
+
+The script refuses a dirty clone, creates the bundle from `dev/lxy`, verifies it, lists its heads and prints its
+SHA-256.
 
 ## 5. Fast-forward and push on Windows
 
