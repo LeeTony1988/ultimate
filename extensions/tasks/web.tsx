@@ -422,5 +422,10 @@ export default defineWebExtension({
       title: 'Show the task DAG',
       run: (context) => context.showSurface('tasks.dag'),
     },
+    {
+      id: 'tasks.history.open',
+      title: 'Show run history',
+      run: (context) => context.showSurface('tasks.dag'),
+    },
   ],
 })

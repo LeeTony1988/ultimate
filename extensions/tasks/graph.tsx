@@ -38,6 +38,7 @@ import {
   mergeLive,
   orderFrames,
   outcomeOf,
+  runTotals,
   summarizeRun,
   taskSettings,
 } from './history.ts'
@@ -53,11 +54,16 @@ import {
   StartedAction,
 } from './refs.ts'
 import { useOnce } from './shared.tsx'
+import { CrossWaits } from './cross-waits.tsx'
 
 const NODE_WIDTH = 192
 const NODE_HEIGHT = 38
 const POLL_MS = 2000
 const NO_RUNS: RunSummary[] = []
+type TaskFilter = 'all' | 'failed' | 'slow'
+
+const formatCost = (cost: number) =>
+  cost > 0 && cost < 0.001 ? '<$0.001' : `$${cost.toFixed(cost < 1 ? 3 : 2)}`
 
 /** The node's plain state, for its card and its title. */
 function stateOf(task: RunTask): {
@@ -302,6 +308,7 @@ function RunFrame({
   selectedTask,
   onSelectTask,
   showCritical,
+  filter,
   now,
 }: {
   conversationId: number
@@ -315,6 +322,7 @@ function RunFrame({
   selectedTask: number | undefined
   onSelectTask: (id: number | undefined) => void
   showCritical: boolean
+  filter: TaskFilter
   now: number
 }) {
   const { switchConversation, showSurface } = useUltimate()
@@ -370,7 +378,24 @@ function RunFrame({
     return set
   }, [auto, expanded, tasks])
   const hidden = useMemo(() => hiddenByFolding(tasks, folded), [tasks, folded])
-  const visible = useMemo(() => tasks.filter((task) => !hidden.has(task.id)), [tasks, hidden])
+  const filtered = useMemo(() => {
+    if (filter === 'all') return tasks
+    const byId = new Map(tasks.map((task) => [task.id, task]))
+    const keep = new Set<number>()
+    for (const task of tasks) {
+      if (filter === 'failed' ? !failed(task) : (durationOf(task, now) ?? 0) <= 10_000) continue
+      let current: RunTask | undefined = task
+      while (current && !keep.has(current.id)) {
+        keep.add(current.id)
+        current = current.owner === undefined ? undefined : byId.get(current.owner)
+      }
+    }
+    return tasks.filter((task) => keep.has(task.id))
+  }, [tasks, filter, now])
+  const visible = useMemo(
+    () => (filter === 'all' ? filtered.filter((task) => !hidden.has(task.id)) : filtered),
+    [filtered, hidden, filter],
+  )
   const drawing = useMemo(
     () =>
       layout(
@@ -391,21 +416,11 @@ function RunFrame({
   const nodeAt = new Map<number, (typeof drawing.nodes)[number]>(
     drawing.nodes.map((node) => [Number(node.task.id), node]),
   )
-  const root = tasks.find((task) => task.id === runId)
-  const summary =
-    detail?.run && root
-      ? {
-          ...detail.run,
-          ...summarizeRun(root, agent, tasks, detail.run.model),
-          startedAt: root.startedAt ?? detail.run.startedAt,
-          tokens: detail.run.tokens,
-          cost: detail.run.cost,
-          truncated: detail.run.truncated,
-        }
-      : (detail?.run ??
-        (runId === undefined
-          ? undefined
-          : summarizeRun(taskOfPlaceholder(runId, conversationId), agent, tasks)))
+  const summary = detail?.run
+    ? { ...detail.run, taskCount: tasks.length, failedCount: runTotals(tasks).failedCount }
+    : runId === undefined
+      ? undefined
+      : summarizeRun(taskOfPlaceholder(runId, conversationId), agent, tasks)
   const title = `@${agent} #${conversationId}`
   return (
     <section
@@ -427,7 +442,10 @@ function RunFrame({
               {plural(summary.taskCount, 'task')}
             </span>
             {summary.failedCount > 0 && (
-              <span className="text-warning">{summary.failedCount} failed</span>
+              <span className="text-warning">
+                {summary.truncated ? '≥' : ''}
+                {summary.failedCount} failed
+              </span>
             )}
             <span className="ml-auto flex shrink-0 items-center gap-2 text-muted-foreground/60">
               {summary.startedAt > 0 && <span>{formatTime(summary.startedAt, true)}</span>}
@@ -471,9 +489,13 @@ function RunFrame({
       )}
       {tab === 'structure' ? (
         <div className="max-h-[460px] overflow-auto p-3">
-          {tasks.length === 0 ? (
+          {visible.length === 0 ? (
             <div className="flex min-h-24 items-center justify-center font-mono text-[11px] text-muted-foreground/60">
-              {runId === undefined ? 'no run in the visible history' : 'loading run…'}
+              {tasks.length > 0
+                ? 'no tasks match this filter'
+                : runId === undefined
+                  ? 'no run in the visible history'
+                  : 'loading run…'}
             </div>
           ) : (
             <div
@@ -571,7 +593,7 @@ function RunFrame({
         </div>
       ) : (
         <Timeline
-          tasks={tasks}
+          tasks={filtered}
           run={summary}
           now={now}
           selected={selectedTask}
@@ -676,6 +698,7 @@ function Timeline({
       <g key={task.id}>
         <rect
           className={cn('cursor-pointer', tone, selected === task.id && 'stroke-foreground/70')}
+          data-task-id={task.id}
           height={16}
           onMouseEnter={(event) =>
             setHover({
@@ -823,7 +846,7 @@ function Timeline({
             {hover.task.usage?.cost !== undefined && (
               <>
                 <span>cost</span>
-                <span>${hover.task.usage.cost.toFixed(2)}</span>
+                <span>{formatCost(hover.task.usage.cost)}</span>
               </>
             )}
           </div>
@@ -958,7 +981,7 @@ function TaskDetail({
         {settings.costDetail === 'tool' && task.usage?.cost !== undefined && (
           <>
             <dt className="text-muted-foreground/60">cost</dt>
-            <dd>${task.usage.cost.toFixed(2)}</dd>
+            <dd>{formatCost(task.usage.cost)}</dd>
           </>
         )}
         {settings.costDetail === 'run' && run?.tokens !== undefined && (
@@ -970,7 +993,7 @@ function TaskDetail({
         {settings.costDetail === 'run' && run?.cost !== undefined && (
           <>
             <dt className="text-muted-foreground/60">recorded cost</dt>
-            <dd>${run.cost.toFixed(2)}</dd>
+            <dd>{formatCost(run.cost)}</dd>
           </>
         )}
       </dl>
@@ -1169,7 +1192,10 @@ function Rail({
               </span>
               <span className="min-w-0 flex-1 truncate text-muted-foreground/60">@{run.agent}</span>
               {run.failedCount > 0 && (
-                <span className="shrink-0 text-warning">{run.failedCount}✕</span>
+                <span className="shrink-0 text-warning">
+                  {run.truncated ? '≥' : ''}
+                  {run.failedCount}✕
+                </span>
               )}
             </button>
           ))}
@@ -1203,8 +1229,7 @@ function RunSummaryBar({ run }: { run: RunSummary | undefined }) {
   ]
   if (run.tokens !== undefined)
     chips.push({ label: 'recorded tokens', value: formatTokens(run.tokens) })
-  if (run.cost !== undefined)
-    chips.push({ label: 'recorded cost', value: `$${run.cost.toFixed(2)}` })
+  if (run.cost !== undefined) chips.push({ label: 'recorded cost', value: formatCost(run.cost) })
   return (
     <div
       className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2"
@@ -1217,7 +1242,13 @@ function RunSummaryBar({ run }: { run: RunSummary | undefined }) {
       <span className="font-mono text-[10px] text-muted-foreground/60">
         {formatTime(run.startedAt, true)} ·{' '}
         {run.endedAt ? formatDuration(run.endedAt - run.startedAt) : 'running'}
-        {run.failedCount > 0 && <span className="text-warning"> · {run.failedCount} failed</span>}
+        {run.failedCount > 0 && (
+          <span className="text-warning">
+            {' '}
+            · {run.truncated ? '≥' : ''}
+            {run.failedCount} failed
+          </span>
+        )}
       </span>
       {chips.map((chip) => (
         <span
@@ -1245,6 +1276,7 @@ function TaskGraphSurface() {
   const [tabValue, setTab] = useExtensionUiState<string>('dag.tab', 'structure')
   const tab = tabValue === 'timeline' ? 'timeline' : 'structure'
   const [showCritical, setShowCritical] = useExtensionUiState<boolean>('dag.critical', false)
+  const [filter, setFilter] = useState<TaskFilter>('all')
   const [selected, setSelected] = useExtensionUiState<number[]>(
     'dag.conversations',
     conversationId ? [conversationId] : [],
@@ -1410,6 +1442,7 @@ function TaskGraphSurface() {
     }
   }
   const live = useMemo(() => Object.values(graph?.tasks ?? {}), [graph])
+  const framesRoot = useRef<HTMLDivElement>(null)
 
   return (
     <>
@@ -1479,6 +1512,31 @@ function TaskGraphSurface() {
         />
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <RunSummaryBar run={primarySummary} />
+          <div
+            className="flex items-center gap-1 border-b border-border/60 px-3 py-1 font-mono text-[10px] text-muted-foreground"
+            aria-label="Filter tasks"
+          >
+            {(
+              [
+                ['all', 'All'],
+                ['failed', 'Failed'],
+                ['slow', '>10s'],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                aria-pressed={filter === value}
+                className={cn(
+                  'rounded px-2 py-1 hover:bg-accent',
+                  filter === value && 'bg-accent text-foreground',
+                )}
+                key={value}
+                onClick={() => setFilter(value)}
+                type="button"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <div className="min-h-0 flex-1 overflow-auto p-3" data-task-dag-surface>
             {frames.length === 0 ? (
               <div className="flex min-h-64 flex-col items-center justify-center gap-2 font-mono text-[11.5px] text-muted-foreground/70">
@@ -1486,26 +1544,30 @@ function TaskGraphSurface() {
                 select a conversation to see its runs
               </div>
             ) : (
-              <div className="flex flex-col gap-3">
-                {frames.map((frame) => (
-                  <RunFrame
-                    agent={frame.agent}
-                    conversationId={frame.conversationId}
-                    expanded={foldState}
-                    key={`${frame.conversationId}:${frame.runId ?? 'none'}`}
-                    live={live}
-                    now={now}
-                    onFold={(id, collapsed) =>
-                      setFoldState({ ...foldState, [String(id)]: collapsed })
-                    }
-                    onSelectTask={(id) => setSelectedTask(id)}
-                    runId={frame.runId}
-                    selectedTask={selectedTask}
-                    settings={effective}
-                    showCritical={showCritical}
-                    tab={tab}
-                  />
-                ))}
+              <div className="relative" ref={framesRoot}>
+                <div className="flex flex-col gap-3" data-frame-list>
+                  {frames.map((frame) => (
+                    <RunFrame
+                      agent={frame.agent}
+                      conversationId={frame.conversationId}
+                      expanded={foldState}
+                      key={`${frame.conversationId}:${frame.runId ?? 'none'}`}
+                      live={live}
+                      now={now}
+                      onFold={(id, collapsed) =>
+                        setFoldState({ ...foldState, [String(id)]: collapsed })
+                      }
+                      onSelectTask={(id) => setSelectedTask(id)}
+                      runId={frame.runId}
+                      selectedTask={selectedTask}
+                      settings={effective}
+                      showCritical={showCritical}
+                      filter={filter}
+                      tab={tab}
+                    />
+                  ))}
+                </div>
+                <CrossWaits live={live} root={framesRoot} />
               </div>
             )}
           </div>
