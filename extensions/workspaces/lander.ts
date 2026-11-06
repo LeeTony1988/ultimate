@@ -11,6 +11,7 @@ import { defineEntry, defineTask, ROOT_CONVERSATION_ID } from '@earendil-works/p
 import type { ConversationDocToken, ConversationId, Tx } from '@earendil-works/pi-durable'
 import { git } from '../../lib/git.ts'
 import { runGroup, sweepPidFiles } from '../../lib/process-group.ts'
+import { shell } from '../../lib/shell.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { CheckRan, SubmissionLanded } from './api.ts'
 import { setup } from './setup.ts'
@@ -206,7 +207,9 @@ export async function runLanderCheck(
   try {
     let exitCode: number
     try {
-      exitCode = await runGroup('/bin/bash', ['-c', command], {
+      // The platform's own shell carries the check: hard-coding `/bin/bash` fails on a Windows host, which has none.
+      const { program, args } = shell.argv(command)
+      exitCode = await runGroup(program, args, {
         cwd: path,
         env: { ...process.env, TMPDIR: tmp },
         pidFile: join(pids, `${process.pid}-${randomUUID()}.pid`),
