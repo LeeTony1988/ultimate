@@ -43,6 +43,7 @@ import {
   hasLogin,
   hostDefaultModel,
   previewModel,
+  runtimeToolName,
   runtimeToolNames,
   saveDefinition,
   saveOverlay,
@@ -1071,7 +1072,11 @@ export default function subagents(
                   ).definitions
                 : undefined
             const definition = definitions && (await spawnDefinition(args, definitions))
-            if (definition?.tools?.some((name) => !parent.tools.some((tool) => tool.name === name)))
+            if (
+              definition?.tools?.some(
+                (name) => !parent.tools.some((tool) => tool.name === runtimeToolName(name)),
+              )
+            )
               throw new Error('Definition tools must be a subset of parent tools')
             const label = definition && (args.agent ? (args.label ?? definition.name) : args.label!)
             const isolated =

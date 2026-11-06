@@ -36,6 +36,7 @@ import { Runs, Started, Subagents } from '../extensions/subagents/api.ts'
 import type { ActionContext } from '../server/actions.ts'
 import codemode from '../extensions/codemode/server.ts'
 import { Metadata } from '../server/metadata.ts'
+import { shell } from '../lib/shell.ts'
 import { UiState } from '../server/ui-state.ts'
 import {
   discoverAgents,
@@ -66,6 +67,7 @@ async function fixture(
     transcript: Parameters<FauxResponseFactory>[0],
   ) => ReturnType<FauxResponseFactory> | undefined,
   watch = false,
+  codingTools: Extension = CodingTools,
 ) {
   const ultimateRoot = await directory()
   const userHome = await directory()
@@ -84,7 +86,7 @@ async function fixture(
     home: join(ultimateRoot, 'home'),
     faux: fauxProvider(),
   })
-  prepared.registry.install(CodingTools)
+  prepared.registry.install(codingTools)
   if (extension) prepared.registry.install(extension)
   let opened: OpenHost | undefined
   const onOpen: (() => Promise<void>)[] = []
@@ -392,6 +394,37 @@ it('runs root -> forked review lead -> parallel leaves -> lead -> root with scop
     )
   ).wait(context)
   expect(await f.opened.harness.snapshot(Subagents, omittedId, context)).toBeUndefined()
+})
+
+it('reads either shell name as this platform’s shell and still refuses a tool the parent lacks', async () => {
+  const f = await fixture(
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    false,
+    defineExtension({
+      name: 'platform-shell',
+      tools: [shell.create()] as ToolRegistration[],
+    }),
+  )
+  const other = shell.name === 'bash' ? 'powershell' : 'bash'
+  const write = (name: string, tools: string) =>
+    writeFile(
+      join(f.ultimateRoot, `agents/${name}.md`),
+      `---\nname: ${name}\ndescription: ${name}\ntools: [${tools}]\n---\n${name}\n`,
+    )
+  await write('shell-ok', `${shell.name}, ${other}`)
+  await write('shell-missing', `${shell.name}, ${other}, missing`)
+  const started = await call(f.opened, {
+    action: 'start',
+    agent: 'shell-ok',
+    task: 'shell',
+    background: true,
+  })
+  expect(started.text).toContain('Started subagent')
+  const refused = await call(f.opened, { action: 'start', agent: 'shell-missing', task: 'nope' })
+  expect(refused.text).toContain('subset of parent tools')
 })
 
 it('names the definitions when start omits agent, for every argument shape seen in the trace', async () => {
