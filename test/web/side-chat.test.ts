@@ -1,4 +1,5 @@
 import { expect, it } from 'vitest'
+import { nextComposerMode } from '../../lib/composer-mode.ts'
 import {
   createEndings,
   endings,
@@ -18,7 +19,7 @@ const tab = {
 }
 const atUltimate = { conversation: 44, ultimate: 44, popup: false }
 
-it('toggles side chat mode on a bare Tab in @ultimate’s composer only', () => {
+it('reserves a bare Tab for the composer mode cycle in @ultimate’s composer only', () => {
   expect(togglesSideMode(tab, atUltimate)).toBe(true)
   // Shift+Tab stays the thinking level; other chords and IME composition keep their meaning.
   expect(togglesSideMode({ ...tab, shiftKey: true }, atUltimate)).toBe(false)
@@ -30,6 +31,12 @@ it('toggles side chat mode on a bare Tab in @ultimate’s composer only', () => 
   // A side chat's composer, or any other conversation's, has no side mode: one level only.
   expect(togglesSideMode(tab, { ...atUltimate, conversation: 82 })).toBe(false)
   expect(togglesSideMode(tab, { conversation: 44, ultimate: undefined, popup: false })).toBe(false)
+})
+
+it('cycles the shared composer mode Normal → Side chat → btw → Normal on a bare Tab', () => {
+  expect(nextComposerMode('normal')).toBe('side')
+  expect(nextComposerMode('side')).toBe('btw')
+  expect(nextComposerMode('btw')).toBe('normal')
 })
 
 it('keeps only open side chats in front and in the sidebar', () => {

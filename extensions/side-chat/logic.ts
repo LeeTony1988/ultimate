@@ -12,8 +12,8 @@ export interface TabKey {
 }
 
 /**
- * Whether Tab toggles side chat mode: a bare Tab, typed in @ultimate's own composer (not a side chat's: one level only),
- * while no autocomplete or mention popup claims the key. Shift+Tab stays the thinking level.
+ * Whether Tab belongs to the composer mode cycle: a bare Tab, typed in @ultimate's own composer (not a side chat's:
+ * one level only), while no autocomplete or mention popup claims the key. Shift+Tab stays the thinking level.
  */
 export function togglesSideMode(
   event: TabKey,
