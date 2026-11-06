@@ -32,7 +32,11 @@ export function CrossWaits({
           rect.bottom <= bounds.top ||
           rect.top >= bounds.bottom ||
           rect.right <= bounds.left ||
-          rect.left >= bounds.right
+          rect.left >= bounds.right ||
+          rect.bottom <= origin.top ||
+          rect.top >= origin.bottom ||
+          rect.right <= origin.left ||
+          rect.left >= origin.right
         )
           continue
         nodes.set(id, { rect, frame })
@@ -69,14 +73,15 @@ export function CrossWaits({
     })
     const resize = new ResizeObserver(schedule)
     resize.observe(container)
-    container.addEventListener('scroll', schedule, true)
+    const scrollRoot = container.parentElement
+    scrollRoot?.addEventListener('scroll', schedule, true)
     window.addEventListener('resize', schedule)
     schedule()
     return () => {
       if (queued) cancelAnimationFrame(queued)
       mutation.disconnect()
       resize.disconnect()
-      container.removeEventListener('scroll', schedule, true)
+      scrollRoot?.removeEventListener('scroll', schedule, true)
       window.removeEventListener('resize', schedule)
     }
   }, [root, live])

@@ -646,6 +646,7 @@ function Timeline({
 }) {
   const [hover, setHover] = useState<{ task: RunTask; x: number; y: number }>()
   const [zoom, setZoom] = useState(1)
+  const gutter = 112
   const start = run?.startedAt ?? Math.min(...tasks.map((task) => task.startedAt ?? Infinity))
   const end = Math.max(
     run?.endedAt ?? start,
@@ -655,7 +656,6 @@ function Timeline({
   )
   const span = Math.max(1000, end - start)
   const chartWidth = Math.max(640, Math.min(1600, Math.round(span / 1000) * 8)) * zoom
-  const gutter = 84
   const width = chartWidth + gutter
   const lanes: Lane[] = []
   const agentName = run?.agent ?? 'agent'
@@ -720,7 +720,7 @@ function Timeline({
             x={left + 4}
             y={y + 11}
           >
-            {formatDuration((task.endedAt ?? now) - (task.startedAt ?? now))}
+            {`${meaningOf(task)?.text ?? task.tool ?? task.kind} · ${formatDuration((task.endedAt ?? now) - (task.startedAt ?? now))}`}
           </text>
         )}
       </g>
@@ -787,7 +787,20 @@ function Timeline({
             >
               {lane.label}
             </text>
-            {lane.tasks.map((task, taskIndex) => bar(task, index, taskIndex))}
+            {lane.tasks.map((task, taskIndex) => (
+              <g key={task.id}>
+                {lane.key === 'tools' && (
+                  <text
+                    className="fill-muted-foreground/60 font-mono text-[9px]"
+                    x={8}
+                    y={laneTops[index] + taskIndex * barGap + 13}
+                  >
+                    {(meaningOf(task)?.text ?? task.tool ?? task.kind).slice(0, 15)}
+                  </text>
+                )}
+                {bar(task, index, taskIndex)}
+              </g>
+            ))}
           </g>
         ))}
         {tasks
