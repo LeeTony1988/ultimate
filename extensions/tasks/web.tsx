@@ -405,7 +405,8 @@ export default defineWebExtension({
       id: 'tasks.dag',
       title: 'Task DAG',
       icon: NetworkIcon,
-      description: 'The live pi-durable task graph: what runs, what waits, in what order',
+      description:
+        'Durable task history: every run of the selected conversations, in Structure or Timeline',
       order: 65,
       component: TaskGraphSurface,
     },
@@ -419,6 +420,11 @@ export default defineWebExtension({
     {
       id: 'tasks.dag.open',
       title: 'Show the task DAG',
+      run: (context) => context.showSurface('tasks.dag'),
+    },
+    {
+      id: 'tasks.history.open',
+      title: 'Show run history',
       run: (context) => context.showSurface('tasks.dag'),
     },
   ],
