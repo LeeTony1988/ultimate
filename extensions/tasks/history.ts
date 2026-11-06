@@ -1,6 +1,7 @@
 /**
- * Task DAG history: the pure model behind the history surface. A Run is one top-level `pi.generation` task and the
- * owner tree it spawned. Browser-safe: no storage, no React, so the server, the surface and the tests share it.
+ * Task DAG history: the pure model behind the history surface. A Run is one input submission through its answer: every
+ * generation round (`pi.generation`) and the owner tree it spawned, reconstructed server-side in `runs.ts`.
+ * Browser-safe: no storage, no React, so the server, the surface and the tests share it.
  */
 import type { TaskGraphNode } from '@earendil-works/pi-durable'
 import type { RunOutcome, RunSummary, RunTask, TaskSettings } from './refs.ts'
@@ -272,6 +273,21 @@ export function mergeLive(
     merged.push(task)
     known.add(task.id)
   }
+  return merged.toSorted((a, b) => a.id - b.id)
+}
+
+/**
+ * The full run over its stored records and the live graph. A run spans several round roots (every generation is its
+ * own owner-tree root), so the merge takes all of them (`RunDetail.generationIds`), never just one run id.
+ */
+export function mergeRunLive(
+  stored: readonly RunTask[],
+  live: readonly TaskGraphNode[],
+  roundRootIds: readonly number[],
+  started: Readonly<Record<string, number>> = {},
+): RunTask[] {
+  let merged: RunTask[] = [...stored]
+  for (const rootId of roundRootIds) merged = mergeLive(merged, live, rootId, started)
   return merged.toSorted((a, b) => a.id - b.id)
 }
 

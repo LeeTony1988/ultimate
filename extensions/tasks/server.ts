@@ -8,14 +8,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { updateSettings } from '../../lib/settings.ts'
 import { AutomationsApi } from '../automations/api.ts'
 import type { Message } from '../messages/api.ts'
-import {
-  collectRunTasks,
-  DEFAULT_TASK_SETTINGS,
-  isRun,
-  RUN_TASK_CAP,
-  summarizeRun,
-  taskSettings,
-} from './history.ts'
+import { DEFAULT_TASK_SETTINGS, isRun, RUN_TASK_CAP, taskSettings } from './history.ts'
 import type {
   RunConversation,
   RunDetail,
@@ -25,6 +18,20 @@ import type {
   UsageTotals,
 } from './history.ts'
 import {
+  attributeChildren,
+  collectUnitTasks,
+  generationOfTask,
+  reconstructRuns,
+  summarizeUnit,
+} from './runs.ts'
+import type {
+  AnchorFact,
+  ConversationFact,
+  GenerationFact,
+  RunUnit,
+  SubmissionFact,
+} from './runs.ts'
+import {
   ConversationsAction,
   DescribeAction,
   EndedAction,
@@ -33,7 +40,7 @@ import {
   SettingsAction,
   StartedAction,
 } from './refs.ts'
-import type { TaskEnd, TaskFacts } from './refs.ts'
+import type { RunChild, TaskEnd, TaskFacts } from './refs.ts'
 
 type Input = Record<string, unknown> | null | undefined
 type AnyTask = TaskRecord<JsonValue, JsonValue, JsonValue>
@@ -191,6 +198,25 @@ function taskOf(record: AnyTask): RunTask {
   return { ...base, phase }
 }
 
+/** A durable record as the reconstruction reads it: its round's end marker is the result's assistant entry. */
+function factOf(record: AnyTask): GenerationFact {
+  const task = taskOf(record)
+  const state = record.state
+  const result =
+    state.status === 'terminal' || state.status === 'completing'
+      ? (state.outcome.result as { entryId?: unknown } | undefined)
+      : undefined
+  return {
+    id: task.id,
+    conversationId: task.conversationId,
+    status: task.status,
+    ...(task.startedAt === undefined ? {} : { startedAt: task.startedAt }),
+    ...(task.endedAt === undefined ? {} : { endedAt: task.endedAt }),
+    ...(state.status === 'terminal' ? { outcome: state.outcome.status } : {}),
+    ...(typeof result?.entryId === 'number' ? { resultEntryId: result.entryId } : {}),
+  }
+}
+
 /**
  * A conversation's tasks, newest first until `stopId`; scanning stops at the first older id because a child is always
  * created after its owner. 1000 per page keeps the transaction short.
@@ -220,19 +246,123 @@ async function scanConversation(
   return out
 }
 
-/** All top-level generations; the stored scan orders by id, not by the time a task first ran. */
-async function scanGenerations(tx: Tx, signal: AbortSignal): Promise<RunTask[]> {
-  const out: RunTask[] = []
+/** The top-level generation rounds of one conversation (or all), ascending; `isRun` keeps conversation-owned ones. */
+async function scanGenerationFacts(
+  tx: Tx,
+  conversationId: number | undefined,
+  signal: AbortSignal,
+): Promise<GenerationFact[]> {
+  const out: GenerationFact[] = []
   let cursor: Parameters<Tx['scanTasks']>[2]
   while (true) {
     signal.throwIfAborted()
-    const result = await tx.scanTasks({ kind: 'pi.generation', order: 'descending' }, 1000, cursor)
+    const result = await tx.scanTasks(
+      {
+        ...(conversationId === undefined
+          ? {}
+          : { conversationId: conversationId as ConversationId }),
+        kind: 'pi.generation',
+        order: 'descending',
+      },
+      1000,
+      cursor,
+    )
     for (const record of result.items) {
       const task = taskOf(record)
-      if (isRun(task)) out.push(task)
+      if (isRun(task)) out.push(factOf(record))
     }
     if (!result.next) break
     cursor = result.next
+  }
+  return out.toSorted((a, b) => a.id - b.id)
+}
+
+/** The `ultimate.subagent-anchor` tasks of a conversation: one per spawn, never owned by a generation. */
+async function scanAnchors(
+  tx: Tx,
+  conversationId: number,
+  signal: AbortSignal,
+): Promise<AnchorFact[]> {
+  const out: AnchorFact[] = []
+  let cursor: Parameters<Tx['scanTasks']>[2]
+  while (true) {
+    signal.throwIfAborted()
+    const result = await tx.scanTasks(
+      {
+        conversationId: conversationId as ConversationId,
+        kind: 'ultimate.subagent-anchor',
+        order: 'descending',
+      },
+      500,
+      cursor,
+    )
+    for (const record of result.items) {
+      const task = taskOf(record)
+      out.push({
+        id: task.id,
+        ...(task.startedAt === undefined ? {} : { startedAt: task.startedAt }),
+      })
+    }
+    if (!result.next) break
+    cursor = result.next
+  }
+  return out
+}
+
+/** Every conversation's task owner, for child attribution. */
+async function scanConversationFacts(tx: Tx, signal: AbortSignal): Promise<ConversationFact[]> {
+  const out: ConversationFact[] = []
+  let cursor: Parameters<Tx['scanConversations']>[2]
+  while (true) {
+    signal.throwIfAborted()
+    const page = await tx.scanConversations({}, 500, cursor)
+    for (const record of page.items)
+      out.push({
+        id: record.id,
+        agent: '', // named by the caller from the host's conversation summaries
+        ...(record.owner === undefined ? {} : { ownerTaskId: record.owner.taskId }),
+      })
+    if (!page.next) break
+    cursor = page.next
+  }
+  return out
+}
+
+/**
+ * The durable submissions of `conversationIds`, read OUTSIDE `harness.commit()`: a storage scan must not nest in a
+ * commit transaction. Read after the task snapshot (settlements commit with a run's terminal state, so a later read
+ * contradicts the snapshot less often); what still contradicts surfaces as a `settlement` uncertainty.
+ */
+async function submissionFacts(
+  host: ExtensionHost,
+  conversationIds: Iterable<number>,
+  signal: AbortSignal,
+): Promise<Map<number, SubmissionFact[]>> {
+  const out = new Map<number, SubmissionFact[]>()
+  for (const conversationId of conversationIds) {
+    const list: SubmissionFact[] = []
+    let cursor: Parameters<ExtensionHost['scanSubmissions']>[2]
+    while (true) {
+      signal.throwIfAborted()
+      const page = await host.scanSubmissions(
+        { conversationId: conversationId as ConversationId },
+        500,
+        cursor,
+        context,
+      )
+      for (const record of page.items)
+        list.push({
+          id: record.id,
+          type: record.type,
+          status: record.status,
+          ...(record.entry === undefined ? {} : { entry: record.entry }),
+          ...('answer' in record && record.answer !== undefined ? { answer: record.answer } : {}),
+          ...('reason' in record && record.reason !== undefined ? { reason: record.reason } : {}),
+        })
+      if (!page.next) break
+      cursor = page.next
+    }
+    out.set(conversationId, list)
   }
   return out
 }
@@ -263,24 +393,24 @@ async function modelOf(tx: Tx, run: RunTask): Promise<string | undefined> {
     : undefined
 }
 
-/** The summary of one run, enriched with its tasks and their usage. */
-async function summaryOf(
+/** Enrich a run's tasks with usage and stamp each with the round that roots it; the summary needs both. */
+async function enrich(
   tx: Tx,
-  host: ExtensionHost,
-  run: RunTask,
+  unit: RunUnit,
+  tasks: RunTask[],
   pool: RunTask[],
   signal: AbortSignal,
-): Promise<RunSummary> {
-  const { tasks, truncated } = collectRunTasks(run, pool)
+): Promise<void> {
+  const byId = new Map(pool.map((task) => [task.id, task]))
+  for (const task of tasks) byId.set(task.id, task)
+  const rounds = new Set(unit.generationIds)
   for (const task of tasks) {
     signal.throwIfAborted()
+    const generationId = generationOfTask(task, byId, rounds)
+    if (generationId !== undefined) task.generationId = generationId
     const record = await tx.task(task.id as TaskId)
     const found = record ? await resultOf(tx, record, task) : undefined
     if (found) task.usage = found
-  }
-  return {
-    ...summarizeRun(run, agentOf(host, run.conversationId), tasks, await modelOf(tx, run)),
-    ...(truncated ? { truncated: true } : {}),
   }
 }
 
@@ -346,60 +476,74 @@ export const actions = {
           ? input.days
           : DEFAULT_TASK_SETTINGS.historyDays
       const cutoff = Date.now() - days * 24 * 60 * 60 * 1000
-      return host.harness().commit(
+      const roundsByConversation = await host.harness().commit(
         async (tx) => {
-          const runs = await scanGenerations(tx, signal)
-          const byConversation = new Map<
-            number,
-            { runs: number; lastAt: number; lastRunId?: number; lastRunAt?: number }
-          >()
-          for (const run of runs) {
-            const at = run.endedAt ?? run.startedAt ?? 0
-            const known = byConversation.get(run.conversationId)
-            if (!known) byConversation.set(run.conversationId, { runs: 1, lastAt: at })
-            else {
-              known.runs++
-              if (at >= known.lastAt) known.lastAt = at
-            }
-            const entry = byConversation.get(run.conversationId)!
-            // Task IDs order creation, so compare start times when finding the newest started run.
-            if (
-              run.startedAt !== undefined &&
-              run.startedAt >= cutoff &&
-              (entry.lastRunAt === undefined ||
-                run.startedAt > entry.lastRunAt ||
-                (run.startedAt === entry.lastRunAt && run.id > (entry.lastRunId ?? 0)))
-            ) {
-              entry.lastRunId = run.id
-              entry.lastRunAt = run.startedAt
-            }
+          const grouped = new Map<number, GenerationFact[]>()
+          for (const round of await scanGenerationFacts(tx, undefined, signal)) {
+            const list = grouped.get(round.conversationId) ?? []
+            list.push(round)
+            grouped.set(round.conversationId, list)
           }
-          if (current !== undefined && !byConversation.has(current))
-            byConversation.set(current, { runs: 0, lastAt: 0 })
-          // The sidebar's active conversations stay listed even before their first run, so the current one is checkable.
-          for (const summary of host.conversations())
-            if (!byConversation.has(summary.id))
-              byConversation.set(summary.id, {
-                runs: 0,
-                lastAt: summary.answerAt ?? summary.inputAt ?? 0,
-              })
-          const list: RunConversation[] = []
-          for (const [id, value] of byConversation)
-            list.push({
-              id,
-              agent: agentOf(host, id),
-              runs: value.runs,
-              lastAt: value.lastAt,
-              ...(value.lastRunId === undefined ? {} : { lastRunId: value.lastRunId }),
-              ...(value.lastRunAt === undefined ? {} : { lastRunAt: value.lastRunAt }),
-            })
-          return list.toSorted((a, b) => b.lastAt - a.lastAt || a.id - b.id)
+          return grouped
         },
         withAbortSignal(signal, context),
       )
+      // Submissions are read outside the commit; see `submissionFacts`.
+      const submissions = await submissionFacts(host, roundsByConversation.keys(), signal)
+      const byConversation = new Map<
+        number,
+        { runs: number; lastAt: number; lastRunId?: number; lastRunAt?: number }
+      >()
+      for (const [conversationId, rounds] of roundsByConversation) {
+        const units = reconstructRuns(rounds, submissions.get(conversationId) ?? [])
+        const known = byConversation.get(conversationId) ?? { runs: 0, lastAt: 0 }
+        known.runs = units.length
+        for (const unit of units) {
+          const own = rounds.filter((round) => unit.generationIds.includes(round.id))
+          const ends = own.map((round) => round.endedAt)
+          const at =
+            ends.length > 0 && ends.every((value) => value !== undefined)
+              ? Math.max(...ends)
+              : (own.find((round) => round.startedAt !== undefined)?.startedAt ?? 0)
+          if (at >= known.lastAt) known.lastAt = at
+          const startedAt = own.find((round) => round.startedAt !== undefined)?.startedAt
+          // Task IDs order creation, so compare start times when finding the newest started run.
+          if (
+            startedAt !== undefined &&
+            startedAt >= cutoff &&
+            (known.lastRunAt === undefined ||
+              startedAt > known.lastRunAt ||
+              (startedAt === known.lastRunAt && unit.rootId > (known.lastRunId ?? 0)))
+          ) {
+            known.lastRunId = unit.rootId
+            known.lastRunAt = startedAt
+          }
+        }
+        byConversation.set(conversationId, known)
+      }
+      if (current !== undefined && !byConversation.has(current))
+        byConversation.set(current, { runs: 0, lastAt: 0 })
+      // The sidebar's active conversations stay listed even before their first run, so the current one is checkable.
+      for (const summary of host.conversations())
+        if (!byConversation.has(summary.id))
+          byConversation.set(summary.id, {
+            runs: 0,
+            lastAt: summary.answerAt ?? summary.inputAt ?? 0,
+          })
+      const list: RunConversation[] = []
+      for (const [id, value] of byConversation)
+        list.push({
+          id,
+          agent: agentOf(host, id),
+          runs: value.runs,
+          lastAt: value.lastAt,
+          ...(value.lastRunId === undefined ? {} : { lastRunId: value.lastRunId }),
+          ...(value.lastRunAt === undefined ? {} : { lastRunAt: value.lastRunAt }),
+        })
+      return list.toSorted((a, b) => b.lastAt - a.lastAt || a.id - b.id)
     },
   ),
-  /** One newest-first page of runs in the selected conversations, inside the visible days window. */
+  /** One newest-first page of reconstructed runs in the selected conversations, inside the visible days window. */
   history: implementAction(HistoryAction, async (args, { host, signal }) => {
     const input = (args ?? {}) as {
       conversationIds?: unknown
@@ -426,71 +570,132 @@ export const actions = {
         ? input.before
         : undefined
     const cutoff = Date.now() - days * 24 * 60 * 60 * 1000
-    return host.harness().commit(
+    // Phase 1: the task/entry snapshot, then the submissions outside the commit, then pure reconstruction.
+    const snapshot = await host.harness().commit(
       async (tx) => {
         const boundary = before === undefined ? undefined : await tx.task(before as TaskId)
         if (before !== undefined && (!boundary || boundary.startedAt === undefined))
           throw new Error('Invalid history cursor')
-        const runs = await scanGenerations(tx, signal)
-        const matched = runs
-          .filter((run) => {
-            if (
-              !selected.has(run.conversationId) ||
-              run.startedAt === undefined ||
-              run.startedAt < cutoff
-            )
-              return false
-            if (!boundary || boundary.startedAt === undefined) return true
-            return (
-              run.startedAt < boundary.startedAt ||
-              (run.startedAt === boundary.startedAt && run.id < boundary.id)
-            )
-          })
-          .toSorted((a, b) => b.startedAt! - a.startedAt! || b.id - a.id)
-        const page = matched.slice(0, limit)
-        const more = matched.length > limit
-        // One conversation scan per conversation in the page, then the owner-chain walk for each run.
+        const generations = new Map<number, GenerationFact[]>()
+        for (const conversationId of selected)
+          generations.set(conversationId, await scanGenerationFacts(tx, conversationId, signal))
+        return { boundary, generations }
+      },
+      withAbortSignal(signal, context),
+    )
+    const submissions = await submissionFacts(host, selected, signal)
+    type Row = {
+      conversationId: number
+      unit: RunUnit
+      rounds: GenerationFact[]
+      startedAt: number
+    }
+    const matched: Row[] = []
+    for (const [conversationId, rounds] of snapshot.generations) {
+      for (const unit of reconstructRuns(rounds, submissions.get(conversationId) ?? [])) {
+        const startedAt = rounds.find((round) => round.id === unit.rootId)?.startedAt
+        if (startedAt === undefined || startedAt < cutoff) continue
+        const boundary = snapshot.boundary
+        if (boundary && boundary.startedAt !== undefined) {
+          const older =
+            startedAt < boundary.startedAt ||
+            (startedAt === boundary.startedAt && unit.rootId < boundary.id)
+          if (!older) continue
+        }
+        matched.push({ conversationId, unit, rounds, startedAt })
+      }
+    }
+    matched.sort((a, b) => b.startedAt - a.startedAt || b.unit.rootId - a.unit.rootId)
+    const page = matched.slice(0, limit)
+    const more = matched.length > limit
+    // Phase 2: pools and summaries for the page's runs.
+    return host.harness().commit(
+      async (tx) => {
         const pools = new Map<number, RunTask[]>()
-        for (const run of page) {
-          if (pools.has(run.conversationId)) continue
-          const oldest = Math.min(
-            ...page
-              .filter((item) => item.conversationId === run.conversationId)
-              .map((item) => item.id),
-          )
+        for (const row of page) {
+          if (pools.has(row.conversationId)) continue
+          const roots = page
+            .filter((item) => item.conversationId === row.conversationId)
+            .map((item) => item.unit.rootId)
+            .filter((id) => id > 0)
           pools.set(
-            run.conversationId,
-            await scanConversation(tx, run.conversationId, oldest, signal),
+            row.conversationId,
+            await scanConversation(
+              tx,
+              row.conversationId,
+              roots.length > 0 ? Math.min(...roots) : 0,
+              signal,
+            ),
           )
         }
-        const summaries: RunSummary[] = []
-        for (const run of page)
-          summaries.push(await summaryOf(tx, host, run, pools.get(run.conversationId)!, signal))
+        const runs: RunSummary[] = []
+        for (const row of page) {
+          const pool = pools.get(row.conversationId)!
+          const { tasks, truncated } = collectUnitTasks(row.unit, pool)
+          await enrich(tx, row.unit, tasks, pool, signal)
+          const root = pool.find((task) => task.id === row.unit.rootId)
+          runs.push(
+            summarizeUnit(
+              row.unit,
+              row.rounds,
+              agentOf(host, row.conversationId),
+              tasks,
+              truncated,
+              root ? await modelOf(tx, root) : undefined,
+            ),
+          )
+        }
         return {
-          runs: summaries,
-          ...(more && page.length ? { cursor: String(page.at(-1)!.id) } : {}),
+          runs,
+          ...(more && page.length ? { cursor: String(page.at(-1)!.unit.rootId) } : {}),
         }
       },
       withAbortSignal(signal, context),
     )
   }),
-  /** One run's tasks: scanned across its time window, then kept by the owner chain; at most 5000, flagged if cut. */
+  /** One run's rounds and tasks, its submissions, how the turn ended, and the children attributable to it. */
   run: implementAction(RunAction, async (args, { host, signal }) => {
     const input = (args ?? {}) as { id?: unknown; costDetail?: unknown }
-    if (typeof input.id !== 'number' || !Number.isSafeInteger(input.id))
+    if (typeof input.id !== 'number' || !Number.isSafeInteger(input.id) || input.id <= 0)
       throw new Error('Expected a run id')
     const id = input.id
     const costDetail = input.costDetail === 'tool' ? 'tool' : 'run'
-    return host.harness().commit(
+    const snapshot = await host.harness().commit(
       async (tx) => {
         const record = await tx.task(id as TaskId)
         if (!record) throw new Error(`No run #${id}`)
-        const run = taskOf(record)
-        if (!isRun(run)) throw new Error(`Task #${id} is not a top-level generation`)
-        const pool = await scanConversation(tx, run.conversationId, run.id, signal)
-        const { tasks, truncated } = collectRunTasks(run, pool, RUN_TASK_CAP)
+        const target = taskOf(record)
+        if (target.kind !== 'pi.generation' || target.owner !== undefined)
+          throw new Error(`Task #${id} is not a generation round`)
+        const conversationId = record.conversationId as number
+        const rounds = await scanGenerationFacts(tx, conversationId, signal)
+        const oldest = Math.min(...rounds.map((round) => round.id), id)
+        const pool = await scanConversation(tx, conversationId, oldest, signal)
+        return {
+          conversationId,
+          rounds,
+          pool,
+          anchors: await scanAnchors(tx, conversationId, signal),
+          conversations: await scanConversationFacts(tx, signal),
+        }
+      },
+      withAbortSignal(signal, context),
+    )
+    // Submissions are read outside the commit; see `submissionFacts`.
+    const submissions = await submissionFacts(host, [snapshot.conversationId], signal)
+    const units = reconstructRuns(snapshot.rounds, submissions.get(snapshot.conversationId) ?? [])
+    const index = units.findIndex((item) => item.generationIds.includes(id))
+    if (index < 0) throw new Error(`Task #${id} is not part of a reconstructed run`)
+    const unit = units[index]
+    // The turn's task-id window runs to the next run's root: spawns made during the turn land inside it.
+    const nextRoot = units[index + 1]?.rootId
+    return host.harness().commit(
+      async (tx) => {
+        const { tasks, truncated } = collectUnitTasks(unit, snapshot.pool, RUN_TASK_CAP)
+        let cut = truncated
         const assistants = new Map<number, Map<string, { name: string; detail: string }>>()
         const usages = new Map<number, UsageTotals | undefined>()
+        const spawnNames = new Map<number, number>()
         for (const task of tasks) {
           signal.throwIfAborted()
           const source = await tx.task(task.id as TaskId)
@@ -508,18 +713,117 @@ export const actions = {
             const fact = await facts(host, tx, task.kind, source.input as Input)
             if (Object.keys(fact).length) task.facts = fact
           }
+          const named = task.facts?.conversation
+          if (named !== undefined && !spawnNames.has(named)) spawnNames.set(named, task.id)
           const usage = await resultOf(tx, source, task)
           usages.set(task.id, usage)
           if (costDetail === 'tool' && usage) task.usage = usage
         }
         // Run totals need every task's usage even when only per-tool detail was asked for.
         for (const task of tasks) if (!task.usage) task.usage = usages.get(task.id)
-        const summary = {
-          ...summarizeRun(run, agentOf(host, run.conversationId), tasks, await modelOf(tx, run)),
-          ...(truncated ? { truncated: true } : {}),
+        await enrich(tx, unit, tasks, snapshot.pool, signal)
+        const own = snapshot.rounds.filter((round) => unit.generationIds.includes(round.id))
+        const starts = own
+          .map((round) => round.startedAt)
+          .filter((at): at is number => at !== undefined)
+        const runStartedAt = starts.length > 0 ? Math.min(...starts) : undefined
+        const runEndedAt = Math.max(
+          0,
+          ...tasks.map((task) => task.endedAt ?? 0),
+          ...own.map((round) => round.endedAt ?? 0),
+        )
+        const windowEnd = runEndedAt > 0 ? runEndedAt : undefined
+        // Children: anchors and owner edges first, then their turns inside the run window — never later ones.
+        const { children: attributed, uncertainties } = attributeChildren(
+          {
+            rootId: unit.rootId,
+            maxTaskId: nextRoot === undefined ? Number.MAX_SAFE_INTEGER : nextRoot - 1,
+            ...(runStartedAt === undefined ? {} : { startedAt: runStartedAt }),
+            ...(windowEnd === undefined ? {} : { endedAt: windowEnd }),
+            ownedTaskIds: new Set(tasks.map((task) => task.id)),
+          },
+          snapshot.anchors,
+          snapshot.conversations.map((fact) => ({ ...fact, agent: agentOf(host, fact.id) })),
+          spawnNames,
+        )
+        const children: RunChild[] = []
+        let budget = RUN_TASK_CAP - tasks.length
+        for (const child of attributed) {
+          const spawn = child.anchorTaskId ?? child.spawnTaskId ?? unit.rootId
+          const turns = (await scanGenerationFacts(tx, child.conversationId, signal)).filter(
+            (round) =>
+              round.id >= spawn &&
+              (round.startedAt === undefined ||
+                runStartedAt === undefined ||
+                round.startedAt >= runStartedAt) &&
+              (round.startedAt === undefined ||
+                windowEnd === undefined ||
+                round.startedAt <= windowEnd),
+          )
+          const turnEnds = turns.map((round) => round.endedAt ?? 0)
+          children.push({
+            ...child,
+            ...(child.startedAt === undefined && turns[0]?.startedAt !== undefined
+              ? { startedAt: turns[0].startedAt }
+              : {}),
+            ...(turns.length === 0
+              ? {}
+              : {
+                  generationIds: turns.map((round) => round.id),
+                  ...(child.endedAt === undefined &&
+                  Math.max(0, ...turns.map((r) => r.endedAt ?? 0)) > 0
+                    ? { endedAt: Math.max(...turnEnds) }
+                    : {}),
+                }),
+          })
+          // Only an owner edge from a run-owned task makes child tasks attributable; anchors never do.
+          if (child.confidence === 'proven' && turns.length > 0 && budget > 0) {
+            const childPool = await scanConversation(
+              tx,
+              child.conversationId,
+              Math.min(...turns.map((round) => round.id)),
+              signal,
+            )
+            const found = collectUnitTasks(
+              { generationIds: turns.map((round) => round.id) },
+              childPool,
+              budget,
+            )
+            const byId = new Map(childPool.map((task) => [task.id, task]))
+            const roots = new Set(turns.map((round) => round.id))
+            for (const task of found.tasks) {
+              const generationId = generationOfTask(task, byId, roots)
+              tasks.push({
+                ...task,
+                ...(generationId === undefined ? {} : { generationId }),
+                conversationId: child.conversationId,
+              })
+            }
+            budget -= found.tasks.length
+            if (found.truncated) cut = true
+          }
         }
+        const root = snapshot.pool.find((task) => task.id === unit.rootId)
+        const summary = summarizeUnit(
+          unit,
+          snapshot.rounds,
+          agentOf(host, snapshot.conversationId),
+          tasks,
+          cut,
+          root ? await modelOf(tx, root) : undefined,
+          children.length,
+        )
         if (costDetail === 'run') for (const task of tasks) delete task.usage
-        return { run: summary, tasks, truncated } satisfies RunDetail
+        return {
+          run: summary,
+          tasks,
+          truncated: cut,
+          generationIds: unit.generationIds,
+          submissions: unit.submissions,
+          end: unit.end,
+          children,
+          uncertainties: [...unit.uncertainties, ...uncertainties],
+        } satisfies RunDetail
       },
       withAbortSignal(signal, context),
     )
