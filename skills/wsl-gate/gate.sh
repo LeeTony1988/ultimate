@@ -31,7 +31,9 @@
 # stops there so the base can be gated; call it again without the flag to merge
 # the fetched branch with --no-ff. A bare `gate` runs check, test and e2e in that
 # order and stops at the first red. Naming phases is only for a quick partial
-# run during development, never for a landing.
+# run during development, never for a landing. `gate` and `alone` also accept a
+# detached HEAD, so the base-vs-merged comparison in SKILL.md can run in the
+# same clone; `prepare` and `bundle` require dev/lxy.
 
 set -euo pipefail
 
@@ -89,19 +91,23 @@ setup_toolchain() {
   command -v pnpm >/dev/null 2>&1 || die "pnpm is not on PATH after setting up $prefix"
 }
 
-require_clone() {
+require_repo() {
   [[ -d "$CLONE/.git" ]] || die "no landing clone at $CLONE (run prepare first)"
-  local branch
-  if ! branch="$(git -C "$CLONE" symbolic-ref --quiet --short HEAD)"; then
-    die "the landing clone is on a detached HEAD; run prepare to put it on dev/lxy"
-  fi
-  [[ "$branch" == "dev/lxy" ]] || die "the landing clone is on $branch, not dev/lxy"
   local status
   status="$(git -C "$CLONE" status --porcelain)"
   [[ -z "$status" ]] || die "the landing clone is dirty:"$'\n'"$status"
   if git -C "$CLONE" ls-files --eol | grep -E 'i/crlf|w/crlf' >/dev/null; then
     die "the landing clone has CRLF line endings; fix .gitattributes before gating"
   fi
+}
+
+require_clone() {
+  require_repo
+  local branch
+  if ! branch="$(git -C "$CLONE" symbolic-ref --quiet --short HEAD)"; then
+    die "the landing clone is on a detached HEAD; run prepare to put it on dev/lxy"
+  fi
+  [[ "$branch" == "dev/lxy" ]] || die "the landing clone is on $branch, not dev/lxy"
 }
 
 set_identity() {
@@ -252,7 +258,7 @@ cmd_prepare() {
 }
 
 cmd_gate() {
-  require_clone
+  require_repo
   local -a phases=()
   local phase
   if (($# == 0)); then
@@ -303,7 +309,7 @@ cmd_gate() {
 
 cmd_alone() {
   (($# == 1)) || die "usage: $SCRIPT_NAME alone <test-file>"
-  require_clone
+  require_repo
   local file
   if [[ "$1" == /* ]]; then
     file="$(realpath -m "$1")"
