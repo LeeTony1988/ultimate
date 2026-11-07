@@ -53,14 +53,14 @@ const liveNode = (value: { id: number } & Record<string, unknown>): TaskGraphNod
   }) as unknown as TaskGraphNode
 
 describe('conversation clusters', () => {
-  it('puts every selected conversation in its own cluster with one root', () => {
+  it('puts every selected conversation in its own cluster without a shared root', () => {
     const first = conversationNodes(1, [
       turn({ runId: 1, tasks: [run({ id: 10 }), task({ id: 11 })] }),
     ])
     const second = conversationNodes(2, [
       turn({ runId: 2, tasks: [task({ id: 20, conversationId: 2 })] }),
     ])
-    expect(first.nodes.filter((node) => node.type === 'root')).toHaveLength(1)
+    expect(first.nodes.map((node) => node.type)).not.toContain('root')
     expect(first.nodes.every((node) => node.cluster === 1)).toBe(true)
     expect(second.nodes.every((node) => node.cluster === 2)).toBe(true)
     const edges = [
@@ -70,19 +70,19 @@ describe('conversation clusters', () => {
     expect(crossClusterEdges(edges, [...first.nodes, ...second.nodes])).toEqual([])
   })
 
-  it('starts each turn from the shared root and never links two turns', () => {
+  it('keeps each turn an independent chain and never links two turns', () => {
     const turns = [
       turn({ runId: 1, tasks: [task({ id: 11 }), task({ id: 12 })] }),
       turn({ runId: 2, tasks: [task({ id: 21 }), task({ id: 22 })] }),
     ]
     const { nodes } = conversationNodes(1, turns)
     const edges = conversationEdges(1, turns)
-    const root = nodes.find((node) => node.type === 'root')!
     const firstTurn = nodes.filter((node) => node.turn === 0).toSorted((a, b) => a.order - b.order)
     const secondTurn = nodes.filter((node) => node.turn === 1).toSorted((a, b) => a.order - b.order)
-    expect(edges.filter((edge) => edge.kind === 'turn')).toEqual([
-      { from: root.id, to: firstTurn[0].id, kind: 'turn', cluster: 1 },
-      { from: root.id, to: secondTurn[0].id, kind: 'turn', cluster: 1 },
+    expect(nodes.every((node) => node.turn >= 0)).toBe(true)
+    expect(edges).toEqual([
+      { from: firstTurn[0].id, to: firstTurn[1].id, kind: 'sequence', cluster: 1 },
+      { from: secondTurn[0].id, to: secondTurn[1].id, kind: 'sequence', cluster: 1 },
     ])
     expect(
       edges.some(
@@ -91,7 +91,6 @@ describe('conversation clusters', () => {
           secondTurn.some((node) => node.id === edge.to),
       ),
     ).toBe(false)
-    expect(edges.filter((edge) => edge.kind === 'sequence')).toHaveLength(2)
   })
 
   it('hides generations and compaction from the visible dots', () => {
@@ -137,7 +136,6 @@ describe('conversation clusters', () => {
     ]
     const labels = conversationNodes(1, turns).nodes.map((node) => node.label)
     expect(labels).toEqual([
-      'conversation root',
       'powershell · npm test',
       'read · extensions/tasks/graph.tsx',
       'subagent · #42',
@@ -148,8 +146,8 @@ describe('conversation clusters', () => {
   it('creates a labelled turn dot when a turn has no visible tools', () => {
     const turns = [turn({ runId: 1, label: 'turn · 14:30', tasks: [run({ id: 10 })] })]
     const { nodes } = conversationNodes(1, turns)
-    expect(nodes).toHaveLength(2)
-    expect(nodes[1]).toMatchObject({ type: 'turn', label: 'turn · 14:30' })
+    expect(nodes).toHaveLength(1)
+    expect(nodes[0]).toMatchObject({ type: 'turn', label: 'turn · 14:30' })
   })
 
   it('keeps the head and tail of an oversized turn', () => {
@@ -161,7 +159,7 @@ describe('conversation clusters', () => {
 })
 
 describe('conversation layout', () => {
-  it('is deterministic and puts the root at the centre of every turn fan', () => {
+  it('is deterministic and gives every turn its own chain', () => {
     const turns = [
       turn({ runId: 1, tasks: [task({ id: 11 }), task({ id: 12 }), task({ id: 13 })] }),
       turn({ runId: 2, tasks: [task({ id: 21 }), task({ id: 22 })] }),
@@ -173,15 +171,15 @@ describe('conversation layout', () => {
     expect(first.map((node) => [node.id, node.x, node.y])).toEqual(
       second.map((node) => [node.id, node.x, node.y]),
     )
-    const root = first.find((node) => node.type === 'root')!
-    expect([root.x, root.y]).toEqual([0, 0])
-    for (const turnIndex of [0, 1, 2]) {
+    const starts = [0, 1, 2].map((turnIndex) => {
       const line = first
         .filter((node) => node.turn === turnIndex)
         .toSorted((a, b) => a.order - b.order)
       expect(line.length).toBeGreaterThan(0)
-      expect(Math.hypot(line[0].x, line[0].y)).toBeGreaterThan(0)
-    }
+      return `${line[0].x},${line[0].y}`
+    })
+    expect(new Set(starts).size).toBe(3)
+    expect(first.some((node) => node.x !== 0 || node.y !== 0)).toBe(true)
   })
 
   it('separates dots of different clusters even when their halos overlap', () => {

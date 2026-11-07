@@ -16,17 +16,17 @@
 - 没有「从开始到结束」的主轴，用户看到的只是不断累加的 turn；
 - 任务与任务之间没有颜色或空间隔离，三个任务混在一起时无法一眼分清。
 
-**根因**：旧 Structure 以 frame/卡片为单位，Constellation 首版又误把「一次输入提交到回答」的 Run 当成一个任务。正确单位是**会话（conversation）**：一个会话一个星群；会话内的多个 turn（Run）从同一个会话根节点分叉，每个 turn 自己是一条线，节点只展示真正有意义的工具/子代理步骤，不展示 generation 这类内部边界。
+**根因**：旧 Structure 以 frame/卡片为单位，Constellation 首版又误把「一次输入提交到回答」的 Run 当成一个任务。正确单位是**会话（conversation）**：一个会话一个星群；会话内的每个 turn（Run）是一条独立星链，不设统一的会话起始节点，节点只展示真正有意义的工具/子代理步骤，不展示 generation 这类内部边界。
 
 ## 2. 目标与非目标
 
 **目标**
 
 1. 以「会话」为第一视觉单位：星群数量不固定，**由 Task DAG 左侧勾选的会话决定**；每个勾选会话对应一个圆点星群，星群允许部分重叠以节省空间，重叠区通过色系与 mouse focus 区分。
-2. 一个会话内部是一个星群：会话根节点 + 每个 turn 一条独立的分支线；纯圆点节点、簇内半透明 Bezier / 直线边、活跃节点与边脉冲。
+2. 一个会话内部是一个星群：每个 turn 一条独立星链，不设会话根节点；纯圆点节点、簇内半透明 Bezier / 直线边、活跃节点与边脉冲。
 3. `visual clustering` 设置控制星群聚合程度；支持 `constellation`（引力）与 `hierarchy`（层级隔离）两种全局布局。
 4. 同一任务内所有节点同一色系；任务之间彩虹轮转，色相距离 ≥ 60°。
-5. Focus Mode 是核心交互：从全局星群到单个任务，再到单个节点，层级清楚、退出自然。
+5. Focus Mode 是核心交互：从全局星群到单条星链，再到单个节点，层级清楚、退出自然。
 6. 支持混杂布局：不同任务可按自身拓扑采用 spine / branch / orbit / burst 的内部模板，不强制一种形状。
 
 **非目标**
@@ -44,8 +44,8 @@
 
 - **cluster = 勾选的一个会话**；会话标题用 agent + `#conversation`（有 plan task 标题时优先用它），hover 显示 agent、耗时、turn 数。
 - 会话内的每个 **turn = 一次 Run**（一次输入提交到回答）；turn 按 `startedAt` 升序排列。
-- 每个 turn 从同一个**会话根节点（root）**出发，形成自己的一条线；turn 之间没有直接边，只共享 root。
-- 一个会话只有 1 条 turn 时就是一条从 root 出发的线；0 turn 的会话显示一个空心根节点。
+- 每个 turn 是一条**独立星链**，不设统一的会话起始节点；turn 之间没有直接边，只共享星群的空间和色系。
+- 一个会话只有 1 条 turn 时就是一条独立星链；0 turn 的会话不显示根节点。
 
 **数量与勾选**：星图不预设任务数量。左侧会话栏复用 Task DAG 现有的 checkbox：勾选几个会话，就绘制几个星群（1–6 个；更多时折叠为「+N tasks」）。取消勾选即移除对应星群，重新勾选恢复；当前会话默认勾选。
 
@@ -53,7 +53,6 @@
 
 | 节点类型 | 来源 | 圆点大小 | 说明 |
 | --- | --- | --- | --- |
-| `root` | 会话根节点 | 13–16 px | 一个会话一个，所有 turn 从这里分叉 |
 | `turn` | 无可见工具调用的 Run | 7–9 px | 合成线头，label 为 `turn · HH:MM`；有工具时不需要额外节点 |
 | `tool` | `pi.tool` / `pi.compaction` 之外的步骤 | 5–8 px | 实际工具调用；label 为 `tool · detail`，例如 `powershell · npm test`、`read · package.json` |
 | `subagent` | 子代理锚点 | 8–11 px | `subagent · #42` |
@@ -78,8 +77,8 @@
 ### 3.4 边（Edge）
 
 - 只允许 `from.cluster === to.cluster`；渲染前过滤，单元测试兜底。
-- 类型：`turn`（会话根 → 一个 turn 的首个可见步骤）、`sequence`（同一个 turn 内步骤先后）、`wait`（blocker → waiter）。
-- **每个 turn 从 root 单独出一条线**；turn 之间没有边。不同会话之间绝不画线。
+- 类型：`sequence`（同一个 turn 内步骤先后）、`wait`（blocker → waiter）。
+- **每个 turn 是一条独立星链**；turn 之间没有边。不同会话之间绝不画线。
 - 线宽 1 px；颜色 = 簇色相，透明度 0.22；活跃边 0.55 + 流动虚线。默认 Bezier；线性 spine 用直线。
 - 方向：不画大箭头。用「流动虚线 + 起点暗、终点亮」的微差表示方向；hover 时在边的中点显示小方向点。
 
@@ -171,20 +170,20 @@ DAG 不是一张固定截图，而是一块可平移、可缩放的无限画布�
 
 ```
 Overview（默认全场半透明）
-  ├─ hover node        → 整条 DAG 高亮闪烁，其他 DAG 瞬间暗淡（Dim-on-Hover）
-  ├─ click node        → Node Focus
+  ├─ hover node        → 该 turn 的星链高亮，其他星链/星群瞬间暗淡（Dim-on-Hover）
+  ├─ click node        → Chain Focus
   ├─ click cluster     → Cluster Focus
   └─ double click      → Solo Cluster
 
-Node Focus
+Chain Focus
   ├─ Esc               → Cluster Focus（同一任务）
   ├─ click blank       → Overview
-  └─ click another node → 切换 Node Focus
+  └─ click another node → 切换 Chain Focus
 
 Cluster Focus
   ├─ Esc               → Overview
   ├─ click blank       → Overview
-  └─ click node        → Node Focus
+  └─ click node        → Chain Focus
 
 Solo Cluster
   ├─ Esc               → Cluster Focus
@@ -193,8 +192,8 @@ Solo Cluster
 
 ### 6.2 视觉
 
-- **Hover / Dim-on-Hover**：默认所有节点、边都是半透明；鼠标悬停在任意圆点上时，该圆点所属的**整个 DAG**（全部节点和全部边）高亮并脉冲，其他 DAG 在 120 ms 内降到 5–6% 透明度；移开后恢复。这是主要的“读图”方式，不需要先点击。
-- **Node Focus**：其他任务星群淡到 8% 并向外轻移 8 px；同一任务内非邻域节点淡到 18%；选中节点加同色外环；右侧详情卡展示任务、步骤、状态、耗时、上游/下游数量。
+- **Hover / Dim-on-Hover**：默认所有节点、边都是半透明；鼠标悬停在任意圆点上时，该圆点所属的 **turn 星链**（该 turn 的全部节点和边）高亮并脉冲，同会话其他星链与别的星群在 120 ms 内降到 5–6% 透明度；移开后恢复。这是主要的“读图”方式，不需要先点击。
+- **Chain Focus**：其他任务星群淡到 8% 并向外轻移 8 px；同一任务内其他星链淡到 18%；选中节点加同色外环，详情卡展示该链的步骤、状态、耗时、上下游数量。
 - **Cluster Focus**：其他任务星群淡到 4%，当前星群轻微放大（1.04×），标题变成面包屑「All tasks / 任务名」；详情卡显示任务摘要（节点数、完成/失败/运行、总耗时、当前活跃步骤）。
 - **Solo Cluster**：相机缩放到该星群，其他星群移出视口；适合演示单个任务的完整过程。
 - 所有过渡 180–260 ms，`ease-out`；不改变数据，只改变可见性、缩放和镜头。
@@ -202,7 +201,7 @@ Solo Cluster
 ### 6.3 键盘与可达性
 
 - `Tab` / `Shift+Tab` 在节点间循环（按开始时间顺序）；
-- `Enter` 进入 Node Focus，`Esc` 退一级；
+- `Enter` 进入 Chain Focus，`Esc` 退一级；
 - 每个节点有 `aria-label`：`步骤名，状态，耗时`；
 - Focus 变化时通过 `aria-live="polite"` 播报「已聚焦：任务 / 步骤」。
 
@@ -279,7 +278,7 @@ Solo Cluster
 3. 任意一条边的两个端点属于同一任务；跨任务边数量为 0（单元测试）。
 4. 同一任务所有节点色相相同；不同任务色相距离 ≥ 60°。
 5. 活跃节点和活跃边有脉冲；`prefers-reduced-motion` 下无动画。
-6. 点击节点进入 Node Focus，Esc 退到 Cluster Focus，再 Esc 回 Overview；无布局跳动。
+6. 点击节点进入 Chain Focus，Esc 退到 Cluster Focus，再 Esc 回 Overview；无布局跳动。
 7. `visual clustering` 从 0 到 1 变化时，星群从松散云过渡到紧致球，节点不重叠。
 8. `constellation` / `hierarchy` 切换时布局平滑过渡，不丢失 Focus 状态。
 9. 画布支持拖拽平移、以鼠标位置为锚点的滚轮缩放、Fit 全部、minimap 跳转；缩放 <64% 时标签自动隐藏。
@@ -300,11 +299,11 @@ Solo Cluster
 - 3 个星云允许部分重叠，边界只有极淡的不规则 blurry glow，没有圆形弧线；顶部 `overlap` 滑杆可调整重叠程度；
 - 顶部 `cross repel` 滑杆可调节跨星群斥力（默认 0：允许星群穿插和连线交错，只阻止节点圆点互相覆盖）；
 - 拖拽任意星云空白处可以整体移动该星群；
-- 默认所有节点/边半透明；hover 任一圆点 → 整条 DAG 高亮闪烁，其他 DAG 立即暗淡；
+- 默认所有节点/边半透明；hover 任一圆点 → 该 turn 星链高亮，其他星链/星群立即暗淡；
 - 无限画布：拖拽平移、滚轮 zoom-to-cursor、双击/`0` 键 Fit、顶部 `− / + / Fit`、右下角 minimap；
 - 顶部：Force / Hierarchy 切换、Clustering 滑杆、Overlap 滑杆、Labels、Pulse、Reset；
-- 点击节点 → Node Focus；点击星群标题 → Cluster Focus；Esc 逐级退出；
+- 点击节点 → Chain Focus；点击星群标题 → Cluster Focus；Esc 逐级退出；
 - 右侧详情卡：任务摘要或节点详情；
 - 底部图例：圆点大小 / 状态 / 颜色。
 
-原型不是产品数据，也不包含真实任务；它只验证“圆点星群 + 簇内过程 + Focus Mode”的视觉与交互假设。确认方向后再按 §10 的 P1 进入产品代码。
+原型不是产品数据，也不包含真实任务；它只验证“圆点星群 + 簇内过程 + Focus Mode”的视觉与交互假设。原型仍是早期 root 方案；产品实现已改为无 root 的独立星链。确认方向后再按 §10 的 P1 进入产品代码。
