@@ -26,6 +26,7 @@ import type { TreesService } from '../extensions/conversations/api.ts'
 import {
   exchangeMessages,
   generateSummary,
+  parseSummaryResponse,
   summaryInput,
   Summaries,
   summaryBehavior,
@@ -1107,6 +1108,30 @@ it('stores and exposes a feature and keeps it when omitted', async () => {
   expect(
     (await fixture.server.harness.snapshot(Metadata, fixture.server.root.id, context))?.title,
   ).toBe('Improve the conversation sidebar')
+})
+
+it('parses JSON in a fence or prose and reports a friendly error otherwise', async () => {
+  expect(parseSummaryResponse('{"activity":"Done."}')).toEqual({ activity: 'Done.' })
+  expect(
+    parseSummaryResponse('Here is the result:\n```json\n{"activity":"Done."}\n```\nThanks.'),
+  ).toEqual({ activity: 'Done.' })
+  expect(parseSummaryResponse('The result is {"activity":"Done."} as requested.')).toEqual({
+    activity: 'Done.',
+  })
+  expect(() => parseSummaryResponse('I could not summarize this conversation.')).toThrow(
+    'Summary response was not valid JSON',
+  )
+  expect(
+    await generateSummary({} as Models, 'Reply', new AbortController().signal, false, {
+      model: luna,
+      response: {
+        provider: luna.provider,
+        model: luna.id,
+        stopReason: 'stop',
+        text: 'The result is\n```json\n{"activity":"Done."}\n```\nThanks.',
+      },
+    }),
+  ).toEqual({ activity: 'Done.' })
 })
 
 it('validates reply-only JSON and rejects a malformed activity', async () => {
