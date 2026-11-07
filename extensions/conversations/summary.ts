@@ -263,6 +263,51 @@ export async function askSummaryModel(
   return response ?? (await receive(answer))
 }
 
+/**
+ * The model's answer as JSON: a bare object, a fenced block, or one object between prose. A summary model
+ * occasionally wraps its JSON in a fence or a sentence; parse those rather than surfacing a raw JSON.parse error.
+ */
+export function parseSummaryResponse(text: string): unknown {
+  const trimmed = text.trim()
+  const fences = [...trimmed.matchAll(/```[a-z]*\s*([\s\S]*?)```/gi)]
+  const fenced = fences.length === 1 ? fences[0][1].trim() : undefined
+  for (const candidate of [trimmed, fenced, ...jsonObjects(trimmed)]) {
+    if (!candidate) continue
+    try {
+      return JSON.parse(candidate)
+    } catch {
+      // Try the next candidate; only a value that parses is a summary.
+    }
+  }
+  throw new Error('Summary response was not valid JSON')
+}
+
+/** Every balanced `{...}` in `text`, respecting strings and escapes. */
+function jsonObjects(text: string) {
+  const objects: string[] = []
+  for (let start = text.indexOf('{'); start !== -1; start = text.indexOf('{', start + 1)) {
+    let depth = 0
+    let quoted = false
+    let escaped = false
+    for (let index = start; index < text.length; index++) {
+      const character = text[index]
+      if (quoted) {
+        if (escaped) escaped = false
+        else if (character === '\\') escaped = true
+        else if (character === '"') quoted = false
+        continue
+      }
+      if (character === '"') quoted = true
+      else if (character === '{') depth++
+      else if (character === '}' && --depth === 0) {
+        objects.push(text.slice(start, index + 1))
+        break
+      }
+    }
+  }
+  return objects
+}
+
 export async function generateSummary(
   models: Models,
   input: string,
@@ -301,7 +346,7 @@ export async function generateSummary(
     receipt,
   )
   if (response.stopReason !== 'stop') throw new Error('Summary request did not finish')
-  const parsed: unknown = JSON.parse(response.text)
+  const parsed: unknown = parseSummaryResponse(response.text)
   if (
     mode === 'reply' &&
     (!parsed ||
