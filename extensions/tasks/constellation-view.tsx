@@ -1,6 +1,6 @@
 /**
  * The Constellation tab: one pure-circle DAG per checked conversation, deterministic cluster anchors, an infinite
- * world/camera canvas, hover-to-read-the-whole-DAG and node/cluster focus. Structure and Timeline stay in graph.tsx.
+ * world/camera canvas, hover-to-read one star chain and chain/cluster focus. Structure and Timeline stay in graph.tsx.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
@@ -46,8 +46,9 @@ export type ConstellationFrame = {
 }
 
 type Focus =
-  | { kind: 'node'; conversationId: number; nodeId: number }
+  | { kind: 'chain'; conversationId: number; turn: number; nodeId: number }
   | { kind: 'cluster'; conversationId: number }
+type HoveredChain = { conversationId: number; turn: number }
 
 type TurnView = {
   run: RunSummary
@@ -162,7 +163,7 @@ function TurnData({
   return null
 }
 
-/** Collects a conversation's turns, builds its root + turn lines, and hands the finished model to the surface. */
+/** Collects a conversation's turns, builds their independent star chains, and hands the finished model to the surface. */
 function ConversationData({
   frame,
   live,
@@ -277,7 +278,7 @@ const fillOpacityOf = (status: ConstellationNode['status']) => {
 const shortTitle = (value: string, max = 34) =>
   value.length > max ? `${value.slice(0, max - 1)}…` : value
 
-/** The floating detail card: node details and neighbours, or the cluster's progress. */
+/** The floating detail card: one chain's node details and neighbours, or the cluster's progress. */
 function Detail({
   focus,
   model,
@@ -290,7 +291,7 @@ function Detail({
   onCluster: () => void
 }) {
   const node =
-    focus.kind === 'node' ? model?.nodes.find((item) => item.id === focus.nodeId) : undefined
+    focus.kind === 'chain' ? model?.nodes.find((item) => item.id === focus.nodeId) : undefined
   const task = node ? model?.tasks.find((item) => item.id === node.id) : undefined
   const incoming = model?.edges.filter((edge) => edge.to === node?.id).length ?? 0
   const outgoing = model?.edges.filter((edge) => edge.from === node?.id).length ?? 0
@@ -301,10 +302,10 @@ function Detail({
   })
   const now = useNow(1000, node?.status === 'running')
   const title =
-    focus.kind === 'node'
-      ? (node?.label ?? 'node')
+    focus.kind === 'chain'
+      ? (node?.label ?? `turn ${focus.turn + 1}`)
       : (model?.title ?? `@${model?.agent ?? 'agent'} #${focus.conversationId}`)
-  const stepNodes = model?.nodes.filter((item) => item.type !== 'root') ?? []
+  const stepNodes = model?.nodes ?? []
   const counts = {
     done: stepNodes.filter((item) => item.status === 'done').length,
     running: stepNodes.filter((item) => item.status === 'running').length,
@@ -319,7 +320,7 @@ function Detail({
       data-constellation-detail
     >
       <div className="flex items-center gap-2 text-[9px] tracking-[.18em] text-muted-foreground uppercase">
-        {focus.kind === 'node' ? 'Node focus' : 'Cluster focus'}
+        {focus.kind === 'chain' ? 'Chain focus' : 'Cluster focus'}
         <button
           aria-label="Close details"
           className="ml-auto cursor-pointer text-muted-foreground hover:text-foreground"
@@ -330,14 +331,14 @@ function Detail({
         </button>
       </div>
       <h2 className="mt-2 font-sans text-[15px] leading-snug font-medium text-foreground">
-        {focus.kind === 'node' ? shortTitle(title, 52) : shortTitle(title, 42)}
+        {focus.kind === 'chain' ? shortTitle(title, 52) : shortTitle(title, 42)}
       </h2>
       <p className="mt-1 text-[10px] text-muted-foreground">
-        {focus.kind === 'node'
-          ? `${model?.agent ? `@${model.agent}` : ''} #${focus.conversationId} · ${task?.kind ?? node?.type ?? 'task'}`
+        {focus.kind === 'chain'
+          ? `${model?.agent ? `@${model.agent}` : ''} #${focus.conversationId} · turn ${focus.turn + 1} · ${task?.kind ?? node?.type ?? 'task'}`
           : `@${model?.agent ?? 'agent'} #${focus.conversationId}${model?.running ? ' · LIVE' : ''}`}
       </p>
-      {focus.kind === 'node' && node ? (
+      {focus.kind === 'chain' && node ? (
         <>
           <div className="mt-4 flex items-center gap-2">
             <span className={cnDot(node.status)} />
@@ -374,7 +375,7 @@ function Detail({
               {incoming} in · {outgoing} out
             </dd>
             <dt>cluster</dt>
-            <dd className="text-foreground">{Math.max(0, (model?.nodes.length ?? 0) - 1)} steps</dd>
+            <dd className="text-foreground">{model?.nodes.length ?? 0} steps</dd>
             {task?.error && (
               <>
                 <dt>error</dt>
@@ -464,21 +465,18 @@ function Detail({
               Steps
             </div>
             <div className="mt-2 grid gap-1.5">
-              {(model?.nodes ?? [])
-                .filter((item) => item.type !== 'root')
-                .slice(0, 12)
-                .map((item) => (
-                  <div
-                    className="flex min-w-0 items-center gap-2 text-muted-foreground"
-                    key={item.id}
-                  >
-                    <span className={cnDot(item.status)} />
-                    <span className="truncate">{item.label}</span>
-                    <span className="ml-auto shrink-0 text-[9px] text-muted-foreground/70">
-                      {statusText[item.status]}
-                    </span>
-                  </div>
-                ))}
+              {(model?.nodes ?? []).slice(0, 12).map((item) => (
+                <div
+                  className="flex min-w-0 items-center gap-2 text-muted-foreground"
+                  key={item.id}
+                >
+                  <span className={cnDot(item.status)} />
+                  <span className="truncate">{item.label}</span>
+                  <span className="ml-auto shrink-0 text-[9px] text-muted-foreground/70">
+                    {statusText[item.status]}
+                  </span>
+                </div>
+              ))}
               {total === 0 && (
                 <span className="text-muted-foreground/70">no steps in this conversation</span>
               )}
@@ -519,7 +517,7 @@ export function Constellation({
   const [offsets, setOffsets] = useState<Record<number, ClusterAnchor>>({})
   const [models, setModels] = useState<Record<number, ClusterModel>>({})
   const [focus, setFocus] = useState<Focus>()
-  const [hovered, setHovered] = useState<number>()
+  const [hovered, setHovered] = useState<HoveredChain>()
   const [dragging, setDragging] = useState<number>()
   const [overlap, setOverlap] = useState(settings.dag.clusterOverlap)
   const [clustering, setClustering] = useState(settings.dag.visualClustering)
@@ -637,10 +635,18 @@ export function Constellation({
   )
 
   const emphasis = (conversationId: number) => {
-    if (hovered !== undefined) return hovered === conversationId ? 1 : 0.055
-    if (focus?.kind === 'node') return focus.conversationId === conversationId ? 1 : 0.08
+    if (hovered) return hovered.conversationId === conversationId ? 1 : 0.055
+    if (focus?.kind === 'chain') return focus.conversationId === conversationId ? 1 : 0.08
     if (focus?.kind === 'cluster') return focus.conversationId === conversationId ? 1 : 0.04
     return 1
+  }
+
+  const chainState = (conversationId: number, turn: number) => {
+    if (hovered)
+      return hovered.conversationId === conversationId && hovered.turn === turn ? 'active' : 'dim'
+    if (focus?.kind === 'chain' && focus.conversationId === conversationId)
+      return focus.turn === turn ? 'active' : 'dim'
+    return undefined
   }
 
   const clusterTransform = (index: number, conversationId: number) => {
@@ -764,7 +770,7 @@ export function Constellation({
       )
         return
       if (event.key === 'Escape') {
-        if (focus?.kind === 'node')
+        if (focus?.kind === 'chain')
           setFocus({ kind: 'cluster', conversationId: focus.conversationId })
         else if (focus) setFocus(undefined)
       }
@@ -1010,10 +1016,7 @@ export function Constellation({
               }
               return (
                 <g
-                  className={cnCanvas(
-                    'constellation-cluster constellation-edges',
-                    hovered === frame.conversationId && 'is-hovered',
-                  )}
+                  className="constellation-cluster constellation-edges"
                   key={`edges:${frame.conversationId}`}
                   style={style}
                 >
@@ -1021,10 +1024,7 @@ export function Constellation({
                     const from = nodes.find((node) => node.id === edge.from)
                     const to = nodes.find((node) => node.id === edge.to)
                     if (!from || !to) return null
-                    const incident =
-                      focus?.kind === 'node' &&
-                      focus.conversationId === frame.conversationId &&
-                      (edge.from === focus.nodeId || edge.to === focus.nodeId)
+                    const chain = chainState(frame.conversationId, from.turn)
                     return (
                       <path
                         className={cnCanvas(
@@ -1034,9 +1034,8 @@ export function Constellation({
                             from.status === 'waiting' ||
                             to.status === 'waiting') &&
                             'is-live',
-                          focus?.kind === 'node' &&
-                            focus.conversationId === frame.conversationId &&
-                            (incident ? 'is-hot' : 'is-dim'),
+                          chain === 'active' && 'is-hot',
+                          chain === 'dim' && 'is-dim',
                         )}
                         d={edgePath(from, to, edgeIndex)}
                         key={`${edge.from}:${edge.to}`}
@@ -1057,7 +1056,7 @@ export function Constellation({
                 opacity: emphasis(frame.conversationId),
               }
               const focusNodeId =
-                focus?.kind === 'node' && focus.conversationId === frame.conversationId
+                focus?.kind === 'chain' && focus.conversationId === frame.conversationId
                   ? focus.nodeId
                   : undefined
               const neighbors = focusNodeId
@@ -1073,16 +1072,14 @@ export function Constellation({
                 : undefined
               return (
                 <g
-                  className={cnCanvas(
-                    'constellation-cluster constellation-nodes',
-                    hovered === frame.conversationId && 'is-hovered',
-                  )}
+                  className="constellation-cluster constellation-nodes"
                   key={`nodes:${frame.conversationId}`}
                   style={style}
                 >
                   {nodes.map((node) => {
                     const selected = focusNodeId === node.id
                     const neighbor = neighbors?.has(node.id) ?? false
+                    const chain = chainState(frame.conversationId, node.turn)
                     return (
                       <g
                         aria-label={`${node.label}, ${statusText[node.status]}`}
@@ -1091,15 +1088,17 @@ export function Constellation({
                           `status-${node.status}`,
                           selected && 'is-selected',
                           neighbor && 'is-neighbor',
-                          focusNodeId !== undefined && !selected && !neighbor && 'is-dim',
+                          chain === 'active' && 'is-chain-active',
+                          chain === 'dim' && 'is-dim',
                         )}
                         data-node-id={node.id}
                         key={node.id}
                         onClick={(event) => {
                           event.stopPropagation()
                           setFocus({
-                            kind: 'node',
+                            kind: 'chain',
                             conversationId: frame.conversationId,
+                            turn: node.turn,
                             nodeId: node.id,
                           })
                           setHovered(undefined)
@@ -1108,12 +1107,15 @@ export function Constellation({
                           if (event.key !== 'Enter' && event.key !== ' ') return
                           event.preventDefault()
                           setFocus({
-                            kind: 'node',
+                            kind: 'chain',
                             conversationId: frame.conversationId,
+                            turn: node.turn,
                             nodeId: node.id,
                           })
                         }}
-                        onMouseEnter={() => setHovered(frame.conversationId)}
+                        onMouseEnter={() =>
+                          setHovered({ conversationId: frame.conversationId, turn: node.turn })
+                        }
                         onMouseLeave={() => setHovered(undefined)}
                         role="button"
                         style={{ cursor: 'pointer' }}
@@ -1223,7 +1225,7 @@ export function Constellation({
                         model?.title ? `@${frame.agent} #${frame.conversationId}` : undefined,
                         model?.startedAt ? formatTime(model.startedAt, true) : undefined,
                         `${model?.runs.length ?? 0} turns`,
-                        `${Math.max(0, (model?.nodes.length ?? 0) - 1)}${model?.omitted ? `+${model.omitted}` : ''} steps`,
+                        `${Math.max(0, model?.nodes.length ?? 0)}${model?.omitted ? `+${model.omitted}` : ''} steps`,
                         model?.running ? 'LIVE' : undefined,
                       ]
                         .filter(Boolean)
@@ -1355,7 +1357,6 @@ const constellationCss = `
 .constellation-edge.is-live { stroke-dasharray: 4 8; animation: constellation-flow 2.4s linear infinite; }
 .constellation-edge.is-hot { stroke-opacity: .72; stroke-width: 1.35; }
 .constellation-edge.is-dim { stroke-opacity: .07; }
-.constellation-cluster.is-hovered .constellation-edge { stroke-opacity: .68; stroke-dasharray: 4 8; animation: constellation-flow 2.2s linear infinite; }
 .constellation-node { opacity: .84; transition: opacity .18s; outline: none; }
 .constellation-node .constellation-core { transition: fill .18s, opacity .18s, filter .18s; }
 .constellation-node .constellation-ring { transition: opacity .18s; }
@@ -1363,10 +1364,10 @@ const constellationCss = `
 .constellation-node.is-selected .constellation-core { filter: brightness(1.3); }
 .constellation-node.is-neighbor { opacity: 1; }
 .constellation-node.is-neighbor .constellation-label { opacity: .92; }
+.constellation-node.is-chain-active { opacity: 1; }
+.constellation-node.is-chain-active .constellation-core { filter: brightness(1.2); }
 .constellation-node.is-dim { opacity: .18; }
 .constellation-node.is-dim .constellation-label { opacity: 0; }
-.constellation-cluster.is-hovered .constellation-node { opacity: 1; }
-.constellation-cluster.is-hovered .constellation-core { filter: brightness(1.2); }
 .constellation-node:hover .constellation-label,
 .constellation-node.is-selected .constellation-label,
 .constellation-node.is-neighbor .constellation-label { opacity: 1; }

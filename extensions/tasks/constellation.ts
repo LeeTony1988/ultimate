@@ -1,6 +1,6 @@
 /**
- * The Constellation view's model: a conversation is one cluster, every turn is a line from the conversation root,
- * and only meaningful task steps become visible dots. Pure, so the surface only draws what this returns and every
+ * The Constellation view's model: a conversation is one cluster, every turn is an independent star chain of meaningful
+ * task steps, and only those steps become visible dots. Pure, so the surface only draws what this returns and every
  * rule (no cross-cluster edge, hidden generations, tool labels) is testable without a DOM.
  */
 import { failed } from './history.ts'
@@ -11,7 +11,7 @@ export const CLUSTER_RADIUS = 180
 /** A single turn's visible dots cap; a longer turn keeps its head and tail and reports the omitted middle. */
 export const MAX_TURN_NODES = 6
 
-export type ConstellationNodeType = 'root' | 'tool' | 'subagent' | 'wait' | 'turn'
+export type ConstellationNodeType = 'tool' | 'subagent' | 'wait' | 'turn'
 export type ConstellationStatus = 'pending' | 'running' | 'waiting' | 'done' | 'failed'
 
 export type ConstellationNode = {
@@ -22,9 +22,9 @@ export type ConstellationNode = {
   status: ConstellationStatus
   label: string
   r: number
-  /** The turn index inside the cluster; -1 for the conversation root. */
+  /** The turn index inside the cluster; every visible node belongs to one turn. */
   turn: number
-  /** Position along its turn's line. */
+  /** Position along its turn's chain. */
   order: number
   startedAt?: number
   endedAt?: number
@@ -33,7 +33,7 @@ export type ConstellationNode = {
 export type ConstellationEdge = {
   from: number
   to: number
-  kind: 'turn' | 'sequence'
+  kind: 'sequence'
   /** The conversation both endpoints belong to. */
   cluster: number
 }
@@ -117,17 +117,15 @@ export function nodeLabel(task: RunTask): string {
 
 const radiusOf = (type: ConstellationNodeType, status: ConstellationStatus) => {
   const base =
-    type === 'root'
-      ? 11
-      : type === 'turn'
-        ? 8
-        : type === 'subagent'
-          ? 8.5
-          : type === 'tool'
-            ? 5.8
-            : type === 'wait'
-              ? 6.3
-              : 7
+    type === 'turn'
+      ? 8
+      : type === 'subagent'
+        ? 8.5
+        : type === 'tool'
+          ? 5.8
+          : type === 'wait'
+            ? 6.3
+            : 7
   return base + (status === 'running' ? 2 : status === 'pending' ? -0.4 : 0)
 }
 
@@ -143,8 +141,6 @@ const turnStatus = (turn: ConstellationTurn): ConstellationStatus => {
   return 'done'
 }
 
-/** The synthetic root of a conversation cluster; negative so it can never collide with a task id. */
-export const rootNodeId = (conversationId: number) => -conversationId
 /** The synthetic dot of a turn with no visible tool calls. */
 export const turnNodeId = (conversationId: number, turnIndex: number) =>
   -(1_000_000 + conversationId * 1000 + turnIndex)
@@ -167,30 +163,15 @@ export function capTurnTasks(
 }
 
 /**
- * A conversation's dots: one root, then one line of visible tool/subagent steps per turn. Turns carry the run's
- * start time so a no-tool turn still has a labelled dot; generation and compaction tasks never appear.
+ * A conversation's dots: one independent chain of visible tool/subagent steps per turn. Turns carry the run's
+ * start time so a no-tool turn still has a labelled dot; generation and compaction tasks never appear. There is no
+ * shared conversation root; a turn with no visible tasks is a one-dot chain.
  */
 export function conversationNodes(
   conversationId: number,
   turns: readonly ConstellationTurn[],
 ): { nodes: ConstellationNode[]; omitted: number } {
-  const rootStatus: ConstellationStatus = turns.some((turn) => turn.outcome === 'running')
-    ? 'running'
-    : turns.some((turn) => turnStatus(turn) === 'failed')
-      ? 'failed'
-      : 'done'
-  const nodes: ConstellationNode[] = [
-    {
-      id: rootNodeId(conversationId),
-      cluster: conversationId,
-      type: 'root',
-      status: rootStatus,
-      label: 'conversation root',
-      r: radiusOf('root', rootStatus),
-      turn: -1,
-      order: 0,
-    },
-  ]
+  const nodes: ConstellationNode[] = []
   let omitted = 0
   turns.forEach((turn, turnIndex) => {
     const visible = turn.tasks
@@ -240,8 +221,8 @@ export function conversationNodes(
 }
 
 /**
- * The edges of a conversation cluster: root → the first dot of every turn, then a sequence chain inside that turn.
- * There is deliberately no edge from one turn's end to the next turn's start.
+ * The edges inside a conversation cluster: a sequence chain within each turn. Turns never share a root and never
+ * link to one another.
  */
 export function conversationEdges(
   conversationId: number,
@@ -250,15 +231,11 @@ export function conversationEdges(
   const { nodes } = conversationNodes(conversationId, turns)
   const byTurn = new Map<number, ConstellationNode[]>()
   for (const node of nodes) {
-    if (node.turn < 0) continue
     byTurn.set(node.turn, [...(byTurn.get(node.turn) ?? []), node])
   }
   const edges: ConstellationEdge[] = []
-  const root = rootNodeId(conversationId)
   for (const [, list] of [...byTurn.entries()].toSorted(([a], [b]) => a - b)) {
     const ordered = list.toSorted((a, b) => a.order - b.order)
-    if (ordered.length === 0) continue
-    edges.push({ from: root, to: ordered[0].id, kind: 'turn', cluster: conversationId })
     for (let index = 1; index < ordered.length; index += 1)
       edges.push({
         from: ordered[index - 1].id,
@@ -380,8 +357,9 @@ export function zoomAtPoint(
 }
 
 /**
- * One turn is one straight-ish line from the conversation root. Multiple turns fan out to the right, so the cluster
- * reads as a conversation root with independent branches; `clustering` makes the fan a little tighter at the centre.
+ * Each turn is an independent star chain. Chains start at different points around the cluster centre and run along
+ * alternating tangents, so several turns can cross and interleave without sharing an origin. `clustering` tightens
+ * the pinwheel toward the centre.
  */
 export function layoutConversationCluster(
   nodes: readonly ConstellationNode[],
@@ -390,26 +368,31 @@ export function layoutConversationCluster(
   if (nodes.length === 0) return []
   const radius = options.radius ?? CLUSTER_RADIUS
   const clustering = clamp(options.clustering ?? 0.72, 0, 1)
-  const root = nodes.find((node) => node.type === 'root')
   const turns = [
     ...new Set(nodes.filter((node) => node.turn >= 0).map((node) => node.turn)),
   ].toSorted((a, b) => a - b)
-  const spread = radius * (0.76 + (1 - clustering) * 0.08)
-  const start = 40 + clustering * 10
+  const spread = radius * (0.6 + (1 - clustering) * 0.22)
+  const startRadius = radius * (0.12 + (1 - clustering) * 0.1)
   const positions = new Map<number, { x: number; y: number }>()
-  if (root) positions.set(root.id, { x: 0, y: 0 })
-  for (const turn of turns) {
+  for (const [index, turn] of turns.entries()) {
     const list = nodes.filter((node) => node.turn === turn).toSorted((a, b) => a.order - b.order)
     if (list.length === 0) continue
     const angle =
-      turns.length === 1 ? 0 : ((-58 + (116 * turn) / (turns.length - 1)) * Math.PI) / 180
-    const step = list.length === 1 ? 0 : clamp((spread - start) / (list.length - 1), 20, 34)
-    list.forEach((node, index) => {
-      const along = start + step * index
-      const jitter = Math.sin((index + 1) * 1.3 + turn) * 3.5
+      turns.length === 1
+        ? -Math.PI / 2 + 0.35
+        : -Math.PI / 2 + (index * Math.PI * 2) / turns.length + (index % 2 ? 0.18 : -0.18)
+    const direction = angle + Math.PI / 2 + (index % 2 ? -0.16 : 0.16)
+    const startX = Math.cos(angle) * startRadius
+    const startY = Math.sin(angle) * startRadius
+    const step = list.length === 1 ? 0 : clamp(spread / (list.length - 1), 20, 34)
+    const bend = 7 + (index % 3) * 3
+    list.forEach((node, order) => {
+      const along = step * order
+      const fraction = order / Math.max(1, list.length - 1)
+      const curve = Math.sin(fraction * Math.PI) * bend * (index % 2 ? -1 : 1)
       positions.set(node.id, {
-        x: Math.cos(angle) * along - Math.sin(angle) * jitter,
-        y: Math.sin(angle) * along + Math.cos(angle) * jitter,
+        x: startX + Math.cos(direction) * along - Math.sin(direction) * curve,
+        y: startY + Math.sin(direction) * along + Math.cos(direction) * curve,
       })
     })
   }
