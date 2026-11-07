@@ -356,10 +356,17 @@ export function zoomAtPoint(
   return { zoom, x: screenX - worldX * zoom, y: screenY - worldY * zoom }
 }
 
+/** A deterministic 0–1 hash, so scattered positions never change between renders. */
+const hash01 = (value: number) => {
+  const noise = Math.sin(value * 12.9898 + 78.233) * 43758.5453
+  return noise - Math.floor(noise)
+}
+
 /**
- * Each turn is an independent star chain. Chains start at different points around the cluster centre and run along
- * alternating tangents, so several turns can cross and interleave without sharing an origin. `clustering` tightens
- * the pinwheel toward the centre.
+ * Each turn is an independent star chain. Chain centres follow a sunflower scatter (the golden angle, not a ring),
+ * each chain has its own direction and gentle bend, and a small force pass keeps neighbours apart and edge lengths
+ * even. Chains can therefore float independently and cross one another without sharing an origin. `clustering`
+ * tightens the scatter toward the cluster centre.
  */
 export function layoutConversationCluster(
   nodes: readonly ConstellationNode[],
@@ -371,35 +378,86 @@ export function layoutConversationCluster(
   const turns = [
     ...new Set(nodes.filter((node) => node.turn >= 0).map((node) => node.turn)),
   ].toSorted((a, b) => a - b)
-  const spread = radius * (0.6 + (1 - clustering) * 0.22)
-  const startRadius = radius * (0.12 + (1 - clustering) * 0.1)
-  const positions = new Map<number, { x: number; y: number }>()
-  for (const [index, turn] of turns.entries()) {
-    const list = nodes.filter((node) => node.turn === turn).toSorted((a, b) => a.order - b.order)
-    if (list.length === 0) continue
-    const angle =
-      turns.length === 1
-        ? -Math.PI / 2 + 0.35
-        : -Math.PI / 2 + (index * Math.PI * 2) / turns.length + (index % 2 ? 0.18 : -0.18)
-    const direction = angle + Math.PI / 2 + (index % 2 ? -0.16 : 0.16)
-    const startX = Math.cos(angle) * startRadius
-    const startY = Math.sin(angle) * startRadius
-    const step = list.length === 1 ? 0 : clamp(spread / (list.length - 1), 20, 34)
-    const bend = 7 + (index % 3) * 3
-    list.forEach((node, order) => {
-      const along = step * order
-      const fraction = order / Math.max(1, list.length - 1)
-      const curve = Math.sin(fraction * Math.PI) * bend * (index % 2 ? -1 : 1)
-      positions.set(node.id, {
-        x: startX + Math.cos(direction) * along - Math.sin(direction) * curve,
-        y: startY + Math.sin(direction) * along + Math.cos(direction) * curve,
-      })
-    })
-  }
-  return nodes.map((node) => {
-    const position = positions.get(node.id) ?? { x: 0, y: 0 }
-    return { ...node, x: position.x, y: position.y }
+  const lists = turns
+    .map((turn) => nodes.filter((node) => node.turn === turn).toSorted((a, b) => a.order - b.order))
+    .filter((list) => list.length > 0)
+  const centreRadius = radius * (0.16 + (1 - clustering) * 0.34)
+  const spacing = 22 + (1 - clustering) * 10
+  const chains = lists.map((list, index) => {
+    const angle = index * 2.399963229728653 + hash01(index + 1) * 0.7
+    const distance = centreRadius * Math.sqrt((index + 0.5) / lists.length)
+    return {
+      list,
+      direction: hash01(index + 17) * Math.PI * 2,
+      bend: (hash01(index + 31) - 0.5) * 20,
+      spacing,
+      centre: {
+        x: Math.cos(angle) * distance + (hash01(index + 43) - 0.5) * radius * 0.08,
+        y: Math.sin(angle) * distance + (hash01(index + 59) - 0.5) * radius * 0.08,
+      },
+    }
   })
+  const points = nodes.map((node) => {
+    const chain = chains.find((candidate) => candidate.list[0].turn === node.turn)!
+    const last = chain.list.length - 1
+    const fraction = last === 0 ? 0 : node.order / last
+    const along = chain.spacing * (node.order - last / 2)
+    const bend = Math.sin(fraction * Math.PI) * chain.bend
+    return {
+      node,
+      x: chain.centre.x + Math.cos(chain.direction) * along - Math.sin(chain.direction) * bend,
+      y: chain.centre.y + Math.sin(chain.direction) * along + Math.cos(chain.direction) * bend,
+    }
+  })
+  const pointById = new Map(points.map((point) => [point.node.id, point]))
+  const edges = chains.flatMap((chain) =>
+    chain.list.slice(1).map((node, index) => ({
+      from: pointById.get(chain.list[index].id)!,
+      to: pointById.get(node.id)!,
+      spacing: chain.spacing,
+    })),
+  )
+  const passes = 48
+  const limit = radius * 0.94
+  for (let pass = 0; pass < passes; pass += 1) {
+    const strength = 0.5 * (1 - pass / passes)
+    for (let a = 0; a < points.length; a += 1) {
+      for (let b = a + 1; b < points.length; b += 1) {
+        const one = points[a]
+        const two = points[b]
+        const dx = two.x - one.x
+        const dy = two.y - one.y
+        const distance = Math.sqrt(dx * dx + dy * dy) || 0.001
+        const minimum = one.node.r + two.node.r + 6
+        if (distance >= minimum) continue
+        const push = ((minimum - distance) / distance) * strength
+        one.x -= dx * push
+        one.y -= dy * push
+        two.x += dx * push
+        two.y += dy * push
+      }
+    }
+    for (const edge of edges) {
+      const dx = edge.to.x - edge.from.x
+      const dy = edge.to.y - edge.from.y
+      const distance = Math.sqrt(dx * dx + dy * dy) || 0.001
+      const pull = ((distance - edge.spacing) / distance) * 0.08
+      edge.from.x += dx * pull
+      edge.from.y += dy * pull
+      edge.to.x -= dx * pull
+      edge.to.y -= dy * pull
+    }
+    for (const point of points) {
+      point.x *= 1 - 0.0015
+      point.y *= 1 - 0.0015
+      const distance = Math.sqrt(point.x * point.x + point.y * point.y)
+      if (distance > limit) {
+        point.x = (point.x / distance) * limit
+        point.y = (point.y / distance) * limit
+      }
+    }
+  }
+  return points.map((point) => ({ ...point.node, x: point.x, y: point.y }))
 }
 
 /** A cluster's local dots plus the world transform they are drawn under. */
