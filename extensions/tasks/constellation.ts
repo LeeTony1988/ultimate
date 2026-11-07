@@ -381,19 +381,20 @@ export function layoutConversationCluster(
   const lists = turns
     .map((turn) => nodes.filter((node) => node.turn === turn).toSorted((a, b) => a.order - b.order))
     .filter((list) => list.length > 0)
-  const centreRadius = radius * (0.16 + (1 - clustering) * 0.34)
-  const spacing = 22 + (1 - clustering) * 10
+  const centreRadius = radius * (0.3 + (1 - clustering) * 0.35)
+  const spacing = 24 + (1 - clustering) * 8
   const chains = lists.map((list, index) => {
-    const angle = index * 2.399963229728653 + hash01(index + 1) * 0.7
-    const distance = centreRadius * Math.sqrt((index + 0.5) / lists.length)
+    const angle = index * 2.399963229728653 + (hash01(index + 1) - 0.5) * 1.6
+    const distance =
+      centreRadius * Math.sqrt((index + 0.5) / lists.length) * (0.72 + hash01(index + 7) * 0.56)
     return {
       list,
       direction: hash01(index + 17) * Math.PI * 2,
-      bend: (hash01(index + 31) - 0.5) * 20,
+      bend: (hash01(index + 31) - 0.5) * 24,
       spacing,
       centre: {
-        x: Math.cos(angle) * distance + (hash01(index + 43) - 0.5) * radius * 0.08,
-        y: Math.sin(angle) * distance + (hash01(index + 59) - 0.5) * radius * 0.08,
+        x: Math.cos(angle) * distance + (hash01(index + 43) - 0.5) * radius * 0.14,
+        y: Math.sin(angle) * distance + (hash01(index + 59) - 0.5) * radius * 0.14,
       },
     }
   })
@@ -405,6 +406,7 @@ export function layoutConversationCluster(
     const bend = Math.sin(fraction * Math.PI) * chain.bend
     return {
       node,
+      anchor: chain.centre,
       x: chain.centre.x + Math.cos(chain.direction) * along - Math.sin(chain.direction) * bend,
       y: chain.centre.y + Math.sin(chain.direction) * along + Math.cos(chain.direction) * bend,
     }
@@ -448,8 +450,8 @@ export function layoutConversationCluster(
       edge.to.y -= dy * pull
     }
     for (const point of points) {
-      point.x *= 1 - 0.0015
-      point.y *= 1 - 0.0015
+      point.x += (point.anchor.x - point.x) * 0.012
+      point.y += (point.anchor.y - point.y) * 0.012
       const distance = Math.sqrt(point.x * point.x + point.y * point.y)
       if (distance > limit) {
         point.x = (point.x / distance) * limit
