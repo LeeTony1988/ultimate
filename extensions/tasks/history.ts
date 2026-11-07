@@ -4,9 +4,10 @@
  * Browser-safe: no storage, no React, so the server, the surface and the tests share it.
  */
 import type { TaskGraphNode } from '@earendil-works/pi-durable'
-import type { RunOutcome, RunSummary, RunTask, TaskSettings } from './refs.ts'
+import type { DagSettings, RunOutcome, RunSummary, RunTask, TaskSettings } from './refs.ts'
 
 export type {
+  DagSettings,
   RunConversation,
   RunDetail,
   RunOutcome,
@@ -21,8 +22,21 @@ export type {
 export const TASK_PAGE = 20
 export const RUN_TASK_CAP = 5000
 
+/** The Constellation view's defaults; a project may override each field under `tasks.dag`. */
+export const DEFAULT_DAG_SETTINGS: DagSettings = {
+  clusterOverlap: 0.3,
+  crossRepulsion: 0,
+  visualClustering: 0.72,
+  labels: 'hover',
+  pulse: true,
+}
+
 /** The design's defaults, used when project settings leave `tasks` unset or invalid. */
-export const DEFAULT_TASK_SETTINGS: TaskSettings = { historyDays: 3, costDetail: 'run' }
+export const DEFAULT_TASK_SETTINGS: TaskSettings = {
+  historyDays: 3,
+  costDetail: 'run',
+  dag: DEFAULT_DAG_SETTINGS,
+}
 
 /** A generation round: one top-level `pi.generation`. A session Run is reconstructed from several of these. */
 export function isRun(task: { kind: string; owner?: number }): boolean {
@@ -327,7 +341,7 @@ export function criticalPath(tasks: readonly RunTask[], now = Date.now()): Set<n
   return new Set(best.path)
 }
 
-/** `tasks.historyDays` and `tasks.costDetail` from a project settings object, with the design's defaults. */
+/** `tasks.historyDays`, `tasks.costDetail` and `tasks.dag` from a project settings object, with the design's defaults. */
 export function taskSettings(value: unknown): TaskSettings {
   const settings =
     value && typeof value === 'object' && !Array.isArray(value)
@@ -343,5 +357,26 @@ export function taskSettings(value: unknown): TaskSettings {
       ? days
       : DEFAULT_TASK_SETTINGS.historyDays
   const costDetail = tasks.costDetail === 'tool' ? 'tool' : 'run'
-  return { historyDays, costDetail }
+  const dag =
+    tasks.dag && typeof tasks.dag === 'object' && !Array.isArray(tasks.dag)
+      ? (tasks.dag as Record<string, unknown>)
+      : {}
+  const number = (input: unknown, fallback: number, low: number, high: number) =>
+    typeof input === 'number' && Number.isFinite(input)
+      ? Math.max(low, Math.min(high, input))
+      : fallback
+  return {
+    historyDays,
+    costDetail,
+    dag: {
+      clusterOverlap: number(dag.clusterOverlap, DEFAULT_DAG_SETTINGS.clusterOverlap, 0, 0.6),
+      crossRepulsion: number(dag.crossRepulsion, DEFAULT_DAG_SETTINGS.crossRepulsion, 0, 1),
+      visualClustering: number(dag.visualClustering, DEFAULT_DAG_SETTINGS.visualClustering, 0, 1),
+      labels:
+        dag.labels === 'always' || dag.labels === 'off' || dag.labels === 'hover'
+          ? dag.labels
+          : DEFAULT_DAG_SETTINGS.labels,
+      pulse: typeof dag.pulse === 'boolean' ? dag.pulse : DEFAULT_DAG_SETTINGS.pulse,
+    },
+  }
 }

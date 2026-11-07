@@ -1,0 +1,1439 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Task DAG · 圆点星群原型</title>
+<style>
+  :root {
+    --bg: #070b14;
+    --bg2: #05070d;
+    --text: #dce9ff;
+    --muted: #6f86a6;
+    --dim: #415773;
+    --panel: rgba(10, 17, 31, 0.82);
+    --panel-border: rgba(125, 180, 255, 0.14);
+    --line: rgba(125, 180, 255, 0.1);
+    --font: "Inter", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+    --mono: "SFMono-Regular", "Cascadia Code", "Consolas", monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    overflow: hidden;
+    background:
+      radial-gradient(1200px 800px at 18% -10%, rgba(30, 80, 140, 0.22), transparent 55%),
+      radial-gradient(900px 700px at 100% 100%, rgba(70, 30, 110, 0.12), transparent 60%),
+      linear-gradient(180deg, var(--bg), var(--bg2));
+    color: var(--text);
+    font-family: var(--font);
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+  }
+
+  .topbar {
+    position: relative;
+    z-index: 20;
+    height: 78px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    padding: 0 24px;
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, rgba(8, 14, 26, 0.94), rgba(7, 11, 20, 0.62));
+    backdrop-filter: blur(12px);
+  }
+  .brand { display: flex; align-items: center; gap: 12px; min-width: 240px; flex: 0 0 auto; }
+  .brand-mark {
+    width: 28px; height: 28px; border-radius: 50%;
+    background:
+      radial-gradient(circle at 35% 32%, #bff3ff 0 8%, transparent 9%),
+      radial-gradient(circle at 62% 38%, #79d7ff 0 6%, transparent 7%),
+      radial-gradient(circle at 48% 66%, #4ac4ff 0 7%, transparent 8%),
+      radial-gradient(circle, rgba(62, 214, 255, 0.28), transparent 70%);
+    box-shadow: 0 0 18px rgba(62, 214, 255, 0.45), inset 0 0 12px rgba(62, 214, 255, 0.25);
+  }
+  h1 { font-size: 16px; font-weight: 650; letter-spacing: 0.02em; margin: 0; }
+  h1 span { color: var(--muted); font-weight: 450; }
+  .brand p { margin: 3px 0 0; font-size: 10.5px; color: var(--dim); letter-spacing: 0.06em; white-space: nowrap; }
+
+  .controls { display: flex; align-items: center; justify-content: flex-end; gap: 7px; flex-wrap: nowrap; min-width: 0; }
+  .segmented {
+    display: flex; padding: 3px; gap: 2px; border: 1px solid var(--panel-border);
+    border-radius: 999px; background: rgba(9, 16, 29, 0.7);
+  }
+  .segmented button {
+    appearance: none; border: 0; background: transparent; color: var(--muted);
+    font: 11px var(--font); padding: 7px 12px; border-radius: 999px; cursor: pointer;
+    transition: color .18s, background .18s, box-shadow .18s;
+  }
+  .segmented button.on {
+    color: #eaf7ff; background: rgba(62, 214, 255, 0.12);
+    box-shadow: inset 0 0 0 1px rgba(62, 214, 255, 0.22), 0 0 18px rgba(62, 214, 255, 0.08);
+  }
+  .slider {
+    display: flex; align-items: center; gap: 8px; font: 10.5px var(--mono);
+    color: var(--muted); letter-spacing: 0.02em; white-space: nowrap;
+  }
+  input[type="range"] { width: 78px; accent-color: #3ed6ff; cursor: pointer; }
+  #clusterValue, #overlapValue, #crossValue { width: 27px; color: #a9dfff; }
+  .ghost {
+    appearance: none; border: 1px solid var(--panel-border); background: rgba(9, 16, 29, 0.58);
+    color: var(--muted); font: 10.5px var(--mono); padding: 8px 11px; border-radius: 9px;
+    cursor: pointer; transition: color .16s, border-color .16s, background .16s;
+    white-space: nowrap;
+  }
+  .ghost:hover { color: var(--text); border-color: rgba(62, 214, 255, 0.35); background: rgba(20, 35, 58, 0.6); }
+
+  .stage { position: relative; height: calc(100vh - 78px); overflow: hidden; }
+  #graph { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .hud { position: absolute; inset: 0; pointer-events: none; }
+  .task-rail {
+    position: absolute; left: 18px; top: 18px; width: 214px; max-height: calc(100% - 120px);
+    padding: 12px; overflow: auto; pointer-events: auto;
+    border: 1px solid var(--panel-border); border-radius: 14px;
+    background: rgba(8, 14, 26, 0.66); backdrop-filter: blur(14px);
+    box-shadow: 0 14px 44px rgba(0, 0, 0, 0.28);
+  }
+  .task-rail .rail-head {
+    display: flex; align-items: center; justify-content: space-between;
+    font: 9px var(--mono); color: var(--dim); letter-spacing: 0.16em; text-transform: uppercase;
+    padding: 0 2px 9px;
+  }
+  .task-rail .rail-head button {
+    appearance: none; border: 0; background: transparent; color: var(--dim);
+    font: 9px var(--mono); cursor: pointer; padding: 0;
+  }
+  .task-rail .rail-head button:hover { color: var(--text); }
+  .task-row {
+    display: flex; align-items: center; gap: 8px; padding: 7px 5px; border-radius: 7px;
+    color: var(--muted); font: 10px var(--mono); cursor: pointer; transition: background .15s;
+  }
+  .task-row:hover, .task-row.on { background: rgba(125, 180, 255, 0.06); }
+  .task-row.focused { box-shadow: inset 0 0 0 1px hsl(var(--h) 72% 60% / .22); }
+  .task-row input { margin: 0; accent-color: hsl(var(--h) 82% 62%); cursor: pointer; }
+  .task-row .dot {
+    width: 6px; height: 6px; border-radius: 50%; background: hsl(var(--h) 82% 62%);
+    box-shadow: 0 0 6px hsl(var(--h) 82% 62% / .6); flex: none;
+  }
+  .task-row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .task-row .count { color: var(--dim); }
+  .task-row .live {
+    font-size: 8px; letter-spacing: .1em; color: hsl(var(--h) 85% 74%);
+    border: 1px solid hsl(var(--h) 80% 62% / .35); border-radius: 3px; padding: 1px 3px;
+  }
+
+  .detail {
+    position: absolute; right: 18px; top: 18px; bottom: 18px; width: 300px;
+    padding: 18px; border: 1px solid var(--panel-border); border-radius: 16px;
+    background: var(--panel); backdrop-filter: blur(16px);
+    box-shadow: 0 18px 60px rgba(0, 0, 0, 0.35);
+    pointer-events: auto; overflow: auto;
+  }
+  .detail::-webkit-scrollbar { width: 6px; }
+  .detail::-webkit-scrollbar-thumb { background: rgba(125, 180, 255, 0.16); border-radius: 999px; }
+  .detail .eyebrow { font: 9.5px var(--mono); letter-spacing: 0.18em; color: var(--dim); text-transform: uppercase; margin-bottom: 10px; }
+  .detail h2 { margin: 0 0 7px; font-size: 16px; font-weight: 600; line-height: 1.3; }
+  .detail .sub { margin: 0 0 18px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+  .detail .empty { padding-top: 22px; }
+  .detail .glyph {
+    width: 54px; height: 54px; margin-bottom: 18px; border-radius: 50%;
+    border: 1px solid rgba(62, 214, 255, 0.3);
+    background: radial-gradient(circle at center, rgba(62, 214, 255, 0.18), transparent 65%);
+    display: grid; place-items: center; color: #9ee9ff; font: 22px var(--mono);
+    box-shadow: 0 0 24px rgba(62, 214, 255, 0.12);
+  }
+  .detail .kv { display: grid; grid-template-columns: 1fr auto; gap: 9px 14px; margin-top: 16px; font-size: 11px; }
+  .detail .kv dt { color: var(--dim); }
+  .detail .kv dd { margin: 0; color: var(--text); font-family: var(--mono); font-size: 10.5px; }
+  .detail .bar { height: 3px; margin: 18px 0; border-radius: 99px; background: rgba(125, 180, 255, 0.1); overflow: hidden; }
+  .detail .bar i { display: block; height: 100%; width: 0; border-radius: inherit; background: hsl(var(--h) 85% 62% / .7); transition: width .3s; }
+  .detail .statusline { display: flex; align-items: center; gap: 7px; font: 10px var(--mono); color: var(--muted); }
+  .detail .statusline .dot { width: 7px; height: 7px; border-radius: 50%; background: hsl(var(--h) 85% 62%); box-shadow: 0 0 8px hsl(var(--h) 85% 62% / .7); }
+  .detail .statusline .dot.done { opacity: .55; box-shadow: none; }
+  .detail .statusline .dot.wait { opacity: .45; }
+  .detail .statusline .dot.fail { animation: none; }
+  .detail .back {
+    margin-top: 18px; appearance: none; width: 100%; border: 1px solid var(--panel-border);
+    background: transparent; color: var(--muted); font: 10.5px var(--mono); padding: 9px;
+    border-radius: 9px; cursor: pointer;
+  }
+  .detail .back:hover { color: var(--text); border-color: rgba(62, 214, 255, 0.35); }
+  .detail .node-list { display: grid; gap: 6px; margin-top: 16px; }
+  .detail .node-row { display: flex; align-items: center; gap: 8px; font: 10px var(--mono); color: var(--muted); }
+  .detail .node-row .dot { width: 6px; height: 6px; border-radius: 50%; background: hsl(var(--h) 80% 60% / .65); }
+
+  .legend {
+    position: absolute; left: 24px; bottom: 18px; display: flex; align-items: center; gap: 18px;
+    padding: 9px 12px; border: 1px solid rgba(125, 180, 255, 0.08); border-radius: 12px;
+    background: rgba(7, 12, 22, 0.5); backdrop-filter: blur(8px);
+    font: 9.5px var(--mono); color: var(--dim); pointer-events: none; flex-wrap: wrap;
+  }
+  .legend .item { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .legend .ll { width: 6px; height: 6px; border-radius: 50%; background: #5f7694; }
+  .legend .ll.done { opacity: .55; }
+  .legend .ll.live { background: #9ee9ff; box-shadow: 0 0 8px rgba(158, 233, 255, 0.8); }
+  .legend .ll.wait { opacity: .4; border: 1px dashed #5f7694; }
+  .legend .ll.fail { background: transparent; border: 1px solid #5f7694; }
+  .hint {
+    position: absolute; left: 24px; bottom: 58px; color: var(--dim);
+    font: 9.5px var(--mono); letter-spacing: 0.02em; pointer-events: none; text-align: left;
+    max-width: 420px;
+  }
+  .zoomctl {
+    display: flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--panel-border);
+    border-radius: 999px; background: rgba(9, 16, 29, 0.7);
+  }
+  .zoomctl button {
+    appearance: none; border: 0; background: transparent; color: var(--muted); width: 25px; height: 24px;
+    border-radius: 999px; cursor: pointer; font: 13px var(--mono);
+  }
+  .zoomctl button:hover { color: var(--text); background: rgba(62, 214, 255, 0.1); }
+  #zoomValue { min-width: 38px; text-align: center; color: #a9dfff; font: 9.5px var(--mono); }
+  .minimap {
+    position: absolute; right: 338px; bottom: 18px; width: 158px; height: 104px;
+    border: 1px solid rgba(125, 180, 255, 0.12); border-radius: 12px;
+    background: rgba(7, 12, 22, 0.55); backdrop-filter: blur(10px); overflow: hidden;
+    pointer-events: auto;
+  }
+  .minimap svg { width: 100%; height: 100%; display: block; cursor: crosshair; }
+  .zoom-pill {
+    position: absolute; right: 7px; top: 6px; padding: 2px 5px; border-radius: 5px;
+    background: rgba(7, 12, 22, 0.7); color: var(--muted); font: 8.5px var(--mono);
+  }
+
+  text { font-family: var(--mono); }
+  .cluster-title { cursor: pointer; }
+  .cluster-title text.name { fill: hsl(var(--h) 85% 76% / .96); font-size: 12px; font-weight: 600; letter-spacing: 0.06em; paint-order: stroke; stroke: #070b14; stroke-width: 3px; }
+  .cluster-title text.meta { fill: rgba(155, 182, 218, .82); font-size: 9px; letter-spacing: 0.03em; paint-order: stroke; stroke: #070b14; stroke-width: 3px; }
+  .cluster-title:hover text.name { fill: hsl(var(--h) 90% 82% / 1); }
+  .nebula { pointer-events: none; mix-blend-mode: screen; }
+  .cluster-hit { fill: transparent; pointer-events: all; cursor: grab; }
+  .cluster-hit:active { cursor: grabbing; }
+
+  .edge { fill: none; stroke-width: 1.1; stroke-linecap: round; transition: opacity .18s; }
+  .edge.live { stroke-dasharray: 4 8; animation: edge-flow 2.4s linear infinite; }
+  .edge.hot { stroke-width: 1.35; }
+  .edge.far { opacity: 0.015 !important; }
+  .edge.dim { opacity: 0.05 !important; }
+  .edge.hot { opacity: 0.72; }
+
+  .node { cursor: pointer; opacity: .82; transition: opacity .18s; }
+  .node.status-active { opacity: 1; }
+  .node .core { transition: fill .18s, opacity .18s; }
+  .node .label {
+    opacity: 0; fill: #cfe3ff; font-size: 9.5px; letter-spacing: 0.01em;
+    paint-order: stroke; stroke: #070b14; stroke-width: 3px; stroke-linejoin: round;
+    transition: opacity .15s;
+  }
+  .node .ring { opacity: 0; transition: opacity .18s; }
+  .node:hover .label, .node.selected .label, .node.neighbor .label { opacity: 1; }
+  .node:hover .core { filter: brightness(1.25); }
+  .node.selected .ring { opacity: .85; }
+  .node.selected .core { filter: brightness(1.3); }
+  .node.far { opacity: 0.055; pointer-events: none; }
+  .node.dim { opacity: 0.16; }
+  /* mouse focus: the hovered DAG lights up, every other DAG drops away instantly */
+  .node.hover-off { opacity: 0.055; pointer-events: none; }
+  .node.hover-on { opacity: 1; }
+  .edge.hover-off { opacity: 0.015 !important; }
+  .edge.hover-edge { opacity: 0.68; stroke-dasharray: 4 8; animation: edge-flow 2.2s linear infinite; }
+  .cluster.dimmed { opacity: 0.12; }
+  .cluster.hovered { opacity: 1; }
+  .cluster.hovered .nebula { opacity: 1; }
+  .node.hover-on .core { filter: brightness(1.18); }
+  .node.status-active .core { animation: node-pulse 1.9s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+  .node.status-active .aura { opacity: .75; animation: aura-pulse 1.9s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+  .node.status-wait .core { opacity: .58; }
+  .node.status-fail .ring { opacity: .55; stroke-dasharray: 2 3; }
+
+  svg.labels-always .node .label { opacity: .78; }
+  svg.labels-off .node .label { display: none; }
+  svg.zoomed-out .node .label { display: none; }
+  .cluster .nebula { transition: opacity .2s; }
+  .cluster.far { opacity: .08; }
+  .cluster.focus .nebula { opacity: 1; }
+  #graph { cursor: grab; }
+  #graph.dragging { cursor: grabbing; }
+
+  @keyframes node-pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.22); }
+  }
+  @keyframes aura-pulse {
+    0%, 100% { transform: scale(.85); opacity: .35; }
+    50% { transform: scale(1.35); opacity: .8; }
+  }
+  @keyframes edge-flow {
+    from { stroke-dashoffset: 0; }
+    to { stroke-dashoffset: -24; }
+  }
+
+  body.no-pulse .node.status-active .core,
+  body.no-pulse .node.status-active .aura,
+  body.no-pulse .edge.live { animation: none !important; }
+
+  @media (max-width: 980px) {
+    .topbar { height: auto; padding: 14px 16px; align-items: flex-start; flex-direction: column; gap: 12px; }
+    .stage { height: calc(100vh - 122px); }
+    .detail { left: 16px; right: 16px; top: auto; bottom: 16px; height: 190px; width: auto; }
+    .task-chips { max-width: calc(100% - 32px); }
+    .hint { display: none; }
+    .legend { bottom: 218px; }
+    .controls { justify-content: flex-start; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true"></div>
+      <div>
+        <h1>Task DAG <span>· Constellation</span></h1>
+        <p id="protoMeta">PROTOTYPE · 3/4 TASKS · 34/40 NODES</p>
+      </div>
+    </div>
+    <div class="controls">
+      <div class="segmented" id="layoutSwitch" role="group" aria-label="Layout">
+        <button type="button" data-layout="constellation" class="on">Force</button>
+        <button type="button" data-layout="hierarchy">Hierarchy</button>
+      </div>
+      <label class="slider">clustering
+        <input id="clusterRange" type="range" min="0" max="100" value="72" />
+        <span id="clusterValue">0.72</span>
+      </label>
+      <label class="slider">overlap
+        <input id="overlapRange" type="range" min="0" max="60" value="30" />
+        <span id="overlapValue">0.30</span>
+      </label>
+      <label class="slider">cross repel
+        <input id="crossRange" type="range" min="0" max="100" value="0" style="width:78px" />
+        <span id="crossValue">0.00</span>
+      </label>
+      <button class="ghost" id="toggleLabels" type="button">Labels: hover</button>
+      <button class="ghost" id="togglePulse" type="button">Pulse: on</button>
+      <div class="zoomctl" aria-label="Zoom">
+        <button id="zoomOut" type="button" aria-label="Zoom out">−</button>
+        <span id="zoomValue">100%</span>
+        <button id="zoomIn" type="button" aria-label="Zoom in">+</button>
+        <button id="fitView" type="button" title="Fit all clusters" style="width:auto;padding:0 8px">Fit</button>
+      </div>
+      <button class="ghost" id="resetView" type="button">Reset</button>
+    </div>
+  </header>
+
+  <main class="stage" id="stage">
+    <svg id="graph" role="img" aria-label="Task DAG 圆点星群原型"></svg>
+    <div class="hud">
+      <div class="task-rail" id="taskRail"></div>
+      <div class="hint">Click a node to focus · Click a cluster title to isolate · Esc to go back</div>
+      <aside class="detail" id="detail"></aside>
+      <div class="legend">
+        <span class="item"><i class="ll live"></i>active</span>
+        <span class="item"><i class="ll done"></i>done</span>
+        <span class="item"><i class="ll wait"></i>waiting</span>
+        <span class="item"><i class="ll fail"></i>failed</span>
+        <span class="item">size = step weight</span>
+      </div>
+      <div class="minimap" id="minimap" title="Infinite canvas minimap — click to move">
+        <svg id="minimapSvg" viewBox="0 0 160 104" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="zoom-pill" id="zoomPill">100%</div>
+      </div>
+    </div>
+  </main>
+
+<script>
+(() => {
+  "use strict";
+
+  // ---------------------------------------------------------------------------
+  // Fake data: three tasks, each a small DAG. No cross-task links exist by construction.
+  // ---------------------------------------------------------------------------
+  const TASKS = [
+    {
+      id: "fix-login",
+      name: "修复登录页崩溃",
+      meta: "spine · 11 steps · 42m",
+      hue: 188,
+      template: "spine",
+      live: true,
+      nodes: [
+        { id: "a01", label: "收到报错", type: "start", status: "done", t: 0.00, detail: "用户报告登录页白屏" },
+        { id: "a02", label: "复现", type: "gen", status: "done", t: 0.08, detail: "在本地稳定复现" },
+        { id: "a03", label: "定位 storage 竞态", type: "gen", status: "done", t: 0.16, detail: "auth 与 session 同时写 storage" },
+        { id: "a04", label: "读取 auth.ts", type: "tool", status: "done", t: 0.23, detail: "读 auth 初始化路径" },
+        { id: "a05", label: "读取 session.ts", type: "tool", status: "done", t: 0.25, detail: "读 session 恢复路径" },
+        { id: "a06", label: "补测试", type: "gen", status: "done", t: 0.35, detail: "新增 storage 竞态用例" },
+        { id: "a07", label: "mock 未隔离", type: "wait", status: "fail", t: 0.42, detail: "测试互相污染，第一次失败" },
+        { id: "a08", label: "重试", type: "gen", status: "active", t: 0.54, detail: "正在清理 mock 边界" },
+        { id: "a09", label: "修复补丁", type: "tool", status: "wait", t: 0.66, detail: "等待重试通过" },
+        { id: "a10", label: "验证", type: "gen", status: "pending", t: 0.82, detail: "跑 auth + session 全量" },
+        { id: "a11", label: "Landing", type: "end", status: "pending", t: 1.00, detail: "完成后提交到 dev/lxy" }
+      ],
+      links: [
+        ["a01", "a02", "seq"], ["a02", "a03", "seq"],
+        ["a03", "a04", "seq"], ["a03", "a05", "seq"],
+        ["a04", "a06", "seq"], ["a05", "a06", "seq"],
+        ["a06", "a07", "seq"], ["a07", "a08", "retry"],
+        ["a08", "a09", "seq"], ["a09", "a10", "seq"], ["a10", "a11", "seq"]
+      ]
+    },
+    {
+      id: "resource-budget",
+      name: "资源预算调研",
+      meta: "branch · 12 steps · 3h 18m",
+      hue: 38,
+      template: "branch",
+      nodes: [
+        { id: "b01", label: "收到问题", type: "start", status: "done", t: 0.00, detail: "能否共享 worker 池" },
+        { id: "b02", label: "搜索方案", type: "gen", status: "done", t: 0.08, detail: "d3 / cytoscape / sigma" },
+        { id: "b03", label: "读 d3-force", type: "tool", status: "done", t: 0.18, detail: "forceLink / forceX / forceY" },
+        { id: "b04", label: "读 Cytoscape", type: "tool", status: "done", t: 0.21, detail: "compound nodes / cose" },
+        { id: "b05", label: "读 Sigma", type: "tool", status: "done", t: 0.24, detail: "graphology / forceatlas2" },
+        { id: "b06", label: "压测 1×8", type: "gen", status: "done", t: 0.40, detail: "基线：20 红文件" },
+        { id: "b07", label: "压测 2×8", type: "gen", status: "done", t: 0.48, detail: "16 worker：+7 红文件" },
+        { id: "b08", label: "对比阈值", type: "gen", status: "active", t: 0.62, detail: "8 与 16 之间是拐点" },
+        { id: "b09", label: "写调研", type: "tool", status: "wait", t: 0.74, detail: "等待数据确认" },
+        { id: "b10", label: "审阅", type: "gen", status: "pending", t: 0.86, detail: "检查预算推导" },
+        { id: "b11", label: "结论", type: "end", status: "pending", t: 1.00, detail: "建议 BUDGET_CPU=8" },
+        { id: "b12", label: "附录", type: "tool", status: "pending", t: 0.92, detail: "证据索引" }
+      ],
+      links: [
+        ["b01", "b02", "seq"],
+        ["b02", "b03", "seq"], ["b02", "b04", "seq"], ["b02", "b05", "seq"],
+        ["b02", "b06", "seq"], ["b02", "b07", "seq"],
+        ["b03", "b08", "seq"], ["b04", "b08", "seq"], ["b05", "b08", "seq"],
+        ["b06", "b08", "seq"], ["b07", "b08", "seq"],
+        ["b08", "b09", "seq"], ["b09", "b10", "seq"], ["b10", "b11", "seq"], ["b10", "b12", "seq"]
+      ]
+    },
+    {
+      id: "dag-circles",
+      name: "Task DAG 圆点视图",
+      meta: "orbit · 11 steps · 1h 06m",
+      hue: 286,
+      template: "orbit",
+      nodes: [
+        { id: "c01", label: "需求", type: "start", status: "done", t: 0.00, detail: "圆点、星群、Focus Mode" },
+        { id: "c02", label: "信息架构", type: "gen", status: "done", t: 0.10, detail: "任务 → 步骤 → 边" },
+        { id: "c03", label: "原型 v1", type: "tool", status: "done", t: 0.20, detail: "静态 SVG" },
+        { id: "c04", label: "体验反馈", type: "gen", status: "done", t: 0.30, detail: "节点太散、焦点不清" },
+        { id: "c05", label: "重构布局", type: "gen", status: "active", t: 0.42, detail: "力导向 + 簇引力" },
+        { id: "c06", label: "配色系统", type: "gen", status: "done", t: 0.36, detail: "任务色相轮转" },
+        { id: "c07", label: "Focus Mode", type: "gen", status: "wait", t: 0.58, detail: "等待布局稳定" },
+        { id: "c08", label: "性能检查", type: "tool", status: "pending", t: 0.70, detail: "600 节点预算" },
+        { id: "c09", label: "原型 v2", type: "tool", status: "pending", t: 0.82, detail: "交互动效" },
+        { id: "c10", label: "回归截图", type: "tool", status: "pending", t: 0.92, detail: "桌面 / 手机 / reduced-motion" },
+        { id: "c11", label: "验收", type: "end", status: "pending", t: 1.00, detail: "3 个星群可读" }
+      ],
+      links: [
+        ["c01", "c02", "seq"], ["c02", "c03", "seq"], ["c03", "c04", "seq"],
+        ["c04", "c05", "retry"], ["c03", "c06", "seq"], ["c05", "c07", "seq"],
+        ["c06", "c07", "seq"], ["c07", "c08", "seq"], ["c08", "c09", "seq"], ["c09", "c10", "seq"], ["c10", "c11", "seq"]
+      ]
+    },
+    {
+      id: "release-check",
+      name: "发布前检查",
+      meta: "spine · 6 steps · 18m",
+      hue: 100,
+      template: "spine",
+      nodes: [
+        { id: "d01", label: "版本冻结", type: "start", status: "done", t: 0.00, detail: "锁定候选版本" },
+        { id: "d02", label: "跑验收清单", type: "gen", status: "done", t: 0.18, detail: "逐条执行发布检查" },
+        { id: "d03", label: "桌面截图", type: "tool", status: "done", t: 0.34, detail: "1440×900 基准" },
+        { id: "d04", label: "手机截图", type: "tool", status: "done", t: 0.48, detail: "窄屏适配" },
+        { id: "d05", label: "reduced-motion", type: "tool", status: "done", t: 0.62, detail: "动效降级检查" },
+        { id: "d06", label: "发布", type: "end", status: "pending", t: 1.00, detail: "等待人工确认" }
+      ],
+      links: [
+        ["d01", "d02", "seq"], ["d02", "d03", "seq"], ["d02", "d04", "seq"],
+        ["d02", "d05", "seq"], ["d03", "d06", "seq"], ["d04", "d06", "seq"], ["d05", "d06", "seq"]
+      ]
+    }
+  ];
+
+  // ---------------------------------------------------------------------------
+  // Node / edge model
+  // ---------------------------------------------------------------------------
+  const nodeById = new Map();
+  const allNodes = [];
+  const allLinks = [];
+  TASKS.forEach((task, cluster) => {
+    task.nodes.forEach((node, index) => {
+      const full = { ...node, cluster, hue: task.hue, taskName: task.name, index };
+      nodeById.set(node.id, full);
+      allNodes.push(full);
+    });
+    task.links.forEach(([source, target, kind]) => {
+      allLinks.push({ source, target, kind: kind || "seq", cluster });
+    });
+  });
+
+  const RADIUS = { start: 13, end: 13, gen: 9, tool: 6.2, wait: 6.8, agent: 9 };
+  function radiusOf(node) {
+    const base = RADIUS[node.type] || 7;
+    return node.status === "active" ? base + 2.4 : base;
+  }
+  function stateClass(status) {
+    return status === "active" ? "status-active" : status === "wait" ? "status-wait" : status === "fail" ? "status-fail" : "";
+  }
+  function fillOf(node) {
+    const h = node.hue;
+    if (node.status === "active") return `hsl(${h} 92% 64% / .98)`;
+    if (node.status === "done") return `hsl(${h} 70% 54% / .62)`;
+    if (node.status === "wait") return `hsl(${h} 55% 45% / .45)`;
+    if (node.status === "fail") return `hsl(${h} 78% 60% / .82)`;
+    return `hsl(${h} 48% 38% / .42)`;
+  }
+  function labelFor(node) { return node.label; }
+  function taskOf(node) { return TASKS[node.cluster]; }
+
+  // ---------------------------------------------------------------------------
+  // Geometry: cluster anchors, deterministic initial positions, hierarchy targets
+  // ---------------------------------------------------------------------------
+  const stage = document.getElementById("stage");
+  const svg = document.getElementById("graph");
+  const detail = document.getElementById("detail");
+  const state = {
+    mode: "constellation",
+    clustering: 0.72,
+    labels: "hover",
+    pulse: true,
+    width: 0,
+    height: 0,
+    anchors: [],
+    clusterRadius: 140,
+    focusNode: null,
+    focusCluster: null,
+    alpha: 1,
+    hovered: null,
+    hoverCluster: null,
+    camera: { x: 0, y: 0, zoom: 1 },
+    suppressClick: false,
+    visibleTasks: new Set([0, 1, 2]),
+    clusterOverlap: 0.3,
+    crossRepulsion: 0,
+    clusterDrag: null
+  };
+
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+  function hashString(value) {
+    let h = 2166136261;
+    for (let i = 0; i < value.length; i++) {
+      h ^= value.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+  }
+  function initialPosition(node, anchor, index) {
+    const h = hashString(node.id);
+    const angle = ((h % 360) / 180) * Math.PI + index * 0.9;
+    const radius = 22 + ((h >>> 9) % 7) * 15;
+    return {
+      x: (anchor?.x ?? 0) + Math.cos(angle) * radius,
+      y: (anchor?.y ?? 0) + Math.sin(angle) * radius,
+      vx: 0,
+      vy: 0
+    };
+  }
+  function visibleTaskIndices() {
+    return TASKS.map((_, i) => i).filter((i) => state.visibleTasks.has(i));
+  }
+  function computeAnchors() {
+    const stageWidth = stage.clientWidth;
+    const stageHeight = stage.clientHeight;
+    const wide = window.innerWidth > 980;
+    const left = wide ? 232 : 0;
+    const right = wide ? 340 : 0;
+    const graphWidth = Math.max(320, stageWidth - left - right);
+    const graphHeight = Math.max(360, stageHeight - (wide ? 0 : 200));
+    const clusterRadius = clamp(Math.min(graphWidth, graphHeight) * 0.26, 128, 214);
+    const visible = visibleTaskIndices();
+    const anchors = new Array(TASKS.length).fill(null);
+    if (visible.length > 0) {
+      const cx = left + graphWidth / 2;
+      const cy = graphHeight * 0.5;
+      if (visible.length === 1) {
+        anchors[visible[0]] = { x: cx, y: cy };
+      } else {
+        // centers on a ring; centre distance = 2R(1-overlap), so the halo overlap is the slider value
+        const ring = (clusterRadius * (1 - state.clusterOverlap)) / Math.sin(Math.PI / visible.length);
+        visible.forEach((taskIndex, i) => {
+          const angle = visible.length === 3
+            ? ((-150 + i * 120) * Math.PI) / 180
+            : -Math.PI / 2 + (i * Math.PI * 2) / visible.length;
+          anchors[taskIndex] = { x: cx + Math.cos(angle) * ring, y: cy + Math.sin(angle) * ring };
+        });
+      }
+    }
+    return { anchors, clusterRadius, graphWidth, graphHeight };
+  }
+  function resize() {
+    const oldAnchors = state.anchors;
+    const { anchors, clusterRadius, graphWidth, graphHeight } = computeAnchors();
+    state.width = graphWidth;
+    state.height = graphHeight;
+    state.anchors = anchors;
+    state.clusterRadius = clusterRadius;
+    svg.setAttribute("viewBox", `0 0 ${stage.clientWidth} ${stage.clientHeight}`);
+    allNodes.forEach((node) => {
+      const anchor = anchors[node.cluster];
+      if (node.x === undefined) {
+        const p = initialPosition(node, anchor, node.index);
+        node.x = p.x; node.y = p.y; node.vx = p.vx; node.vy = p.vy;
+        return;
+      }
+      const old = oldAnchors[node.cluster];
+      if (old && anchor) {
+        node.x += anchor.x - old.x;
+        node.y += anchor.y - old.y;
+      }
+    });
+    state.alpha = 1;
+    updateStaticGeometry();
+    ensureHierarchyMeta();
+    fitCamera();
+  }
+
+  function worldBounds() {
+    const R = state.clusterRadius * 1.12;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    state.anchors.forEach((a) => {
+      if (!a) return;
+      minX = Math.min(minX, a.x - R);
+      maxX = Math.max(maxX, a.x + R);
+      minY = Math.min(minY, a.y - R);
+      maxY = Math.max(maxY, a.y + R);
+    });
+    if (!Number.isFinite(minX)) return { minX: 0, minY: 0, w: 320, h: 240 };
+    return { minX, minY, w: maxX - minX, h: maxY - minY };
+  }
+
+  function applyCamera() {
+    const { x, y, zoom } = state.camera;
+    world.setAttribute("transform", `translate(${x.toFixed(2)} ${y.toFixed(2)}) scale(${zoom.toFixed(4)})`);
+    svg.classList.toggle("zoomed-out", zoom < 0.64);
+    const label = `${Math.round(zoom * 100)}%`;
+    const value = document.getElementById("zoomValue");
+    const pill = document.getElementById("zoomPill");
+    if (value) value.textContent = label;
+    if (pill) pill.textContent = label;
+    updateMinimap();
+  }
+
+  function fitCamera() {
+    const stageW = stage.clientWidth, stageH = stage.clientHeight;
+    const wide = window.innerWidth > 980;
+    const left = wide ? 232 : 0;
+    const right = wide ? 340 : 0;
+    const bottom = wide ? 0 : 196;
+    const pad = 24;
+    const availW = Math.max(320, stageW - left - right - pad * 2);
+    const availH = Math.max(280, stageH - bottom - pad * 2);
+    const b = worldBounds();
+    const zoom = clamp(Math.min(availW / b.w, availH / b.h) * 0.94, 0.38, 1.35);
+    state.camera = {
+      zoom,
+      x: left + pad + (availW - b.w * zoom) / 2 - b.minX * zoom,
+      y: pad + (availH - b.h * zoom) / 2 - b.minY * zoom
+    };
+    applyCamera();
+  }
+
+  function zoomAt(clientX, clientY, factor) {
+    const rect = svg.getBoundingClientRect();
+    const sx = clientX - rect.left;
+    const sy = clientY - rect.top;
+    const camera = state.camera;
+    const wx = (sx - camera.x) / camera.zoom;
+    const wy = (sy - camera.y) / camera.zoom;
+    const zoom = clamp(camera.zoom * factor, 0.32, 2.6);
+    camera.x = sx - wx * zoom;
+    camera.y = sy - wy * zoom;
+    camera.zoom = zoom;
+    applyCamera();
+  }
+
+  function updateMinimap() {
+    const el = document.getElementById("minimapSvg");
+    if (!el) return;
+    const b = worldBounds();
+    const pad = 26;
+    const viewBox = `${b.minX - pad} ${b.minY - pad} ${b.w + pad * 2} ${b.h + pad * 2}`;
+    el.setAttribute("viewBox", viewBox);
+    const R = state.clusterRadius;
+    let html = "";
+    TASKS.forEach((task, i) => {
+      const a = state.anchors[i];
+      if (!a || !state.visibleTasks.has(i)) return;
+      html += `<circle cx="${a.x}" cy="${a.y}" r="${(R * 0.96).toFixed(1)}" fill="hsl(${task.hue} 68% 62%)" opacity=".13"/>`;
+    });
+    const visible = {
+      x: -state.camera.x / state.camera.zoom,
+      y: -state.camera.y / state.camera.zoom,
+      w: stage.clientWidth / state.camera.zoom,
+      h: stage.clientHeight / state.camera.zoom
+    };
+    html += `<rect x="${visible.x}" y="${visible.y}" width="${visible.w}" height="${visible.h}" fill="none" stroke="rgba(190,225,255,.65)" stroke-width="2" rx="4"/>`;
+    el.innerHTML = html;
+  }
+
+  // depth within a cluster, for branch template
+  function ensureHierarchyMeta() {
+    TASKS.forEach((task) => {
+      const byId = new Map(task.nodes.map((n) => [n.id, n]));
+      const indeg = new Map(task.nodes.map((n) => [n.id, 0]));
+      const out = new Map(task.nodes.map((n) => [n.id, []]));
+      task.links.forEach(([s, t]) => {
+        if (!byId.has(s) || !byId.has(t)) return;
+        out.get(s).push(t);
+        indeg.set(t, (indeg.get(t) || 0) + 1);
+      });
+      const queue = task.nodes.filter((n) => (indeg.get(n.id) || 0) === 0).map((n) => n.id);
+      const depth = new Map(task.nodes.map((n) => [n.id, 0]));
+      let guard = 0;
+      while (queue.length && guard++ < 1000) {
+        const id = queue.shift();
+        for (const next of out.get(id) || []) {
+          depth.set(next, Math.max(depth.get(next) || 0, (depth.get(id) || 0) + 1));
+          indeg.set(next, (indeg.get(next) || 0) - 1);
+          if (indeg.get(next) === 0) queue.push(next);
+        }
+      }
+      task._depth = depth;
+      task._maxDepth = Math.max(1, ...task.nodes.map((n) => depth.get(n.id) || 0));
+      const byDepth = new Map();
+      task.nodes.forEach((n) => {
+        const d = depth.get(n.id) || 0;
+        if (!byDepth.has(d)) byDepth.set(d, []);
+        byDepth.get(d).push(n);
+      });
+      byDepth.forEach((list) => list.sort((a, b) => a.t - b.t || a.id.localeCompare(b.id)));
+      task._byDepth = byDepth;
+    });
+  }
+
+  function hierarchyTarget(node) {
+    const task = TASKS[node.cluster];
+    const anchor = state.anchors[node.cluster];
+    if (!anchor) return { x: node.x, y: node.y };
+    const R = state.clusterRadius;
+    if (task.template === "orbit") {
+      const angle = -Math.PI / 2 + node.t * Math.PI * 1.84;
+      const radius = R * 0.58 * (0.9 + (node.type === "start" ? 0.14 : 0));
+      return { x: anchor.x + Math.cos(angle) * radius, y: anchor.y + Math.sin(angle) * radius };
+    }
+    if (task.template === "branch") {
+      const depth = task._depth.get(node.id) || 0;
+      const list = task._byDepth.get(depth) || [node];
+      const row = list.findIndex((n) => n.id === node.id);
+      const spread = Math.min(R * 1.45, 220);
+      return {
+        x: anchor.x + (depth / task._maxDepth - 0.5) * spread,
+        y: anchor.y + (row - (list.length - 1) / 2) * 30
+      };
+    }
+    // spine
+    return {
+      x: anchor.x + (node.t - 0.5) * R * 1.75,
+      y: anchor.y + Math.sin(node.t * Math.PI * 1.6) * 26
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Small force simulation; no external dependency.
+  // ---------------------------------------------------------------------------
+  function simulationStep() {
+    const visible = (node) => state.visibleTasks.has(node.cluster) && state.anchors[node.cluster] !== null;
+    if (state.mode === "hierarchy") {
+      allNodes.forEach((node) => {
+        if (!visible(node)) return;
+        const target = hierarchyTarget(node);
+        node.x += (target.x - node.x) * 0.12;
+        node.y += (target.y - node.y) * 0.12;
+        node.vx *= 0.7; node.vy *= 0.7;
+      });
+      return;
+    }
+
+    const alpha = Math.max(0.02, state.alpha);
+    const gravity = 0.014 + state.clustering * 0.1;
+    // cluster gravity
+    allNodes.forEach((node) => {
+      if (!visible(node)) return;
+      const anchor = state.anchors[node.cluster];
+      node.vx += (anchor.x - node.x) * gravity * alpha;
+      node.vy += (anchor.y - node.y) * gravity * alpha;
+    });
+    // springs
+    allLinks.forEach((link) => {
+      if (!state.visibleTasks.has(link.cluster)) return;
+      const a = nodeById.get(link.source);
+      const b = nodeById.get(link.target);
+      if (!a || !b || !visible(a) || !visible(b)) return;
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 0.001;
+      const desired = link.kind === "wait" ? 40 : 52;
+      const force = ((dist - desired) / dist) * 0.011 * alpha;
+      const fx = dx * force, fy = dy * force;
+      a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy;
+    });
+    // repulsion; cross-cluster repulsion is stronger to keep the star clusters apart
+    for (let i = 0; i < allNodes.length; i++) {
+      const a = allNodes[i];
+      if (!visible(a)) continue;
+      for (let j = i + 1; j < allNodes.length; j++) {
+        const b = allNodes[j];
+        if (!visible(b)) continue;
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const d2 = dx * dx + dy * dy || 0.01;
+        const same = a.cluster === b.cluster;
+        // Cross-DAG long-range repulsion is a knob, not a law: default 0, so clusters can interpenetrate.
+        const crossStrength = state.crossRepulsion > 0 ? 1600 * state.crossRepulsion : 0;
+        if (!same && (crossStrength === 0 || d2 > 320 * 320)) continue;
+        const strength = (same ? 620 : crossStrength) / Math.max(d2, 90);
+        const fx = dx * strength * alpha, fy = dy * strength * alpha;
+        a.vx -= fx; a.vy -= fy; b.vx += fx; b.vy += fy;
+      }
+    }
+    // soft containment: keep each star inside its own halo
+    allNodes.forEach((node) => {
+      if (!visible(node)) return;
+      const anchor = state.anchors[node.cluster];
+      const dx = node.x - anchor.x, dy = node.y - anchor.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+      const max = state.clusterRadius * 0.92;
+      if (dist > max) {
+        const pull = (dist - max) * 0.12 * alpha;
+        node.vx -= (dx / dist) * pull;
+        node.vy -= (dy / dist) * pull;
+      }
+    });
+    // collision and integration
+    allNodes.forEach((node) => {
+      if (!visible(node)) return;
+      node.vx *= 0.86; node.vy *= 0.86;
+      node.x += node.vx;
+      node.y += node.vy;
+    });
+    for (let i = 0; i < allNodes.length; i++) {
+      const a = allNodes[i];
+      if (!visible(a)) continue;
+      for (let j = i + 1; j < allNodes.length; j++) {
+        const b = allNodes[j];
+        if (!visible(b)) continue;
+        // Collision is global: different DAGs may interleave, but their dots must not cover each other.
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+        const min = radiusOf(a) + radiusOf(b) + 6;
+        if (d >= min) continue;
+        const push = (min - d) / d / 2;
+        a.x -= dx * push; a.y -= dy * push;
+        b.x += dx * push; b.y += dy * push;
+      }
+    }
+    // hard containment: a star never leaves its own halo
+    allNodes.forEach((node) => {
+      if (!visible(node)) return;
+      const anchor = state.anchors[node.cluster];
+      const dx = node.x - anchor.x, dy = node.y - anchor.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+      const max = state.clusterRadius * 0.98;
+      if (dist > max) {
+        node.x = anchor.x + (dx / dist) * max;
+        node.y = anchor.y + (dy / dist) * max;
+        node.vx *= 0.4; node.vy *= 0.4;
+      }
+    });
+    state.alpha *= 0.985;
+  }
+
+  // ---------------------------------------------------------------------------
+  // DOM: build once, update positions/classes every frame
+  // ---------------------------------------------------------------------------
+  const ns = "http://www.w3.org/2000/svg";
+  function create(name, attrs = {}) {
+    const el = document.createElementNS(ns, name);
+    for (const [key, value] of Object.entries(attrs)) el.setAttribute(key, value);
+    return el;
+  }
+
+  const world = create("g", { id: "world" });
+  const bgLayer = create("g", { class: "bg" });
+  const clusterLayer = create("g", { class: "clusters" });
+  const edgeLayer = create("g", { class: "edges" });
+  const nodeLayer = create("g", { class: "nodes" });
+
+  const clusterEls = [];
+  const edgeEls = [];
+  const nodeEls = new Map();
+
+  function buildScene() {
+    svg.appendChild(world);
+    world.appendChild(bgLayer);
+    world.appendChild(clusterLayer);
+    world.appendChild(edgeLayer);
+    world.appendChild(nodeLayer);
+
+    // faint star field + a reusable blur for the irregular nebula enclosures
+    const defs = create("defs");
+    const blur = create("filter", { id: "nebula-blur", x: "-80%", y: "-80%", width: "260%", height: "260%" });
+    blur.appendChild(create("feGaussianBlur", { stdDeviation: "18" }));
+    defs.appendChild(blur);
+    svg.appendChild(defs);
+
+    let seed = 7;
+    const rand = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    for (let i = 0; i < 90; i++) {
+      const c = create("circle", {
+        cx: rand() * 1400, cy: rand() * 900, r: (0.5 + rand() * 1.1).toFixed(2),
+        fill: "rgba(160, 205, 255, .28)"
+      });
+      c.dataset.star = "1";
+      bgLayer.appendChild(c);
+    }
+
+    const NEBULA_BLOBS = [
+      { dx: -0.08, dy: 0.02, rx: 0.82, ry: 0.58, rot: -16, opacity: 0.045 },
+      { dx: 0.15, dy: -0.08, rx: 0.64, ry: 0.72, rot: 24, opacity: 0.033 },
+      { dx: -0.18, dy: 0.14, rx: 0.72, ry: 0.46, rot: 38, opacity: 0.028 }
+    ];
+    TASKS.forEach((task, i) => {
+      const group = create("g", { class: "cluster", "data-cluster": String(i) });
+      group.style.setProperty("--h", String(task.hue));
+      const nebula = create("g", { class: "nebula" });
+      const blobs = NEBULA_BLOBS.map((spec) => {
+        const blob = create("ellipse", {
+          class: "nebula-blob", rx: "0", ry: "0", fill: `hsl(${task.hue} 55% 72% / 1)`,
+          opacity: String(spec.opacity), filter: "url(#nebula-blur)"
+        });
+        nebula.appendChild(blob);
+        return { el: blob, spec };
+      });
+      const hit = create("ellipse", { class: "cluster-hit", cx: "0", cy: "0", rx: "0", ry: "0" });
+      hit.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        event.stopPropagation();
+        startClusterDrag(event, i);
+      });
+      const title = create("g", { class: "cluster-title" });
+      const name = create("text", { class: "name", x: "0", y: "0" });
+      name.textContent = task.name;
+      const meta = create("text", { class: "meta", x: "0", y: "14" });
+      meta.textContent = task.meta + (task.live ? " · LIVE" : "");
+      title.appendChild(name); title.appendChild(meta);
+      title.addEventListener("click", (event) => { event.stopPropagation(); focusCluster(i); });
+      group.appendChild(nebula); group.appendChild(hit); group.appendChild(title);
+      clusterLayer.appendChild(group);
+      clusterEls.push({ group, blobs, hit, title, name, meta });
+    });
+
+    allLinks.forEach((link) => {
+      const a = nodeById.get(link.source);
+      const b = nodeById.get(link.target);
+      const path = create("path", { class: "edge", d: "", stroke: `hsl(${a.hue} 72% 60% / .22)` });
+      if (b.status === "active" || a.status === "active") path.classList.add("live");
+      edgeLayer.appendChild(path);
+      edgeEls.push({ link, path, a, b });
+    });
+
+    allNodes.forEach((node) => {
+      const g = create("g", { class: `node ${stateClass(node.status)}`, "data-id": node.id });
+      const aura = create("circle", { class: "aura", r: String(radiusOf(node) + 8), fill: `hsl(${node.hue} 90% 62% / .12)`, opacity: "0" });
+      const core = create("circle", { class: "core", r: String(radiusOf(node)), fill: fillOf(node) });
+      const ring = create("circle", { class: "ring", r: String(radiusOf(node) + 4.5), fill: "none", stroke: `hsl(${node.hue} 88% 70% / .8)`, "stroke-width": "1" });
+      const hit = create("circle", { class: "hit", r: String(Math.max(16, radiusOf(node) + 8)), fill: "transparent" });
+      const label = create("text", { class: "label", x: String(radiusOf(node) + 8), y: "3" });
+      label.textContent = labelFor(node);
+      g.appendChild(aura); g.appendChild(core); g.appendChild(ring); g.appendChild(hit); g.appendChild(label);
+      g.addEventListener("click", (event) => { event.stopPropagation(); focusNode(node.id); });
+      g.addEventListener("mouseenter", () => { state.hovered = node.id; state.hoverCluster = node.cluster; applyClasses(); });
+      g.addEventListener("mouseleave", () => { state.hovered = null; state.hoverCluster = null; applyClasses(); });
+      nodeLayer.appendChild(g);
+      nodeEls.set(node.id, { g, aura, core, ring, label });
+    });
+
+    // background click clears focus; a drag must not count as a click
+    svg.addEventListener("click", (event) => {
+      if (state.suppressClick) { state.suppressClick = false; return; }
+      if (event.target === svg || event.target.classList.contains("bg") || event.target.dataset.star) clearFocus();
+    });
+  }
+
+  function startClusterDrag(event, cluster) {
+    const anchor = state.anchors[cluster];
+    if (!anchor) return;
+    state.clusterDrag = {
+      cluster,
+      sx: event.clientX,
+      sy: event.clientY,
+      ax: anchor.x,
+      ay: anchor.y,
+      nodes: allNodes.filter((n) => n.cluster === cluster).map((n) => ({ node: n, x: n.x, y: n.y })),
+      moved: false
+    };
+    svg.setPointerCapture(event.pointerId);
+    svg.classList.add("dragging");
+  }
+
+  function updateStaticGeometry() {
+    clusterEls.forEach((els, i) => {
+      const anchor = state.anchors[i];
+      const visible = state.visibleTasks.has(i) && anchor !== null;
+      els.group.style.display = visible ? "" : "none";
+      if (!visible) return;
+      const R = state.clusterRadius;
+      els.blobs.forEach(({ el, spec }) => {
+        const cx = anchor.x + spec.dx * R;
+        const cy = anchor.y + spec.dy * R;
+        el.setAttribute("cx", cx);
+        el.setAttribute("cy", cy);
+        el.setAttribute("rx", (R * spec.rx).toFixed(1));
+        el.setAttribute("ry", (R * spec.ry).toFixed(1));
+        el.setAttribute("transform", `rotate(${spec.rot} ${cx} ${cy})`);
+      });
+      els.hit.setAttribute("cx", anchor.x);
+      els.hit.setAttribute("cy", anchor.y);
+      els.hit.setAttribute("rx", (R * 0.96).toFixed(1));
+      els.hit.setAttribute("ry", (R * 0.82).toFixed(1));
+      els.title.setAttribute("transform", `translate(${anchor.x - R + 10}, ${anchor.y - R + 22})`);
+    });
+    allNodes.forEach((node) => {
+      const el = nodeEls.get(node.id);
+      if (el) el.g.style.display = state.visibleTasks.has(node.cluster) ? "" : "none";
+    });
+    edgeEls.forEach(({ link, path }) => {
+      path.style.display = state.visibleTasks.has(link.cluster) ? "" : "none";
+    });
+  }
+
+  function bezierPath(a, b, index) {
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const length = Math.sqrt(dx * dx + dy * dy) || 1;
+    const nx = -dy / length, ny = dx / length;
+    const bend = Math.min(26, length * 0.16) * (index % 2 === 0 ? 1 : -1);
+    const mx = (a.x + b.x) / 2 + nx * bend;
+    const my = (a.y + b.y) / 2 + ny * bend;
+    return `M ${a.x.toFixed(1)} ${a.y.toFixed(1)} Q ${mx.toFixed(1)} ${my.toFixed(1)} ${b.x.toFixed(1)} ${b.y.toFixed(1)}`;
+  }
+
+  function updatePositions() {
+    edgeEls.forEach(({ link, path, a, b }, index) => {
+      path.setAttribute("d", bezierPath(a, b, index));
+      path.dataset.cluster = String(link.cluster);
+    });
+    nodeEls.forEach(({ g }, id) => {
+      const node = nodeById.get(id);
+      g.setAttribute("transform", `translate(${node.x.toFixed(1)} ${node.y.toFixed(1)})`);
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Focus mode
+  // ---------------------------------------------------------------------------
+  function neighborsOf(nodeId) {
+    const set = new Set([nodeId]);
+    allLinks.forEach((link) => {
+      if (link.source === nodeId) set.add(link.target);
+      if (link.target === nodeId) set.add(link.source);
+    });
+    return set;
+  }
+
+  function applyClasses() {
+    const focusId = state.focusNode;
+    const focusClusterId = state.focusCluster;
+    const neighbors = focusId ? neighborsOf(focusId) : null;
+    const hoverClusterId = state.hoverCluster !== null && focusId === null && focusClusterId === null ? state.hoverCluster : null;
+    allNodes.forEach((node) => {
+      const el = nodeEls.get(node.id).g;
+      el.classList.remove("far", "dim", "selected", "neighbor", "hover-on", "hover-off");
+      if (focusId) {
+        if (node.cluster !== focusClusterId) el.classList.add("far");
+        else if (!neighbors.has(node.id)) el.classList.add("dim");
+        if (node.id === focusId) el.classList.add("selected");
+        else if (neighbors.has(node.id)) el.classList.add("neighbor");
+      } else if (focusClusterId !== null) {
+        if (node.cluster !== focusClusterId) el.classList.add("far");
+      } else if (hoverClusterId !== null) {
+        if (node.cluster === hoverClusterId) el.classList.add("hover-on");
+        else el.classList.add("hover-off");
+      }
+    });
+    edgeEls.forEach(({ link, path }) => {
+      path.classList.remove("far", "dim", "hot", "hover-edge", "hover-off");
+      if (focusId) {
+        const incident = link.source === focusId || link.target === focusId;
+        if (link.cluster !== focusClusterId) path.classList.add("far");
+        else if (incident) path.classList.add("hot");
+        else path.classList.add("dim");
+      } else if (focusClusterId !== null) {
+        if (link.cluster !== focusClusterId) path.classList.add("far");
+      } else if (hoverClusterId !== null) {
+        if (link.cluster === hoverClusterId) path.classList.add("hover-edge");
+        else path.classList.add("hover-off");
+      }
+    });
+    clusterEls.forEach((els, i) => {
+      els.group.classList.remove("focus", "far", "hovered", "dimmed");
+      if (focusClusterId !== null && i !== focusClusterId) els.group.classList.add("far");
+      if (focusClusterId !== null && i === focusClusterId) els.group.classList.add("focus");
+      if (hoverClusterId !== null) {
+        if (i === hoverClusterId) els.group.classList.add("hovered");
+        else els.group.classList.add("dimmed");
+      }
+    });
+    svg.classList.toggle("labels-always", state.labels === "always");
+    svg.classList.toggle("labels-off", state.labels === "off");
+    document.querySelectorAll(".task-row").forEach((row) => {
+      row.classList.toggle("focused", focusClusterId !== null && Number(row.dataset.cluster) === focusClusterId);
+    });
+  }
+
+  function applyFocus() {
+    applyClasses();
+    renderDetail();
+  }
+
+  function focusNode(id) {
+    const node = nodeById.get(id);
+    if (!node) return;
+    state.focusNode = id;
+    state.focusCluster = node.cluster;
+    applyFocus();
+    showNodeDetail(node);
+  }
+  function focusCluster(index) {
+    state.focusCluster = index;
+    state.focusNode = null;
+    applyFocus();
+    showClusterDetail(index);
+  }
+  function clearFocus() {
+    state.focusNode = null;
+    state.focusCluster = null;
+    applyFocus();
+    renderDetail();
+  }
+  function exitFocus() {
+    if (state.focusNode) {
+      const cluster = state.focusCluster;
+      state.focusNode = null;
+      state.focusCluster = cluster;
+      applyFocus();
+      showClusterDetail(cluster);
+    } else if (state.focusCluster !== null) {
+      clearFocus();
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Detail panel
+  // ---------------------------------------------------------------------------
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+  }
+  function statusText(status) {
+    return { active: "running", done: "done", wait: "waiting", fail: "failed", pending: "pending" }[status] || status;
+  }
+  function statusClass(status) {
+    return status === "active" ? "live" : status;
+  }
+  function showNodeDetail(node) {
+    const task = taskOf(node);
+    const incoming = allLinks.filter((l) => l.target === node.id).length;
+    const outgoing = allLinks.filter((l) => l.source === node.id).length;
+    const started = Math.round(node.t * 100);
+    detail.style.setProperty("--h", task.hue);
+    detail.innerHTML = `
+      <div class="eyebrow">NODE FOCUS · ${escapeHtml(task.name)}</div>
+      <h2>${escapeHtml(node.label)}</h2>
+      <p class="sub">${escapeHtml(node.detail)}</p>
+      <div class="statusline"><span class="dot ${statusClass(node.status)}"></span>${statusText(node.status)} · step ${String(node.index + 1).padStart(2, "0")}</div>
+      <div class="bar"><i style="width:${started}%"></i></div>
+      <dl class="kv">
+        <dt>task progress</dt><dd>${started}%</dd>
+        <dt>incoming</dt><dd>${incoming}</dd>
+        <dt>outgoing</dt><dd>${outgoing}</dd>
+        <dt>type</dt><dd>${escapeHtml(node.type)}</dd>
+      </dl>
+      <button class="back" type="button" id="backToCluster">← back to ${escapeHtml(task.name)}</button>
+    `;
+    const back = document.getElementById("backToCluster");
+    if (back) back.addEventListener("click", () => focusCluster(node.cluster));
+  }
+  function showClusterDetail(index) {
+    const task = TASKS[index];
+    const done = task.nodes.filter((n) => n.status === "done").length;
+    const active = task.nodes.filter((n) => n.status === "active").length;
+    const failed = task.nodes.filter((n) => n.status === "fail").length;
+    const waiting = task.nodes.filter((n) => n.status === "wait").length;
+    detail.style.setProperty("--h", task.hue);
+    detail.innerHTML = `
+      <div class="eyebrow">CLUSTER FOCUS</div>
+      <h2>${escapeHtml(task.name)}</h2>
+      <p class="sub">${escapeHtml(task.meta)}${task.live ? " · LIVE" : ""}</p>
+      <div class="statusline"><span class="dot live"></span>${active ? `${active} active step${active > 1 ? "s" : ""}` : "no active step"} · ${done}/${task.nodes.length} done</div>
+      <div class="bar"><i style="width:${Math.round((done / task.nodes.length) * 100)}%"></i></div>
+      <dl class="kv">
+        <dt>done</dt><dd>${done}</dd>
+        <dt>active</dt><dd>${active}</dd>
+        <dt>waiting</dt><dd>${waiting}</dd>
+        <dt>failed</dt><dd>${failed}</dd>
+        <dt>total steps</dt><dd>${task.nodes.length}</dd>
+      </dl>
+      <div class="node-list">
+        ${task.nodes.map((n) => `<div class="node-row"><span class="dot"></span><span>${escapeHtml(n.label)}</span><span style="margin-left:auto;color:${n.status === "active" ? "hsl(" + task.hue + " 85% 70%)" : "var(--dim)"}">${statusText(n.status)}</span></div>`).join("")}
+      </div>
+      <button class="back" type="button" id="backToOverview">← back to all tasks</button>
+    `;
+    const back = document.getElementById("backToOverview");
+    if (back) back.addEventListener("click", clearFocus);
+  }
+  function renderDetail() {
+    if (state.focusNode) {
+      const node = nodeById.get(state.focusNode);
+      if (node) showNodeDetail(node);
+      return;
+    }
+    if (state.focusCluster !== null) {
+      showClusterDetail(state.focusCluster);
+      return;
+    }
+    detail.style.setProperty("--h", 188);
+    detail.innerHTML = `
+      <div class="empty">
+        <div class="eyebrow">FOCUS MODE</div>
+        <div class="glyph">◎</div>
+        <h2>Explore the constellation</h2>
+        <p class="sub">Click any dot to inspect a step and its neighbours. Click a cluster title to isolate one task. Esc steps back.</p>
+        <dl class="kv">
+          <dt>tasks</dt><dd>${visibleTaskIndices().length}</dd>
+          <dt>nodes</dt><dd>${allNodes.filter((n) => state.visibleTasks.has(n.cluster)).length}</dd>
+          <dt>cross-task edges</dt><dd>0</dd>
+          <dt>layout</dt><dd>${state.mode}</dd>
+        </dl>
+      </div>
+    `;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Controls
+  // ---------------------------------------------------------------------------
+  function updateHeader() {
+    const visible = visibleTaskIndices();
+    const nodeCount = allNodes.filter((n) => state.visibleTasks.has(n.cluster)).length;
+    const meta = document.getElementById("protoMeta");
+    if (meta) meta.textContent = `PROTOTYPE · ${visible.length}/${TASKS.length} TASKS · ${nodeCount}/${allNodes.length} NODES`;
+  }
+
+  function afterVisibilityChange() {
+    if (state.focusCluster !== null && !state.visibleTasks.has(state.focusCluster)) clearFocus();
+    updateHeader();
+    resize();
+    applyClasses();
+    renderDetail();
+  }
+
+  function buildChips() {
+    const wrap = document.getElementById("taskRail");
+    wrap.innerHTML = `<div class="rail-head"><span>Conversations</span><span><button type="button" id="selectAll">All</button> · <button type="button" id="selectNone">None</button></span></div>`;
+    TASKS.forEach((task, i) => {
+      const row = document.createElement("label");
+      row.className = "task-row" + (state.visibleTasks.has(i) ? " on" : "");
+      row.dataset.cluster = String(i);
+      row.style.setProperty("--h", task.hue);
+      row.innerHTML = `<input type="checkbox" ${state.visibleTasks.has(i) ? "checked" : ""} /><span class="dot"></span><span class="name">${escapeHtml(task.name)}</span>${task.live ? '<span class="live">LIVE</span>' : ""}<span class="count">${task.nodes.length}</span>`;
+      const input = row.querySelector("input");
+      input.addEventListener("change", () => {
+        if (input.checked) state.visibleTasks.add(i);
+        else state.visibleTasks.delete(i);
+        row.classList.toggle("on", input.checked);
+        afterVisibilityChange();
+      });
+      wrap.appendChild(row);
+    });
+    document.getElementById("selectAll").addEventListener("click", () => {
+      TASKS.forEach((_, i) => state.visibleTasks.add(i));
+      buildChips(); afterVisibilityChange();
+    });
+    document.getElementById("selectNone").addEventListener("click", () => {
+      state.visibleTasks.clear();
+      buildChips(); afterVisibilityChange();
+    });
+  }
+
+  function setLayout(mode) {
+    state.mode = mode;
+    document.querySelectorAll("#layoutSwitch button").forEach((button) => {
+      button.classList.toggle("on", button.dataset.layout === mode);
+    });
+    state.alpha = 1;
+    renderDetail();
+  }
+  function setLabels(mode) {
+    state.labels = mode;
+    const label = mode === "hover" ? "Labels: hover" : mode === "always" ? "Labels: always" : "Labels: off";
+    document.getElementById("toggleLabels").textContent = label;
+    svg.classList.toggle("labels-always", mode === "always");
+    svg.classList.toggle("labels-off", mode === "off");
+  }
+  function togglePulse() {
+    state.pulse = !state.pulse;
+    document.body.classList.toggle("no-pulse", !state.pulse);
+    document.getElementById("togglePulse").textContent = state.pulse ? "Pulse: on" : "Pulse: off";
+  }
+
+  function wireControls() {
+    document.querySelectorAll("#layoutSwitch button").forEach((button) => {
+      button.addEventListener("click", () => setLayout(button.dataset.layout));
+    });
+    const range = document.getElementById("clusterRange");
+    range.addEventListener("input", () => {
+      state.clustering = Number(range.value) / 100;
+      document.getElementById("clusterValue").textContent = state.clustering.toFixed(2);
+      state.alpha = 1;
+    });
+    const overlap = document.getElementById("overlapRange");
+    overlap.addEventListener("input", () => {
+      state.clusterOverlap = Number(overlap.value) / 100;
+      document.getElementById("overlapValue").textContent = state.clusterOverlap.toFixed(2);
+      resize();
+      applyClasses();
+    });
+    const cross = document.getElementById("crossRange");
+    cross.addEventListener("input", () => {
+      state.crossRepulsion = Number(cross.value) / 100;
+      document.getElementById("crossValue").textContent = state.crossRepulsion.toFixed(2);
+      state.alpha = 1;
+    });
+    document.getElementById("toggleLabels").addEventListener("click", () => {
+      setLabels(state.labels === "hover" ? "always" : state.labels === "always" ? "off" : "hover");
+    });
+    document.getElementById("togglePulse").addEventListener("click", togglePulse);
+    document.getElementById("resetView").addEventListener("click", () => {
+      clearFocus();
+      allNodes.forEach((node) => {
+        const p = initialPosition(node, state.anchors[node.cluster], node.index);
+        node.x = p.x; node.y = p.y; node.vx = 0; node.vy = 0;
+      });
+      state.alpha = 1;
+      setLayout(state.mode);
+      fitCamera();
+    });
+    document.getElementById("zoomIn").addEventListener("click", () => zoomAt(stage.clientWidth / 2, stage.clientHeight / 2, 1.28));
+    document.getElementById("zoomOut").addEventListener("click", () => zoomAt(stage.clientWidth / 2, stage.clientHeight / 2, 0.78));
+    document.getElementById("fitView").addEventListener("click", () => fitCamera());
+
+    // infinite-canvas gesture: drag the background to pan, wheel to zoom at the cursor
+    let drag = null;
+    svg.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      const target = event.target;
+      const onBackground = target === svg || target.classList.contains("bg") || target.dataset.star === "1" || target.classList.contains("nebula-blob");
+      if (!onBackground) return;
+      drag = { sx: event.clientX, sy: event.clientY, x: state.camera.x, y: state.camera.y, moved: false };
+      svg.setPointerCapture(event.pointerId);
+      svg.classList.add("dragging");
+    });
+    svg.addEventListener("pointermove", (event) => {
+      if (state.clusterDrag) {
+        const d = state.clusterDrag;
+        const dx = event.clientX - d.sx, dy = event.clientY - d.sy;
+        if (Math.abs(dx) + Math.abs(dy) > 3) d.moved = true;
+        const anchor = state.anchors[d.cluster];
+        if (!anchor) return;
+        anchor.x = d.ax + dx;
+        anchor.y = d.ay + dy;
+        d.nodes.forEach(({ node, x, y }) => { node.x = x + dx; node.y = y + dy; });
+        updateStaticGeometry();
+        updatePositions();
+        updateMinimap();
+        return;
+      }
+      if (!drag) return;
+      const dx = event.clientX - drag.sx, dy = event.clientY - drag.sy;
+      if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
+      state.camera.x = drag.x + dx;
+      state.camera.y = drag.y + dy;
+      applyCamera();
+    });
+    const endDrag = () => {
+      if (state.clusterDrag && state.clusterDrag.moved) state.suppressClick = true;
+      if (drag && drag.moved) state.suppressClick = true;
+      state.clusterDrag = null;
+      drag = null;
+      svg.classList.remove("dragging");
+    };
+    svg.addEventListener("pointerup", endDrag);
+    svg.addEventListener("pointercancel", endDrag);
+    svg.addEventListener("wheel", (event) => {
+      event.preventDefault();
+      zoomAt(event.clientX, event.clientY, Math.exp(-event.deltaY * 0.0012));
+    }, { passive: false });
+    svg.addEventListener("dblclick", (event) => {
+      const target = event.target;
+      if (target === svg || target.classList.contains("bg") || target.dataset.star === "1") fitCamera();
+    });
+
+    const minimap = document.getElementById("minimapSvg");
+    minimap.addEventListener("click", (event) => {
+      const vb = minimap.viewBox.baseVal;
+      const rect = minimap.getBoundingClientRect();
+      const wx = vb.x + ((event.clientX - rect.left) / rect.width) * vb.width;
+      const wy = vb.y + ((event.clientY - rect.top) / rect.height) * vb.height;
+      state.camera.x = stage.clientWidth / 2 - wx * state.camera.zoom;
+      state.camera.y = stage.clientHeight / 2 - wy * state.camera.zoom;
+      applyCamera();
+    });
+
+    window.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") exitFocus();
+      if (event.key === "0") fitCamera();
+    });
+    window.addEventListener("resize", () => resizedHandler());
+  }
+
+  // ---------------------------------------------------------------------------
+  // Animation loop
+  // ---------------------------------------------------------------------------
+  function resizedHandler() {
+    resize();
+    updateStaticGeometry();
+  }
+
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(48, now - last);
+    last = now;
+    simulationStep();
+    updatePositions();
+    requestAnimationFrame(frame);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Boot
+  // ---------------------------------------------------------------------------
+  buildScene();
+  buildChips();
+  updateHeader();
+  resize();
+  ensureHierarchyMeta();
+  updateStaticGeometry();
+  updatePositions();
+  renderDetail();
+  const initialLayout = new URLSearchParams(location.search).get("layout") === "hierarchy" ? "hierarchy" : "constellation";
+  setLayout(initialLayout);
+  setLabels("hover");
+  wireControls();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

@@ -42,7 +42,15 @@ import {
   summarizeRun,
   taskSettings,
 } from './history.ts'
-import type { RunConversation, RunSummary, RunTask, TaskFacts, TaskSettings } from './history.ts'
+import type {
+  RunConversation,
+  RunSummary,
+  RunTask,
+  TaskFacts,
+  TaskSettings,
+  DagSettings,
+} from './history.ts'
+import { Constellation } from './constellation-view.tsx'
 import { layout } from './layout.ts'
 import type { DagEdge } from './layout.ts'
 import {
@@ -61,6 +69,7 @@ const NODE_HEIGHT = 38
 const POLL_MS = 2000
 const NO_RUNS: RunSummary[] = []
 type TaskFilter = 'all' | 'failed' | 'slow'
+type TaskTab = 'structure' | 'timeline' | 'constellation'
 
 const formatCost = (cost: number) =>
   cost > 0 && cost < 0.001 ? '<$0.001' : `$${cost.toFixed(cost < 1 ? 3 : 2)}`
@@ -1074,16 +1083,28 @@ function TaskDetail({
   )
 }
 
-/** The settings popover: history days and cost detail; changes write project settings; no history is deleted. */
-function SettingsMenu({ settings }: { settings: TaskSettings }) {
+/** The settings popover: history days, cost detail and the Constellation's appearance; no history is deleted. */
+function SettingsMenu({
+  settings,
+  onDag,
+}: {
+  settings: TaskSettings
+  onDag: (patch: Partial<DagSettings>) => void
+}) {
   const [draftDays, setDraftDays] = useState(settings.historyDays)
   const [draftCost, setDraftCost] = useState(settings.costDetail)
+  const [draftDag, setDraftDag] = useState(settings.dag)
   const [error, setError] = useState<string>()
   const [saving, setSaving] = useState(false)
   useEffect(() => {
     setDraftDays(settings.historyDays)
     setDraftCost(settings.costDetail)
-  }, [settings.historyDays, settings.costDetail])
+    setDraftDag(settings.dag)
+  }, [settings.historyDays, settings.costDetail, settings.dag])
+  const changed =
+    draftDays !== settings.historyDays ||
+    draftCost !== settings.costDetail ||
+    JSON.stringify(draftDag) !== JSON.stringify(settings.dag)
   const save = () => {
     if (!Number.isSafeInteger(draftDays) || draftDays < 1) {
       setError('Enter a positive whole number of days.')
@@ -1092,7 +1113,12 @@ function SettingsMenu({ settings }: { settings: TaskSettings }) {
     setSaving(true)
     void (async () => {
       try {
-        await api.action(SettingsAction, { historyDays: draftDays, costDetail: draftCost })
+        const saved = await api.action(SettingsAction, {
+          historyDays: draftDays,
+          costDetail: draftCost,
+          dag: draftDag,
+        })
+        onDag(saved.dag)
         setError(undefined)
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : String(cause))
@@ -1106,14 +1132,14 @@ function SettingsMenu({ settings }: { settings: TaskSettings }) {
       <PopoverTrigger asChild>
         <button
           className="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-muted-foreground/80 transition-colors hover:bg-accent hover:text-foreground"
-          title="History settings"
+          title="History and DAG settings"
           type="button"
         >
           <SettingsIcon className="size-3.5" />
           {settings.historyDays} days · {settings.costDetail === 'run' ? 'per run' : 'per tool'}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-64 p-3 font-mono text-[11px]">
+      <PopoverContent align="end" className="w-72 p-3 font-mono text-[11px]">
         <div className="section-label pb-2">Task history</div>
         <label className="flex items-center justify-between gap-2 py-1">
           <span className="text-muted-foreground">Keep visible</span>
@@ -1139,11 +1165,106 @@ function SettingsMenu({ settings }: { settings: TaskSettings }) {
             <option value="tool">per tool</option>
           </select>
         </label>
+        <div className="section-label mt-2 border-t border-border/60 pt-2 pb-2">DAG appearance</div>
+        <label className="flex items-center justify-between gap-2 py-1">
+          <span className="text-muted-foreground">Cluster overlap</span>
+          <span className="flex items-center gap-1.5">
+            <input
+              max={0.6}
+              min={0}
+              onChange={(event) =>
+                setDraftDag((previous) => ({
+                  ...previous,
+                  clusterOverlap: Number(event.target.value),
+                }))
+              }
+              step={0.05}
+              type="range"
+              value={draftDag.clusterOverlap}
+            />
+            <span className="w-7 text-right tabular-nums text-foreground/80">
+              {draftDag.clusterOverlap.toFixed(2)}
+            </span>
+          </span>
+        </label>
+        <label className="flex items-center justify-between gap-2 py-1">
+          <span className="text-muted-foreground">Clustering</span>
+          <span className="flex items-center gap-1.5">
+            <input
+              max={1}
+              min={0}
+              onChange={(event) =>
+                setDraftDag((previous) => ({
+                  ...previous,
+                  visualClustering: Number(event.target.value),
+                }))
+              }
+              step={0.05}
+              type="range"
+              value={draftDag.visualClustering}
+            />
+            <span className="w-7 text-right tabular-nums text-foreground/80">
+              {draftDag.visualClustering.toFixed(2)}
+            </span>
+          </span>
+        </label>
+        <label className="flex items-center justify-between gap-2 py-1">
+          <span className="text-muted-foreground">Cross repulsion</span>
+          <span className="flex items-center gap-1.5">
+            <input
+              max={1}
+              min={0}
+              onChange={(event) =>
+                setDraftDag((previous) => ({
+                  ...previous,
+                  crossRepulsion: Number(event.target.value),
+                }))
+              }
+              step={0.05}
+              type="range"
+              value={draftDag.crossRepulsion}
+            />
+            <span className="w-7 text-right tabular-nums text-foreground/80">
+              {draftDag.crossRepulsion.toFixed(2)}
+            </span>
+          </span>
+        </label>
+        <label className="flex items-center justify-between gap-2 py-1">
+          <span className="text-muted-foreground">Labels</span>
+          <select
+            className="rounded border border-border/70 bg-background px-1.5 py-0.5 text-foreground outline-none focus:border-brand/60"
+            onChange={(event) =>
+              setDraftDag((previous) => ({
+                ...previous,
+                labels:
+                  event.target.value === 'always'
+                    ? 'always'
+                    : event.target.value === 'off'
+                      ? 'off'
+                      : 'hover',
+              }))
+            }
+            value={draftDag.labels}
+          >
+            <option value="hover">on hover</option>
+            <option value="always">always</option>
+            <option value="off">off</option>
+          </select>
+        </label>
+        <label className="flex items-center justify-between gap-2 py-1">
+          <span className="text-muted-foreground">Pulse</span>
+          <input
+            checked={draftDag.pulse}
+            className="accent-brand"
+            onChange={(event) =>
+              setDraftDag((previous) => ({ ...previous, pulse: event.target.checked }))
+            }
+            type="checkbox"
+          />
+        </label>
         <button
           className="mt-2 rounded-md border border-border/70 px-2 py-1 text-foreground hover:bg-accent disabled:opacity-50"
-          disabled={
-            saving || (draftDays === settings.historyDays && draftCost === settings.costDetail)
-          }
+          disabled={saving || !changed}
           onClick={save}
           type="button"
         >
@@ -1155,7 +1276,7 @@ function SettingsMenu({ settings }: { settings: TaskSettings }) {
           </p>
         )}
         <p className="mt-2 border-t border-border/60 pt-2 text-[10px] leading-relaxed text-muted-foreground/60">
-          This filters what is shown. History is never deleted.
+          History is never deleted. DAG appearance only changes the Constellation view.
         </p>
       </PopoverContent>
     </Popover>
@@ -1356,7 +1477,13 @@ function TaskGraphSurface() {
   const system = useSystem()
   const settings = taskSettings(system?.project.settings)
   const [tabValue, setTab] = useExtensionUiState<string>('dag.tab', 'structure')
-  const tab = tabValue === 'timeline' ? 'timeline' : 'structure'
+  const tab: TaskTab =
+    tabValue === 'timeline'
+      ? 'timeline'
+      : tabValue === 'constellation'
+        ? 'constellation'
+        : 'structure'
+  const [dagPatch, setDagPatch] = useState<Partial<DagSettings>>({})
   const [showCritical, setShowCritical] = useExtensionUiState<boolean>('dag.critical', false)
   const [filter, setFilter] = useState<TaskFilter>('all')
   const [selected, setSelected] = useExtensionUiState<number[]>(
@@ -1373,7 +1500,14 @@ function TaskGraphSurface() {
   })
   const [loadingMore, setLoadingMore] = useState(false)
   const pendingPage = useRef<AbortController | undefined>(undefined)
-  const effective = settings
+  const effective = useMemo(
+    () => ({ ...settings, dag: { ...settings.dag, ...dagPatch } }),
+    [settings, dagPatch],
+  )
+  const updateDag = (patch: Partial<DagSettings>) => {
+    setDagPatch((previous) => ({ ...previous, ...patch }))
+    void api.action(SettingsAction, { dag: patch }).catch((cause) => console.error(cause))
+  }
   const previousDays = useRef(effective.historyDays)
   const selectedRuns = useMemo(
     () =>
@@ -1408,6 +1542,11 @@ function TaskGraphSurface() {
     [selected, effective.historyDays],
   )
   const history = useAction(HistoryAction, historyArgs, { enabled: selected.length > 0 })
+  const constellationHistory = useAction(
+    HistoryAction,
+    { ...historyArgs, limit: 100 },
+    { enabled: tab === 'constellation' && selected.length > 0 },
+  )
   const pageKey = JSON.stringify([historyArgs, liveSignature])
   useEffect(
     () => () => {
@@ -1427,11 +1566,20 @@ function TaskGraphSurface() {
       return true
     })
   }, [history.data, older])
+  const constellationRuns = useMemo(() => {
+    const seen = new Set<number>()
+    return [...(constellationHistory.data?.runs ?? []), ...runs].filter((run) => {
+      if (seen.has(run.id)) return false
+      seen.add(run.id)
+      return true
+    })
+  }, [constellationHistory.data, runs])
   const anyRunning = runs.some((run) => run.outcome === 'running')
   const poll = useNow(POLL_MS, anyRunning)
   const conversationPoll = useNow(5000, anyRunning)
   const wasRunning = useRef(false)
   const refetchHistory = history.refetch
+  const refetchConstellation = constellationHistory.refetch
   const refetchConversations = conversations.refetch
   useEffect(() => {
     if (previousSignature.current === liveSignature) return
@@ -1440,6 +1588,10 @@ function TaskGraphSurface() {
     refetchHistory().catch((error) => console.error(error))
     refetchConversations().catch((error) => console.error(error))
   }, [liveSignature, refetchHistory, refetchConversations])
+  useEffect(() => {
+    if (tab !== 'constellation') return
+    refetchConstellation().catch((error) => console.error(error))
+  }, [liveSignature, tab, refetchConstellation])
   useEffect(() => {
     if (anyRunning) refetchConversations().catch((error) => console.error(error))
   }, [conversationPoll, anyRunning, refetchConversations])
@@ -1457,11 +1609,28 @@ function TaskGraphSurface() {
     if (first) setPrimaryRun(first.id)
   }, [primaryRun, runs, setPrimaryRun])
 
-  const conversationList = conversations.data ?? []
+  const conversationList = useMemo(() => conversations.data ?? [], [conversations.data])
   const known = new Map(conversationList.map((conversation) => [conversation.id, conversation]))
   const selectedConversations = selected.filter((id) =>
     conversationList.some((item) => item.id === id),
   )
+  const constellationFrames = useMemo(() => {
+    const byId = new Map(conversationList.map((conversation) => [conversation.id, conversation]))
+    return selected
+      .filter((id) => byId.has(id))
+      .map((id) => {
+        const conversation = byId.get(id)
+        const list = constellationRuns
+          .filter((run) => run.conversationId === id)
+          .toSorted((a, b) => a.startedAt - b.startedAt || a.id - b.id)
+        return {
+          conversationId: id,
+          agent: conversation?.agent ?? list[0]?.agent ?? 'agent',
+          runs: list,
+          earliest: conversation?.lastRunAt ?? list[0]?.startedAt ?? conversation?.lastAt ?? 0,
+        }
+      })
+  }, [selected, conversationList, constellationRuns])
   const frames = orderFrames(
     selectedConversations.map((id) => {
       const conversation = known.get(id)
@@ -1534,7 +1703,7 @@ function TaskGraphSurface() {
           Task DAG
         </span>
         <span className="ml-2 flex shrink-0 items-center rounded-md border border-border/60 bg-card/30 p-0.5 font-mono text-[10.5px]">
-          {(['structure', 'timeline'] as const).map((value) => (
+          {(['structure', 'timeline', 'constellation'] as const).map((value) => (
             <button
               className={cn(
                 'rounded px-2 py-0.5 transition-colors',
@@ -1546,36 +1715,62 @@ function TaskGraphSurface() {
               onClick={() => setTab(value)}
               type="button"
             >
-              {value === 'structure' ? 'Structure' : 'Timeline'}
+              {value === 'structure'
+                ? 'Structure'
+                : value === 'timeline'
+                  ? 'Timeline'
+                  : 'Constellation'}
             </button>
           ))}
         </span>
         <span className="ml-auto flex items-center gap-2 font-mono text-[10px] text-muted-foreground/65">
-          <span className="flex items-center gap-1">
-            <span className="h-px w-4 bg-muted-foreground/45" /> owns
-          </span>
-          <span
-            className="flex items-center gap-1"
-            title="Only currently retained waits are available; terminal records do not preserve earlier waits."
-          >
-            <span className="h-px w-4 border-t border-dashed border-brand/60" /> waits
-          </span>
-          <button
-            aria-pressed={showCritical}
-            className={cn(
-              'hidden h-6 cursor-pointer items-center gap-1 rounded-md px-1.5 transition-colors sm:flex',
-              showCritical ? 'bg-accent text-foreground' : 'hover:text-foreground',
-            )}
-            onClick={() => setShowCritical(!showCritical)}
-            title="Highlight the longest chain by summed task durations; overlapping spans count more than once"
-            type="button"
-          >
-            <span
-              className={cn('h-0.5 w-4', showCritical ? 'bg-brand' : 'bg-muted-foreground/50')}
-            />
-            duration chain
-          </button>
-          <SettingsMenu settings={effective} />
+          {tab === 'constellation' ? (
+            <>
+              <span className="flex items-center gap-1">
+                <span className="size-1.5 rounded-full bg-brand shadow-[0_0_6px_rgba(62,214,255,.8)]" />{' '}
+                active
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="size-1.5 rounded-full bg-muted-foreground/50" /> done
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="size-1.5 rounded-full border border-dashed border-muted-foreground/60" />{' '}
+                waiting
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="size-1.5 rounded-full border border-muted-foreground/60" /> failed
+              </span>
+              <span className="hidden sm:inline">size = step weight</span>
+            </>
+          ) : (
+            <>
+              <span className="flex items-center gap-1">
+                <span className="h-px w-4 bg-muted-foreground/45" /> owns
+              </span>
+              <span
+                className="flex items-center gap-1"
+                title="Only currently retained waits are available; terminal records do not preserve earlier waits."
+              >
+                <span className="h-px w-4 border-t border-dashed border-brand/60" /> waits
+              </span>
+              <button
+                aria-pressed={showCritical}
+                className={cn(
+                  'hidden h-6 cursor-pointer items-center gap-1 rounded-md px-1.5 transition-colors sm:flex',
+                  showCritical ? 'bg-accent text-foreground' : 'hover:text-foreground',
+                )}
+                onClick={() => setShowCritical(!showCritical)}
+                title="Highlight the longest chain by summed task durations; overlapping spans count more than once"
+                type="button"
+              >
+                <span
+                  className={cn('h-0.5 w-4', showCritical ? 'bg-brand' : 'bg-muted-foreground/50')}
+                />
+                duration chain
+              </button>
+            </>
+          )}
+          <SettingsMenu onDag={updateDag} settings={effective} />
         </span>
       </Header>
       <div className="flex min-h-0 flex-1">
@@ -1593,66 +1788,77 @@ function TaskGraphSurface() {
           toggle={toggle}
         />
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          <RunSummaryBar run={primarySummary} />
-          <div
-            className="flex items-center gap-1 border-b border-border/60 px-3 py-1 font-mono text-[10px] text-muted-foreground"
-            aria-label="Filter tasks"
-          >
-            {(
-              [
-                ['all', 'All'],
-                ['failed', 'Failed'],
-                ['slow', '>10s'],
-              ] as const
-            ).map(([value, label]) => (
-              <button
-                aria-pressed={filter === value}
-                className={cn(
-                  'rounded px-2 py-1 hover:bg-accent',
-                  filter === value && 'bg-accent text-foreground',
-                )}
-                key={value}
-                onClick={() => setFilter(value)}
-                type="button"
+          {tab === 'constellation' ? (
+            <Constellation
+              frames={constellationFrames}
+              live={live}
+              onDagSettings={updateDag}
+              settings={effective}
+            />
+          ) : (
+            <>
+              <RunSummaryBar run={primarySummary} />
+              <div
+                className="flex items-center gap-1 border-b border-border/60 px-3 py-1 font-mono text-[10px] text-muted-foreground"
+                aria-label="Filter tasks"
               >
-                {label}
-              </button>
-            ))}
-          </div>
-          <div className="min-h-0 flex-1 overflow-auto p-3" data-task-dag-surface>
-            {frames.length === 0 ? (
-              <div className="flex min-h-64 flex-col items-center justify-center gap-2 font-mono text-[11.5px] text-muted-foreground/70">
-                <NetworkIcon className="size-5 text-muted-foreground/50" />
-                select a conversation to see its runs
+                {(
+                  [
+                    ['all', 'All'],
+                    ['failed', 'Failed'],
+                    ['slow', '>10s'],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button
+                    aria-pressed={filter === value}
+                    className={cn(
+                      'rounded px-2 py-1 hover:bg-accent',
+                      filter === value && 'bg-accent text-foreground',
+                    )}
+                    key={value}
+                    onClick={() => setFilter(value)}
+                    type="button"
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
-            ) : (
-              <div className="relative" ref={framesRoot}>
-                <div className="flex flex-col gap-3" data-frame-list>
-                  {frames.map((frame) => (
-                    <RunFrame
-                      agent={frame.agent}
-                      conversationId={frame.conversationId}
-                      expanded={foldState}
-                      key={`${frame.conversationId}:${frame.runId ?? 'none'}`}
-                      live={live}
-                      now={now}
-                      onFold={(id, collapsed) =>
-                        setFoldState({ ...foldState, [String(id)]: collapsed })
-                      }
-                      onSelectTask={(id) => setSelectedTask(id)}
-                      runId={frame.runId}
-                      selectedTask={selectedTask}
-                      settings={effective}
-                      showCritical={showCritical}
-                      filter={filter}
-                      tab={tab}
-                    />
-                  ))}
-                </div>
-                <CrossWaits live={live} root={framesRoot} />
+              <div className="min-h-0 flex-1 overflow-auto p-3" data-task-dag-surface>
+                {frames.length === 0 ? (
+                  <div className="flex min-h-64 flex-col items-center justify-center gap-2 font-mono text-[11.5px] text-muted-foreground/70">
+                    <NetworkIcon className="size-5 text-muted-foreground/50" />
+                    select a conversation to see its runs
+                  </div>
+                ) : (
+                  <div className="relative" ref={framesRoot}>
+                    <div className="flex flex-col gap-3" data-frame-list>
+                      {frames.map((frame) => (
+                        <RunFrame
+                          agent={frame.agent}
+                          conversationId={frame.conversationId}
+                          expanded={foldState}
+                          key={`${frame.conversationId}:${frame.runId ?? 'none'}`}
+                          live={live}
+                          now={now}
+                          onFold={(id, collapsed) =>
+                            setFoldState({ ...foldState, [String(id)]: collapsed })
+                          }
+                          onSelectTask={(id) => setSelectedTask(id)}
+                          runId={frame.runId}
+                          selectedTask={selectedTask}
+                          settings={effective}
+                          showCritical={showCritical}
+                          filter={filter}
+                          tab={tab}
+                        />
+                      ))}
+                    </div>
+                    <CrossWaits live={live} root={framesRoot} />
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+            </>
+          )}
         </main>
         <Dock>
           <Conversation variant="dock" />

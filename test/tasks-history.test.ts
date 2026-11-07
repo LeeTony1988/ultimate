@@ -377,14 +377,67 @@ describe('critical path', () => {
 })
 
 describe('task settings', () => {
-  it('defaults to 3 days and run-level cost', () => {
-    expect(taskSettings({})).toEqual({ historyDays: 3, costDetail: 'run' })
+  it('defaults to 3 days, run-level cost and the constellation defaults', () => {
+    expect(taskSettings({})).toEqual({
+      historyDays: 3,
+      costDetail: 'run',
+      dag: {
+        clusterOverlap: 0.3,
+        crossRepulsion: 0,
+        visualClustering: 0.72,
+        labels: 'hover',
+        pulse: true,
+      },
+    })
   })
 
   it('reads valid nested settings without an arbitrary upper limit', () => {
-    expect(taskSettings({ tasks: { historyDays: 365, costDetail: 'tool' } })).toEqual({
+    expect(
+      taskSettings({
+        tasks: {
+          historyDays: 365,
+          costDetail: 'tool',
+          dag: {
+            clusterOverlap: 0.55,
+            crossRepulsion: 0.4,
+            visualClustering: 0.2,
+            labels: 'always',
+            pulse: false,
+          },
+        },
+      }),
+    ).toEqual({
       historyDays: 365,
       costDetail: 'tool',
+      dag: {
+        clusterOverlap: 0.55,
+        crossRepulsion: 0.4,
+        visualClustering: 0.2,
+        labels: 'always',
+        pulse: false,
+      },
+    })
+  })
+
+  it('clamps invalid DAG numbers and falls back for invalid words', () => {
+    expect(
+      taskSettings({
+        tasks: {
+          dag: {
+            clusterOverlap: 2,
+            crossRepulsion: -1,
+            visualClustering: 'high',
+            labels: 'sometimes',
+            pulse: 'yes',
+          },
+        },
+      }).dag,
+    ).toEqual({
+      clusterOverlap: 0.6,
+      crossRepulsion: 0,
+      visualClustering: 0.72,
+      labels: 'hover',
+      pulse: true,
     })
   })
 })
