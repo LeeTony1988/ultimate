@@ -176,9 +176,11 @@ describe('conversation layout', () => {
         .filter((node) => node.turn === turnIndex)
         .toSorted((a, b) => a.order - b.order)
       expect(line.length).toBeGreaterThan(0)
-      return `${line[0].x},${line[0].y}`
+      return line[0]
     })
-    expect(new Set(starts).size).toBe(3)
+    expect(new Set(starts.map((node) => `${node.x},${node.y}`)).size).toBe(3)
+    const distances = starts.map((node) => Math.hypot(node.x, node.y))
+    expect(Math.max(...distances) - Math.min(...distances)).toBeGreaterThan(5)
     expect(first.some((node) => node.x !== 0 || node.y !== 0)).toBe(true)
   })
 
