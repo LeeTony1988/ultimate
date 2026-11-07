@@ -706,7 +706,7 @@ export const actions = {
             if (found.detail) task.detail = found.detail
             if (fact.tool) {
               task.tool = fact.tool
-              task.facts = { tool: fact.tool }
+              task.facts = { tool: fact.tool, ...(found.detail ? { detail: found.detail } : {}) }
             }
           } else if (task.kind !== 'ultimate.automation-scheduler') {
             // The scheduler's name is in an automation document; opening it would make this read action create it.
@@ -828,10 +828,12 @@ export const actions = {
       withAbortSignal(signal, context),
     )
   }),
-  /** `{ historyDays?, costDetail? }`: write the project's `tasks` settings; history itself is never touched. */
+  /** `{ historyDays?, costDetail?, dag? }`: write the project's `tasks` settings; history itself is never touched. */
   settings: implementAction(SettingsAction, async (args, { host }) => {
-    const input = (args ?? {}) as { historyDays?: unknown; costDetail?: unknown }
-    const patch: Partial<TaskSettings> = {}
+    const input = (args ?? {}) as { historyDays?: unknown; costDetail?: unknown; dag?: unknown }
+    const patch: Partial<Pick<TaskSettings, 'historyDays' | 'costDetail'>> = {}
+    const dag: Partial<TaskSettings['dag']> = {}
+    let dagChanged = false
     if (input.historyDays !== undefined) {
       if (
         typeof input.historyDays !== 'number' ||
@@ -846,16 +848,53 @@ export const actions = {
         throw new Error('costDetail must be "run" or "tool"')
       patch.costDetail = input.costDetail
     }
-    if (Object.keys(patch).length === 0) return taskSettings(await host.projectSettings())
+    if (input.dag !== undefined) {
+      if (!input.dag || typeof input.dag !== 'object' || Array.isArray(input.dag))
+        throw new Error('dag must be an object')
+      const value = input.dag as Record<string, unknown>
+      const number = (
+        key: 'clusterOverlap' | 'crossRepulsion' | 'visualClustering',
+        low: number,
+        high: number,
+      ) => {
+        const found = value[key]
+        if (found === undefined) return
+        if (typeof found !== 'number' || !Number.isFinite(found) || found < low || found > high)
+          throw new Error(`${key} must be a number from ${low} to ${high}`)
+        dag[key] = found
+        dagChanged = true
+      }
+      number('clusterOverlap', 0, 0.6)
+      number('crossRepulsion', 0, 1)
+      number('visualClustering', 0, 1)
+      if (value.labels !== undefined) {
+        if (value.labels !== 'hover' && value.labels !== 'always' && value.labels !== 'off')
+          throw new Error('labels must be "hover", "always" or "off"')
+        dag.labels = value.labels
+        dagChanged = true
+      }
+      if (value.pulse !== undefined) {
+        if (typeof value.pulse !== 'boolean') throw new Error('pulse must be a boolean')
+        dag.pulse = value.pulse
+        dagChanged = true
+      }
+    }
+    if (Object.keys(patch).length === 0 && !dagChanged)
+      return taskSettings(await host.projectSettings())
     const path = join(host.projectRoot, '.ultimate/settings.json')
     if ((await host.projectSetup()).decision !== true)
       throw new Error("Choose this project's local setup before changing task history settings")
+    const current = taskSettings(await host.projectSettings())
     await updateSettings(path, (value) => {
       const previous =
         value.tasks && typeof value.tasks === 'object' && !Array.isArray(value.tasks)
           ? (value.tasks as Record<string, JsonValue>)
           : {}
-      value.tasks = { ...previous, ...patch }
+      value.tasks = {
+        ...previous,
+        ...patch,
+        ...(dagChanged ? { dag: { ...current.dag, ...dag } } : {}),
+      }
     })
     return taskSettings(await host.projectSettings())
   }),

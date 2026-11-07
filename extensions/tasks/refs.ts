@@ -29,6 +29,8 @@ export type TaskFacts = {
   automation?: string
   /** A tool call's tool name. */
   tool?: string
+  /** The useful part of a tool call's arguments, such as a shell command or file path. */
+  detail?: string
   /** A lander's source checkout. */
   source?: string
 }
@@ -197,8 +199,24 @@ export type RunDetail = {
   uncertainties: RunUncertainty[]
 }
 
-/** `tasks.historyDays` and `tasks.costDetail` from a project settings object, with the design's defaults. */
-export type TaskSettings = { historyDays: number; costDetail: 'run' | 'tool' }
+/** The Constellation view's adjustable look, stored under `tasks.dag`. */
+export type DagSettings = {
+  /** How much neighbouring cluster halos share, 0–0.6; 0.3 is the design default. */
+  clusterOverlap: number
+  /** Long-range repulsion between different clusters, 0–1; 0 lets them interleave. */
+  crossRepulsion: number
+  /** Gravity toward each cluster's centre, 0–1. */
+  visualClustering: number
+  labels: 'hover' | 'always' | 'off'
+  pulse: boolean
+}
+
+/** `tasks.historyDays`, `tasks.costDetail` and the Constellation's `tasks.dag` from project settings. */
+export type TaskSettings = {
+  historyDays: number
+  costDetail: 'run' | 'tool'
+  dag: DagSettings
+}
 
 /** `{ days? }` → every conversation with a run, its agent name, run count and last activity, for the left rail. */
 export const ConversationsAction = actionRef<{ days?: number } | null, RunConversation[]>(
@@ -218,8 +236,8 @@ export const RunAction = actionRef<{ id: number; costDetail?: 'run' | 'tool' }, 
   'run',
 )
 
-/** `{ historyDays?, costDetail? }` → the effective `tasks` settings after a project-settings write. */
+/** `{ historyDays?, costDetail?, dag? }` → the effective `tasks` settings after a project-settings write. */
 export const SettingsAction = actionRef<
-  { historyDays?: number; costDetail?: 'run' | 'tool' },
+  { historyDays?: number; costDetail?: 'run' | 'tool'; dag?: Partial<DagSettings> },
   TaskSettings
 >('tasks', 'settings')

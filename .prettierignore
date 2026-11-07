@@ -1,3 +1,7 @@
 # A symlink to AGENTS.md. Formatting tools see the link target's path as text on checkouts without symlink
 # support (Windows, core.symlinks=false) and would replace the link with a file. AGENTS.md is formatted itself.
 CLAUDE.md
+
+# Hand-authored design artifacts and interactive prototypes keep their own formatting.
+agent_design/projects/40-task-dag-constellation-design.md
+agent_design/projects/prototypes/

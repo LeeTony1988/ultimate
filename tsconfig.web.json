@@ -56,6 +56,7 @@
     "extensions/tasks/kinds.ts",
     "extensions/tasks/layout.ts",
     "extensions/tasks/history.ts",
+    "extensions/tasks/constellation.ts",
     "extensions/sidebar/listed.ts",
     "extensions/side-chat/logic.ts",
     "extensions/btw/logic.ts",
